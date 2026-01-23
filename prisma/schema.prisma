@@ -1,0 +1,642 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model addresses {
+  address_id      Int       @id @default(autoincrement())
+  user_id         Int
+  recipient_name  String    @db.VarChar(100)
+  recipient_phone String    @db.VarChar(15)
+  province_id     Int
+  district_id     Int
+  ward_code       String    @db.VarChar(20)
+  detail_address  String
+  is_default      Boolean?  @default(false)
+  created_at      DateTime? @default(now()) @db.Timestamp(6)
+  updated_at      DateTime? @default(now()) @db.Timestamp(6)
+  deleted_at      DateTime? @db.Timestamp(6)
+  users           users     @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  orders          orders[]
+}
+
+model auction_bids {
+  bid_id     Int       @id @default(autoincrement())
+  auction_id Int
+  user_id    Int
+  bid_amount Decimal   @db.Decimal(15, 2)
+  created_at DateTime? @default(now()) @db.Timestamp(6)
+  updated_at DateTime? @default(now()) @db.Timestamp(6)
+  deleted_at DateTime? @db.Timestamp(6)
+  auctions   auctions  @relation(fields: [auction_id], references: [auction_id], onDelete: NoAction, onUpdate: NoAction)
+  users      users     @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([auction_id, bid_amount], map: "uq_auction_bid_amount")
+}
+
+model auction_participants {
+  id             Int       @id @default(autoincrement())
+  auction_id     Int
+  user_id        Int
+  deposit_amount Decimal   @db.Decimal(15, 2)
+  created_at     DateTime? @default(now()) @db.Timestamp(6)
+  updated_at     DateTime? @default(now()) @db.Timestamp(6)
+  deleted_at     DateTime? @db.Timestamp(6)
+  auctions       auctions  @relation(fields: [auction_id], references: [auction_id], onDelete: NoAction, onUpdate: NoAction)
+  users          users     @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model auctions {
+  auction_id           Int                    @id @default(autoincrement())
+  product_id           Int
+  start_price          Decimal                @db.Decimal(15, 2)
+  current_price        Decimal?               @db.Decimal(15, 2)
+  start_time           DateTime               @db.Timestamp(6)
+  end_time             DateTime               @db.Timestamp(6)
+  status_code          String?                @default("PENDING") @db.VarChar(20)
+  winner_id            Int?
+  created_at           DateTime?              @default(now()) @db.Timestamp(6)
+  updated_at           DateTime?              @default(now()) @db.Timestamp(6)
+  deleted_at           DateTime?              @db.Timestamp(6)
+  auction_bids         auction_bids[]
+  auction_participants auction_participants[]
+  products             products               @relation(fields: [product_id], references: [product_id], onDelete: NoAction, onUpdate: NoAction)
+  users                users?                 @relation(fields: [winner_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model brands {
+  brand_id   Int        @id @default(autoincrement())
+  name       String     @db.VarChar(100)
+  logo_url   String?
+  created_at DateTime?  @default(now()) @db.Timestamp(6)
+  updated_at DateTime?  @default(now()) @db.Timestamp(6)
+  deleted_at DateTime?  @db.Timestamp(6)
+  products   products[]
+}
+
+model cart_items {
+  item_id    Int       @id @default(autoincrement())
+  cart_id    Int
+  product_id Int
+  quantity   Int?      @default(1)
+  created_at DateTime? @default(now()) @db.Timestamp(6)
+  updated_at DateTime? @default(now()) @db.Timestamp(6)
+  deleted_at DateTime? @db.Timestamp(6)
+  carts      carts     @relation(fields: [cart_id], references: [cart_id], onDelete: NoAction, onUpdate: NoAction)
+  products   products  @relation(fields: [product_id], references: [product_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model carts {
+  cart_id    Int          @id @default(autoincrement())
+  user_id    Int?
+  created_at DateTime?    @default(now()) @db.Timestamp(6)
+  updated_at DateTime?    @default(now()) @db.Timestamp(6)
+  deleted_at DateTime?    @db.Timestamp(6)
+  cart_items cart_items[]
+  users      users?       @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model categories {
+  category_id      Int          @id @default(autoincrement())
+  name             String       @db.VarChar(100)
+  slug             String       @db.VarChar(100)
+  parent_id        Int?
+  created_at       DateTime?    @default(now()) @db.Timestamp(6)
+  updated_at       DateTime?    @default(now()) @db.Timestamp(6)
+  deleted_at       DateTime?    @db.Timestamp(6)
+  categories       categories?  @relation("categoriesTocategories", fields: [parent_id], references: [category_id], onDelete: NoAction, onUpdate: NoAction)
+  other_categories categories[] @relation("categoriesTocategories")
+  products         products[]
+}
+
+model chat_messages {
+  message_id    Int           @id @default(autoincrement())
+  session_id    Int
+  sender_type   String        @db.VarChar(20)
+  content       String?
+  message_type  String?       @default("TEXT") @db.VarChar(20)
+  payload       Json?
+  tokens_used   Int?          @default(0)
+  is_helpful    Boolean?
+  created_at    DateTime?     @default(now()) @db.Timestamp(6)
+  updated_at    DateTime?     @default(now()) @db.Timestamp(6)
+  deleted_at    DateTime?     @db.Timestamp(6)
+  chat_sessions chat_sessions @relation(fields: [session_id], references: [session_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model chat_sessions {
+  session_id        Int             @id @default(autoincrement())
+  user_id           Int?
+  title             String?         @db.VarChar(255)
+  context_data      Json?
+  total_tokens_used Int?            @default(0)
+  status_code       String?         @default("ACTIVE") @db.VarChar(20)
+  created_at        DateTime?       @default(now()) @db.Timestamp(6)
+  updated_at        DateTime?       @default(now()) @db.Timestamp(6)
+  deleted_at        DateTime?       @db.Timestamp(6)
+  chat_messages     chat_messages[]
+  users             users?          @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model customers {
+  user_id           Int       @id
+  loyalty_points    Int?      @default(0)
+  current_rank_code String?   @default("BRONZE") @db.VarChar(50)
+  total_spent       Decimal?  @default(0) @db.Decimal(15, 2)
+  created_at        DateTime? @default(now()) @db.Timestamp(6)
+  updated_at        DateTime? @default(now()) @db.Timestamp(6)
+  deleted_at        DateTime? @db.Timestamp(6)
+  users             users     @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model employees {
+  user_id            Int                  @id
+  employee_code      String               @unique @db.VarChar(20)
+  job_title_code     String               @db.VarChar(50)
+  base_salary        Decimal              @default(0) @db.Decimal(15, 2)
+  start_date         DateTime?            @db.Date
+  created_at         DateTime?            @default(now()) @db.Timestamp(6)
+  updated_at         DateTime?            @default(now()) @db.Timestamp(6)
+  deleted_at         DateTime?            @db.Timestamp(6)
+  users              users                @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  inventory_receipts inventory_receipts[]
+  orders             orders[]
+  payrolls           payrolls[]
+  pos_sessions       pos_sessions[]
+  store_expenses     store_expenses[]
+  work_schedules     work_schedules[]
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model feedbacks {
+  feedback_id   Int       @id @default(autoincrement())
+  user_id       Int
+  product_id    Int
+  order_id      Int
+  rating        Int
+  content       String?
+  media_urls    Json?
+  reply_content String?
+  status_code   String?   @default("APPROVED") @db.VarChar(20)
+  created_at    DateTime? @default(now()) @db.Timestamp(6)
+  updated_at    DateTime? @default(now()) @db.Timestamp(6)
+  deleted_at    DateTime? @db.Timestamp(6)
+  orders        orders    @relation(fields: [order_id], references: [order_id], onDelete: NoAction, onUpdate: NoAction)
+  products      products  @relation(fields: [product_id], references: [product_id], onDelete: NoAction, onUpdate: NoAction)
+  users         users     @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([user_id, product_id, order_id])
+}
+
+model inventory_logs {
+  log_id           Int       @id @default(autoincrement())
+  product_id       Int
+  change_amount    Int
+  change_type_code String    @db.VarChar(50)
+  reference_id     Int?
+  note             String?
+  created_at       DateTime? @default(now()) @db.Timestamp(6)
+  updated_at       DateTime? @default(now()) @db.Timestamp(6)
+  deleted_at       DateTime? @db.Timestamp(6)
+  products         products  @relation(fields: [product_id], references: [product_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model inventory_receipt_items {
+  item_id            Int                @id @default(autoincrement())
+  receipt_id         Int
+  product_id         Int
+  quantity_total     Int
+  quantity_good      Int?               @default(0)
+  quantity_defect    Int?               @default(0)
+  created_at         DateTime?          @default(now()) @db.Timestamp(6)
+  updated_at         DateTime?          @default(now()) @db.Timestamp(6)
+  deleted_at         DateTime?          @db.Timestamp(6)
+  products           products           @relation(fields: [product_id], references: [product_id], onDelete: NoAction, onUpdate: NoAction)
+  inventory_receipts inventory_receipts @relation(fields: [receipt_id], references: [receipt_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model inventory_receipts {
+  receipt_id              Int                       @id @default(autoincrement())
+  warehouse_staff_id      Int?
+  total_amount            Decimal?                  @db.Decimal(15, 2)
+  status_code             String?                   @default("COMPLETED") @db.VarChar(20)
+  import_date             DateTime?                 @default(now()) @db.Timestamp(6)
+  note                    String?
+  created_at              DateTime?                 @default(now()) @db.Timestamp(6)
+  updated_at              DateTime?                 @default(now()) @db.Timestamp(6)
+  deleted_at              DateTime?                 @db.Timestamp(6)
+  inventory_receipt_items inventory_receipt_items[]
+  employees               employees?                @relation(fields: [warehouse_staff_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model notifications {
+  notification_id Int       @id @default(autoincrement())
+  user_id         Int
+  title           String?   @db.VarChar(255)
+  content         String?
+  is_read         Boolean?  @default(false)
+  created_at      DateTime? @default(now()) @db.Timestamp(6)
+  updated_at      DateTime? @default(now()) @db.Timestamp(6)
+  deleted_at      DateTime? @db.Timestamp(6)
+  users           users     @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model order_items {
+  item_id                                             Int            @id @default(autoincrement())
+  order_id                                            Int
+  product_id                                          Int
+  allocated_product_id                                Int?
+  quantity                                            Int
+  unit_price                                          Decimal        @db.Decimal(15, 2)
+  total_price                                         Decimal        @db.Decimal(15, 2)
+  created_at                                          DateTime?      @default(now()) @db.Timestamp(6)
+  updated_at                                          DateTime?      @default(now()) @db.Timestamp(6)
+  deleted_at                                          DateTime?      @db.Timestamp(6)
+  products_order_items_allocated_product_idToproducts products?      @relation("order_items_allocated_product_idToproducts", fields: [allocated_product_id], references: [product_id], onDelete: NoAction, onUpdate: NoAction)
+  orders                                              orders         @relation(fields: [order_id], references: [order_id], onDelete: NoAction, onUpdate: NoAction)
+  products_order_items_product_idToproducts           products       @relation("order_items_product_idToproducts", fields: [product_id], references: [product_id], onDelete: NoAction, onUpdate: NoAction)
+  return_items                                        return_items[]
+}
+
+model order_status_history {
+  history_id         Int       @id @default(autoincrement())
+  order_id           Int
+  previous_status    String?   @db.VarChar(50)
+  new_status         String    @db.VarChar(50)
+  changed_by_user_id Int?
+  note               String?
+  created_at         DateTime? @default(now()) @db.Timestamp(6)
+  orders             orders    @relation(fields: [order_id], references: [order_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model orders {
+  order_id             Int                    @id @default(autoincrement())
+  order_code           String                 @unique @db.VarChar(50)
+  user_id              Int?
+  session_id           Int?
+  created_by_staff_id  Int?
+  shipping_address_id  Int?
+  promotion_id         Int?
+  total_amount         Decimal                @db.Decimal(15, 2)
+  paid_amount          Decimal?               @default(0) @db.Decimal(15, 2)
+  discount_amount      Decimal?               @default(0) @db.Decimal(15, 2)
+  shipping_fee         Decimal?               @default(0) @db.Decimal(15, 2)
+  payment_deadline     DateTime?              @db.Timestamp(6)
+  channel_code         String                 @db.VarChar(20)
+  payment_method_code  String?                @db.VarChar(20)
+  status_code          String?                @default("PENDING") @db.VarChar(50)
+  packing_video_urls   Json?
+  packed_at            DateTime?              @db.Timestamp(6)
+  note                 String?
+  created_at           DateTime?              @default(now()) @db.Timestamp(6)
+  updated_at           DateTime?              @default(now()) @db.Timestamp(6)
+  deleted_at           DateTime?              @db.Timestamp(6)
+  feedbacks            feedbacks[]
+  order_items          order_items[]
+  order_status_history order_status_history[]
+  employees            employees?             @relation(fields: [created_by_staff_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  promotions           promotions?            @relation(fields: [promotion_id], references: [promotion_id], onDelete: NoAction, onUpdate: NoAction)
+  pos_sessions         pos_sessions?          @relation(fields: [session_id], references: [session_id], onDelete: NoAction, onUpdate: NoAction)
+  addresses            addresses?             @relation(fields: [shipping_address_id], references: [address_id], onDelete: NoAction, onUpdate: NoAction)
+  users                users?                 @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  return_requests      return_requests[]
+  shipments            shipments?
+
+  @@index([order_code], map: "idx_orders_code")
+}
+
+model payrolls {
+  payroll_id       Int       @id @default(autoincrement())
+  user_id          Int
+  month            Int
+  year             Int
+  total_work_hours Float?    @default(0)
+  final_salary     Decimal?  @default(0) @db.Decimal(15, 2)
+  status_code      String?   @default("DRAFT") @db.VarChar(20)
+  created_at       DateTime? @default(now()) @db.Timestamp(6)
+  updated_at       DateTime? @default(now()) @db.Timestamp(6)
+  deleted_at       DateTime? @db.Timestamp(6)
+  employees        employees @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model pos_sessions {
+  session_id     Int              @id @default(autoincrement())
+  user_id        Int
+  opened_at      DateTime?        @default(now()) @db.Timestamp(6)
+  closed_at      DateTime?        @db.Timestamp(6)
+  opening_cash   Decimal?         @default(0) @db.Decimal(15, 2)
+  closing_cash   Decimal?         @db.Decimal(15, 2)
+  status_code    String?          @default("OPEN") @db.VarChar(20)
+  note           String?
+  created_at     DateTime?        @default(now()) @db.Timestamp(6)
+  updated_at     DateTime?        @default(now()) @db.Timestamp(6)
+  deleted_at     DateTime?        @db.Timestamp(6)
+  orders         orders[]
+  employees      employees        @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  store_expenses store_expenses[]
+}
+
+model product_blindboxes {
+  product_id   Int       @id
+  price_config Decimal?  @db.Decimal(15, 2)
+  margin_rate  Float?
+  created_at   DateTime? @default(now()) @db.Timestamp(6)
+  updated_at   DateTime? @default(now()) @db.Timestamp(6)
+  deleted_at   DateTime? @db.Timestamp(6)
+  products     products  @relation(fields: [product_id], references: [product_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model product_preorders {
+  product_id     Int       @id
+  deposit_amount Decimal?  @db.Decimal(15, 2)
+  release_date   DateTime? @db.Timestamp(6)
+  created_at     DateTime? @default(now()) @db.Timestamp(6)
+  updated_at     DateTime? @default(now()) @db.Timestamp(6)
+  deleted_at     DateTime? @db.Timestamp(6)
+  products       products  @relation(fields: [product_id], references: [product_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model products {
+  product_id                                             Int                       @id @default(autoincrement())
+  category_id                                            Int?
+  brand_id                                               Int?
+  series_id                                              Int?
+  name                                                   String                    @db.VarChar(255)
+  sku                                                    String?                   @unique @db.VarChar(50)
+  barcode                                                String?                   @unique @db.VarChar(50)
+  price                                                  Decimal?                  @default(0) @db.Decimal(15, 2)
+  stock_available                                        Int?                      @default(0)
+  stock_defect                                           Int?                      @default(0)
+  type_code                                              String                    @db.VarChar(50)
+  status_code                                            String?                   @default("DRAFT") @db.VarChar(50)
+  specifications                                         Json?
+  media_urls                                             Json?
+  description                                            String?
+  version                                                Int?                      @default(1)
+  created_at                                             DateTime?                 @default(now()) @db.Timestamp(6)
+  updated_at                                             DateTime?                 @default(now()) @db.Timestamp(6)
+  deleted_at                                             DateTime?                 @db.Timestamp(6)
+  auctions                                               auctions[]
+  cart_items                                             cart_items[]
+  feedbacks                                              feedbacks[]
+  inventory_logs                                         inventory_logs[]
+  inventory_receipt_items                                inventory_receipt_items[]
+  order_items_order_items_allocated_product_idToproducts order_items[]             @relation("order_items_allocated_product_idToproducts")
+  order_items_order_items_product_idToproducts           order_items[]             @relation("order_items_product_idToproducts")
+  product_blindboxes                                     product_blindboxes?
+  product_preorders                                      product_preorders?
+  brands                                                 brands?                   @relation(fields: [brand_id], references: [brand_id], onDelete: NoAction, onUpdate: NoAction)
+  categories                                             categories?               @relation(fields: [category_id], references: [category_id], onDelete: NoAction, onUpdate: NoAction)
+  series                                                 series?                   @relation(fields: [series_id], references: [series_id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([sku], map: "idx_products_sku")
+}
+
+model profile_update_requests {
+  request_id   Int       @id @default(autoincrement())
+  user_id      Int
+  changed_data Json
+  status_code  String?   @default("PENDING") @db.VarChar(20)
+  admin_note   String?
+  created_at   DateTime? @default(now()) @db.Timestamp(6)
+  updated_at   DateTime? @default(now()) @db.Timestamp(6)
+  deleted_at   DateTime? @db.Timestamp(6)
+  users        users     @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model promotions {
+  promotion_id    Int             @id @default(autoincrement())
+  code            String          @unique @db.VarChar(50)
+  discount_value  Decimal?        @db.Decimal(15, 2)
+  discount_type   String?         @db.VarChar(20)
+  min_order_value Decimal?        @default(0) @db.Decimal(15, 2)
+  start_date      DateTime?       @db.Timestamp(6)
+  end_date        DateTime?       @db.Timestamp(6)
+  created_at      DateTime?       @default(now()) @db.Timestamp(6)
+  updated_at      DateTime?       @default(now()) @db.Timestamp(6)
+  deleted_at      DateTime?       @db.Timestamp(6)
+  orders          orders[]
+  user_vouchers   user_vouchers[]
+}
+
+model return_items {
+  return_item_id  Int             @id @default(autoincrement())
+  return_id       Int
+  order_item_id   Int
+  quantity        Int
+  created_at      DateTime?       @default(now()) @db.Timestamp(6)
+  updated_at      DateTime?       @default(now()) @db.Timestamp(6)
+  deleted_at      DateTime?       @db.Timestamp(6)
+  order_items     order_items     @relation(fields: [order_item_id], references: [item_id], onDelete: NoAction, onUpdate: NoAction)
+  return_requests return_requests @relation(fields: [return_id], references: [return_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model return_requests {
+  return_id       Int            @id @default(autoincrement())
+  order_id        Int
+  user_id         Int
+  reason          String?
+  unbox_video_url String?
+  status_code     String?        @default("PENDING") @db.VarChar(20)
+  admin_note      String?
+  created_at      DateTime?      @default(now()) @db.Timestamp(6)
+  updated_at      DateTime?      @default(now()) @db.Timestamp(6)
+  deleted_at      DateTime?      @db.Timestamp(6)
+  return_items    return_items[]
+  orders          orders         @relation(fields: [order_id], references: [order_id], onDelete: NoAction, onUpdate: NoAction)
+  users           users          @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model series {
+  series_id   Int        @id @default(autoincrement())
+  name        String     @db.VarChar(100)
+  description String?
+  created_at  DateTime?  @default(now()) @db.Timestamp(6)
+  updated_at  DateTime?  @default(now()) @db.Timestamp(6)
+  deleted_at  DateTime?  @db.Timestamp(6)
+  products    products[]
+}
+
+model shipments {
+  shipment_id    Int       @id @default(autoincrement())
+  order_id       Int       @unique
+  tracking_code  String?   @db.VarChar(50)
+  ghn_service_id Int?
+  cod_amount     Decimal?  @default(0) @db.Decimal(15, 2)
+  shipping_fee   Decimal?  @db.Decimal(15, 2)
+  status_code    String?   @db.VarChar(50)
+  created_at     DateTime? @default(now()) @db.Timestamp(6)
+  updated_at     DateTime? @default(now()) @db.Timestamp(6)
+  deleted_at     DateTime? @db.Timestamp(6)
+  orders         orders    @relation(fields: [order_id], references: [order_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model store_expenses {
+  expense_id   Int          @id @default(autoincrement())
+  session_id   Int
+  user_id      Int
+  amount       Decimal      @db.Decimal(15, 2)
+  reason       String
+  created_at   DateTime?    @default(now()) @db.Timestamp(6)
+  updated_at   DateTime?    @default(now()) @db.Timestamp(6)
+  deleted_at   DateTime?    @db.Timestamp(6)
+  pos_sessions pos_sessions @relation(fields: [session_id], references: [session_id], onDelete: NoAction, onUpdate: NoAction)
+  employees    employees    @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model system_banners {
+  banner_id  Int       @id @default(autoincrement())
+  title      String?   @db.VarChar(100)
+  image_url  String
+  target_url String?
+  sort_order Int?      @default(0)
+  is_active  Boolean?  @default(true)
+  created_at DateTime? @default(now()) @db.Timestamp(6)
+}
+
+model system_configurations {
+  config_id    Int       @id @default(autoincrement())
+  config_key   String    @unique @db.VarChar(100)
+  config_value String?
+  description  String?
+  created_at   DateTime? @default(now()) @db.Timestamp(6)
+  updated_at   DateTime? @default(now()) @db.Timestamp(6)
+  deleted_at   DateTime? @db.Timestamp(6)
+}
+
+model system_lookups {
+  id         Int       @id @default(autoincrement())
+  type       String    @db.VarChar(50)
+  code       String    @db.VarChar(50)
+  value      String    @db.VarChar(255)
+  sort_order Int?      @default(0)
+  meta_data  Json?
+  created_at DateTime? @default(now()) @db.Timestamp(6)
+  updated_at DateTime? @default(now()) @db.Timestamp(6)
+  deleted_at DateTime? @db.Timestamp(6)
+
+  @@index([type, code], map: "idx_lookup_type_code")
+}
+
+model timesheets {
+  timesheet_id        Int             @id @default(autoincrement())
+  schedule_id         Int?
+  check_in_at         DateTime?       @db.Timestamp(6)
+  check_out_at        DateTime?       @db.Timestamp(6)
+  real_work_hours     Float?          @default(0)
+  applied_hourly_rate Decimal?        @db.Decimal(15, 2)
+  status_code         String?         @db.VarChar(20)
+  created_at          DateTime?       @default(now()) @db.Timestamp(6)
+  updated_at          DateTime?       @default(now()) @db.Timestamp(6)
+  deleted_at          DateTime?       @db.Timestamp(6)
+  work_schedules      work_schedules? @relation(fields: [schedule_id], references: [schedule_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model user_login_logs {
+  log_id        Int       @id @default(autoincrement())
+  user_id       Int?
+  ip_address    String    @db.VarChar(45)
+  user_agent    String?
+  device_name   String?   @db.VarChar(100)
+  os_name       String?   @db.VarChar(50)
+  browser_name  String?   @db.VarChar(50)
+  location      String?   @db.VarChar(255)
+  status_code   String?   @default("SUCCESS") @db.VarChar(20)
+  is_suspicious Boolean?  @default(false)
+  risk_reason   String?   @db.VarChar(255)
+  login_time    DateTime? @default(now()) @db.Timestamp(6)
+  users         users?    @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([ip_address], map: "idx_login_logs_ip")
+  @@index([login_time], map: "idx_login_logs_time")
+  @@index([user_id], map: "idx_login_logs_user")
+}
+
+model user_vouchers {
+  id           Int        @id @default(autoincrement())
+  user_id      Int
+  promotion_id Int
+  is_used      Boolean?   @default(false)
+  created_at   DateTime?  @default(now()) @db.Timestamp(6)
+  updated_at   DateTime?  @default(now()) @db.Timestamp(6)
+  deleted_at   DateTime?  @db.Timestamp(6)
+  promotions   promotions @relation(fields: [promotion_id], references: [promotion_id], onDelete: NoAction, onUpdate: NoAction)
+  users        users      @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model users {
+  user_id                 Int                       @id @default(autoincrement())
+  phone                   String                    @unique @db.VarChar(15)
+  email                   String?                   @unique @db.VarChar(100)
+  password_hash           String?                   @db.VarChar(255)
+  full_name               String                    @db.VarChar(100)
+  avatar_url              String?
+  role_code               String                    @db.VarChar(50)
+  status_code             String?                   @default("ACTIVE") @db.VarChar(50)
+  is_verified             Boolean?                  @default(false)
+  google_id               String?                   @db.VarChar(100)
+  created_at              DateTime?                 @default(now()) @db.Timestamp(6)
+  updated_at              DateTime?                 @default(now()) @db.Timestamp(6)
+  deleted_at              DateTime?                 @db.Timestamp(6)
+  addresses               addresses[]
+  auction_bids            auction_bids[]
+  auction_participants    auction_participants[]
+  auctions                auctions[]
+  carts                   carts[]
+  chat_sessions           chat_sessions[]
+  customers               customers?
+  employees               employees?
+  feedbacks               feedbacks[]
+  notifications           notifications[]
+  orders                  orders[]
+  profile_update_requests profile_update_requests[]
+  return_requests         return_requests[]
+  user_login_logs         user_login_logs[]
+  user_vouchers           user_vouchers[]
+  wallets                 wallets?
+}
+
+model wallet_transactions {
+  transaction_id Int       @id @default(autoincrement())
+  wallet_id      Int
+  type_code      String    @db.VarChar(50)
+  amount         Decimal   @db.Decimal(15, 2)
+  reference_code String?   @db.VarChar(100)
+  description    String?
+  created_at     DateTime? @default(now()) @db.Timestamp(6)
+  updated_at     DateTime? @default(now()) @db.Timestamp(6)
+  deleted_at     DateTime? @db.Timestamp(6)
+  wallets        wallets   @relation(fields: [wallet_id], references: [wallet_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model wallets {
+  wallet_id           Int                   @id @default(autoincrement())
+  user_id             Int                   @unique
+  balance_available   Decimal?              @default(0) @db.Decimal(15, 2)
+  balance_locked      Decimal?              @default(0) @db.Decimal(15, 2)
+  pin_code_hash       String?               @db.VarChar(255)
+  version             Int?                  @default(1)
+  created_at          DateTime?             @default(now()) @db.Timestamp(6)
+  updated_at          DateTime?             @default(now()) @db.Timestamp(6)
+  deleted_at          DateTime?             @db.Timestamp(6)
+  wallet_transactions wallet_transactions[]
+  users               users                 @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model work_schedules {
+  schedule_id    Int          @id @default(autoincrement())
+  user_id        Int
+  date           DateTime     @db.Date
+  shift_code     String       @db.VarChar(20)
+  expected_start DateTime?    @db.Time(6)
+  expected_end   DateTime?    @db.Time(6)
+  created_at     DateTime?    @default(now()) @db.Timestamp(6)
+  updated_at     DateTime?    @default(now()) @db.Timestamp(6)
+  deleted_at     DateTime?    @db.Timestamp(6)
+  timesheets     timesheets[]
+  employees      employees    @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+}
