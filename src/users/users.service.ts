@@ -19,6 +19,12 @@ export class UsersService {
     });
   }
 
+  async findByVerificationToken(token: string) {
+    return this.prisma.users.findFirst({
+      where: { verification_token: token },
+    });
+  }
+
   async findOne(id: number) {
     return this.prisma.users.findUnique({
       where: { user_id: id },
