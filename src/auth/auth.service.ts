@@ -16,27 +16,33 @@ export class AuthService {
     private mailService: MailService,
   ) { }
 
-  async register(registerDto: RegisterDto) {
-    // Check if email exists
-    const existingUser = await this.usersService.findByEmail(registerDto.email);
-    if (existingUser) {
-      throw new BadRequestException('Email already exists');
+  async sendOtpForRegistration(registerDto: RegisterDto) {
+    let user = await this.usersService.findByEmail(registerDto.email);
+
+    if (user && user.status_code === 'ACTIVE') {
+      throw new BadRequestException('Email already registered');
     }
 
-    // Check if phone exists (Assuming findByPhone exists or using Prisma directly if service method missing)
-    // For now, let's rely on Prisma unique constraint or add a check if findByPhone is available.
-    // Ideally, UsersService should have findByPhone. I'll use a direct check if possible via UsersService, 
-    // or assume the Unique Constraint will throw. But for "strict validation", manual check is better.
-    // I will assume findByPhone might need to be added to UsersService later, but for now I'll catch the error if unique fails 
-    // OR ideally, use prisma directly if I could, but I should go through UsersService.
-    // Let's implement basics first. User requirement: "Check if email OR phone exists".
-
     const saltOrRounds = 10;
+    const items = [1, 2, 3, 4, 5, 6];
     const hash = await bcrypt.hash(registerDto.password, saltOrRounds);
-    const verificationToken = randomBytes(32).toString('hex');
 
-    try {
-      const newUser = await this.usersService.create({
+    // Generate 6 digit OTP
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const otpExpiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
+
+    if (user) {
+      // User exists but Inactive -> Update
+      await this.usersService.update(user.user_id, {
+        password_hash: hash,
+        full_name: registerDto.fullName,
+        phone: registerDto.phone,
+        otp_code: otp,
+        otp_expires_at: otpExpiresAt,
+      });
+    } else {
+      // Create new user
+      await this.usersService.create({
         email: registerDto.email,
         password_hash: hash,
         full_name: registerDto.fullName,
@@ -44,48 +50,60 @@ export class AuthService {
         role_code: 'CUSTOMER',
         status_code: 'INACTIVE',
         is_verified: false,
-        verification_token: verificationToken,
+        otp_code: otp,
+        otp_expires_at: otpExpiresAt,
       });
-
-      await this.mailService.sendVerificationEmail(newUser.email!, verificationToken);
-
-      return { message: 'Registration successful. Please check your email to verify account.' };
-    } catch (error) {
-      if (error.code === 'P2002') { // Prisma Unique constraint violation
-        throw new BadRequestException('Email or Phone already exists');
-      }
-      throw error;
     }
+
+    await this.mailService.sendOtpEmail(registerDto.email, otp);
+
+    return { message: 'OTP sent to your email. Please verify to complete registration.' };
   }
 
-  async verifyEmail(token: string) {
-    // We need a method to find by verification token. 
-    // Since UsersService doesn't have it explicitly, we might need to add it or use findFirst via Prisma in UsersService.
-    // I will assume UsersService needs an update for this, strictly speaking. 
-    // But for now I'll use a direct prisma call if I could, but I can't inject PrismaService here directly if not imported.
-    // Wait, UsersService injects PrismaService. Best practice involves UsersService handling DB.
-    // I will add `findByVerificationToken` to UsersService in next step or use `usersService` generic find if available.
-    // Current UsersService only has `findByEmail`, `findOne`.
-    // I will assume I can update UsersService. 
-    // For this file, I'll call `this.usersService.activateUser(token)` which I will implement.
-
-    // BUT, the user requested "Show me code for AuthService". 
-    // So I will put the logic here assuming UsersService exposes a way to find user by token.
-    // Actually, to keep it clean, I should implement `verifyUserByToken` in UsersService.
-    // However, for this task, I'll assume usersService has a method `findByVerificationToken` which I'll add.
-
-    const user = await this.usersService.findByVerificationToken(token);
+  async register(verifyOtpDto: { email: string, otp: string }) {
+    const user = await this.usersService.findByEmail(verifyOtpDto.email);
     if (!user) {
-      throw new BadRequestException('Invalid verification token');
+      throw new BadRequestException('User not found');
     }
 
+    if (user.status_code === 'ACTIVE') {
+      throw new BadRequestException('User already active');
+    }
+
+    if (user.otp_code !== verifyOtpDto.otp) {
+      throw new BadRequestException('Invalid OTP');
+    }
+
+    if (!user.otp_expires_at || new Date() > user.otp_expires_at) {
+      throw new BadRequestException('OTP expired');
+    }
+
+    // Activate User
     await this.usersService.update(user.user_id, {
       status_code: 'ACTIVE',
-      verification_token: null,
       is_verified: true,
+      otp_code: null,
+      otp_expires_at: null,
     });
 
-    return { message: 'Email verified successfully. You can now login.' };
+    // Auto Login
+    const payload = {
+      email: user.email,
+      sub: user.user_id,
+      role: user.role_code,
+      fullName: user.full_name
+    };
+
+    return {
+      message: 'Registration successful',
+      access_token: this.jwtService.sign(payload),
+      user: {
+        id: user.user_id,
+        email: user.email,
+        role_code: user.role_code,
+        fullName: user.full_name,
+      },
+    };
   }
 
   async login(loginDto: LoginDto) {
@@ -120,7 +138,7 @@ export class AuthService {
       user: {
         id: user.user_id,
         email: user.email,
-        role: user.role_code,
+        role_code: user.role_code,
         fullName: user.full_name,
       },
     };
@@ -174,7 +192,7 @@ export class AuthService {
       user: {
         id: user.user_id,
         email: user.email,
-        role: user.role_code,
+        role_code: user.role_code,
         fullName: user.full_name,
       },
     };
