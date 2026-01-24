@@ -1,5 +1,5 @@
 
-import { Injectable, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { Injectable, ForbiddenException, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { Prisma } from '@prisma/client';
 
@@ -16,6 +16,7 @@ export class UsersService {
   async findByEmail(email: string) {
     return this.prisma.users.findUnique({
       where: { email },
+      include: { customers: true },
     });
   }
 
@@ -24,6 +25,7 @@ export class UsersService {
   async findOne(id: number) {
     return this.prisma.users.findUnique({
       where: { user_id: id },
+      include: { customers: true },
     });
   }
 
@@ -45,6 +47,27 @@ export class UsersService {
   // Placeholder methods for controller compatibility if needed
   findAll() {
     return this.prisma.users.findMany();
+  }
+
+  async updateProfile(userId: number, data: { full_name?: string; phone?: string }) {
+    // Check phone uniqueness if phone is provided
+    if (data.phone) {
+      const existingUser = await this.prisma.users.findUnique({
+        where: { phone: data.phone },
+      });
+
+      if (existingUser && existingUser.user_id !== userId) {
+        throw new BadRequestException('Phone number is already taken');
+      }
+    }
+
+    return this.prisma.users.update({
+      where: { user_id: userId },
+      data: {
+        full_name: data.full_name,
+        phone: data.phone,
+      },
+    });
   }
 
   update(id: number, data: any) {
