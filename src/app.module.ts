@@ -22,9 +22,10 @@ import { InventoryModule } from './inventory/inventory.module';
 import { FinanceModule } from './finance/finance.module';
 import { AuctionsModule } from './auctions/auctions.module';
 import { ChatModule } from './chat/chat.module';
+import { AddressModule } from './address/address.module';
 
 @Module({
-  imports: [ConfigModule.forRoot({ isGlobal: true }), PrismaModule, SystemModule, AuthModule, UsersModule, StaffModule, ProductsModule, CategoriesModule, BrandsModule, SeriesModule, OrdersModule, ShipmentsModule, CartModule, MarketingModule, NotificationsModule, PosModule, InventoryModule, FinanceModule, AuctionsModule, ChatModule, MailModule],
+  imports: [ConfigModule.forRoot({ isGlobal: true }), PrismaModule, SystemModule, AuthModule, UsersModule, StaffModule, ProductsModule, CategoriesModule, BrandsModule, SeriesModule, OrdersModule, ShipmentsModule, CartModule, MarketingModule, NotificationsModule, PosModule, InventoryModule, FinanceModule, AuctionsModule, ChatModule, MailModule, AddressModule],
   controllers: [AppController],
   providers: [AppService],
 })
