@@ -1,17 +1,22 @@
-
 import { Controller, Post, Body, Get, Query, UseGuards, Req, Res } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { AuthGuard } from '@nestjs/passport';
+import { VerifyOtpDto } from './dto/verify-otp.dto';
 
 @Controller('auth')
 export class AuthController {
   constructor(private authService: AuthService) { }
 
+  @Post('send-otp')
+  async sendOtp(@Body() registerDto: RegisterDto) {
+    return this.authService.sendOtpForRegistration(registerDto);
+  }
+
   @Post('register')
-  async register(@Body() registerDto: RegisterDto) {
-    return this.authService.register(registerDto);
+  async register(@Body() verifyOtpDto: VerifyOtpDto) {
+    return this.authService.register(verifyOtpDto);
   }
 
   @Post('login')
@@ -19,10 +24,10 @@ export class AuthController {
     return this.authService.login(loginDto);
   }
 
-  @Get('verify')
-  async verify(@Query('token') token: string) {
-    return this.authService.verifyEmail(token);
-  }
+  // @Get('verify') - Removed as we switched to OTP
+  // async verify(@Query('token') token: string) {
+  //   return this.authService.verifyEmail(token);
+  // }
 
   @Get('google')
   @UseGuards(AuthGuard('google'))
