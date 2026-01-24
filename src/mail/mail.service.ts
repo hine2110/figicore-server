@@ -20,4 +20,17 @@ export class MailService {
       `,
         });
     }
+
+    async sendOtpEmail(email: string, otp: string) {
+        await this.mailerService.sendMail({
+            to: email,
+            subject: 'FigiCore Verification Code',
+            html: `
+        <h3>FigiCore Verification</h3>
+        <p>Your verification code is:</p>
+        <h2>${otp}</h2>
+        <p>This code expires in 5 minutes.</p>
+      `,
+        });
+    }
 }
