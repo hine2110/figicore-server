@@ -1,5 +1,5 @@
 
-import { Injectable, BadRequestException, UnauthorizedException } from '@nestjs/common';
+import { Injectable, BadRequestException, UnauthorizedException, NotFoundException } from '@nestjs/common';
 import { UsersService } from '../users/users.service';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
@@ -196,5 +196,60 @@ export class AuthService {
         fullName: user.full_name,
       },
     };
+  }
+
+  async forgotPassword(email: string) {
+    const user = await this.usersService.findByEmail(email);
+    if (!user) {
+      throw new NotFoundException('Email not found');
+    }
+
+    // Check if user role is allowed to use forgot password
+    const ALLOWED_ROLES = ['CUSTOMER', 'MANAGER', 'STAFF_POS', 'STAFF_INVENTORY'];
+    if (!ALLOWED_ROLES.includes(user.role_code)) {
+      throw new BadRequestException('This feature is not available for your account role. Please contact system administrator.');
+    }
+
+    // Create reset token (expires in 1 hour)
+    const resetToken = this.jwtService.sign(
+      { email, type: 'password-reset' },
+      { expiresIn: '1h' }
+    );
+
+    // Send email with reset link
+    const resetLink = `${process.env.FRONTEND_URL}/guest/reset-password?token=${resetToken}`;
+    await this.mailService.sendPasswordResetEmail(user.email!, user.full_name || 'User', resetLink);
+
+    return { message: 'Password reset link sent to your email' };
+  }
+
+  async resetPassword(token: string, newPassword: string) {
+    try {
+      // Verify token
+      const payload = this.jwtService.verify(token);
+      if (payload.type !== 'password-reset') {
+        throw new UnauthorizedException('Invalid token');
+      }
+
+      // Hash new password
+      const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+      // Update password in database
+      const user = await this.usersService.findByEmail(payload.email);
+      if (!user) {
+        throw new NotFoundException('User not found');
+      }
+
+      await this.usersService.update(user.user_id, {
+        password_hash: hashedPassword
+      });
+
+      return { message: 'Password reset successfully' };
+    } catch (error) {
+      if (error.name === 'TokenExpiredError') {
+        throw new UnauthorizedException('Reset link has expired');
+      }
+      throw new UnauthorizedException('Invalid or expired token');
+    }
   }
 }
