@@ -149,7 +149,7 @@ export class AuthService {
 
   async validateGoogleUser(details: any) {
     // 1. Check by Google ID (Best Practice)
-    let user = await this.prisma.users.findUnique({
+    let user = await this.prisma.users.findFirst({
       where: { google_id: details.googleId },
     });
 
