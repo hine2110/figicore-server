@@ -23,9 +23,12 @@ import { FinanceModule } from './finance/finance.module';
 import { AuctionsModule } from './auctions/auctions.module';
 import { ChatModule } from './chat/chat.module';
 import { AddressModule } from './address/address.module';
+import { UploadModule } from './upload/upload.module';
+import { EmployeesModule } from './employees/employees.module';
+import { CustomersModule } from './customers/customers.module';
 
 @Module({
-  imports: [ConfigModule.forRoot({ isGlobal: true }), PrismaModule, SystemModule, AuthModule, UsersModule, StaffModule, ProductsModule, CategoriesModule, BrandsModule, SeriesModule, OrdersModule, ShipmentsModule, CartModule, MarketingModule, NotificationsModule, PosModule, InventoryModule, FinanceModule, AuctionsModule, ChatModule, MailModule, AddressModule],
+  imports: [ConfigModule.forRoot({ isGlobal: true }), PrismaModule, SystemModule, AuthModule, UsersModule, StaffModule, ProductsModule, CategoriesModule, BrandsModule, SeriesModule, OrdersModule, ShipmentsModule, CartModule, MarketingModule, NotificationsModule, PosModule, InventoryModule, FinanceModule, AuctionsModule, ChatModule, MailModule, AddressModule, UploadModule, EmployeesModule, CustomersModule],
   controllers: [AppController],
   providers: [AppService],
 })
