@@ -37,7 +37,7 @@ export class ProductsService {
       // 2. Handle Variants & Type Specifics
       const commonVariantData = {
         product_id: product.product_id,
-        stock_available: 0, // FORCE 0
+        stock_available: 0,
         stock_defect: 0,
       };
 
@@ -49,11 +49,11 @@ export class ProductsService {
         await tx.product_variants.createMany({
           data: variants.map(v => ({
             ...commonVariantData,
-            sku: genCode('SKU'), // Auto-gen SKU, ignoring FE input
-            barcode: genCode('BAR'), // Auto-gen Barcode
+            sku: genCode('SKU'),
+            barcode: genCode('BAR'),
             option_name: v.option_name,
             price: v.price,
-            image_url: v.image_url
+            media_assets: v.media_assets ? (v.media_assets as any) : JSON.stringify([]), // Map media_assets
           }))
         });
       }
@@ -78,7 +78,8 @@ export class ProductsService {
             sku: genCode('BBOX'),
             barcode: genCode('BAR'),
             option_name: 'Blindbox Standard',
-            price: blindbox.price
+            price: blindbox.price,
+            media_assets: JSON.stringify([])
           }
         });
       }
@@ -96,7 +97,7 @@ export class ProductsService {
           }
         });
 
-        // Smart Variants: Generate TWO variants (Deposit & Full)
+        // Smart Variants: Generate TWO variants
         await tx.product_variants.createMany({
           data: [
             {
@@ -104,14 +105,16 @@ export class ProductsService {
               sku: genCode('PRE-DEP'),
               barcode: genCode('BAR-DEP'),
               option_name: 'Deposit (Cọc)',
-              price: preorder.deposit_amount
+              price: preorder.deposit_amount,
+              media_assets: JSON.stringify([])
             },
             {
               ...commonVariantData,
               sku: genCode('PRE-FULL'),
               barcode: genCode('BAR-FULL'),
               option_name: 'Full Payment (Trả thẳng)',
-              price: preorder.full_price
+              price: preorder.full_price,
+              media_assets: JSON.stringify([])
             }
           ]
         });
@@ -159,15 +162,14 @@ export class ProductsService {
       ...productData
     } = updateProductDto;
 
-    // 1. Check if product exists
     const currentProduct = await this.prisma.products.findUnique({
       where: { product_id: id },
-      include: { product_variants: true } // Need to know existing variants
+      include: { product_variants: true }
     });
     if (!currentProduct) throw new BadRequestException('Product not found');
 
     return await this.prisma.$transaction(async (tx) => {
-      // 2. Update Parent Product
+      // Update Parent
       if (productData.type_code && productData.type_code !== currentProduct.type_code) {
         throw new BadRequestException('Changing product type is not allowed.');
       }
@@ -185,7 +187,6 @@ export class ProductsService {
         },
       });
 
-      // 3. Handle Sub-Types based on CURRENT type
       const type = currentProduct.type_code;
 
       if (type === 'RETAIL' && variants && variants.length > 0) {
@@ -205,7 +206,7 @@ export class ProductsService {
                 option_name: v.option_name,
                 price: v.price,
                 barcode: v.barcode,
-                image_url: v.image_url,
+                media_assets: v.media_assets ? (v.media_assets as any) : undefined, // Update media_assets
               },
             });
           } else {
@@ -216,7 +217,7 @@ export class ProductsService {
                 option_name: v.option_name,
                 price: v.price,
                 barcode: v.barcode,
-                image_url: v.image_url,
+                media_assets: v.media_assets ? (v.media_assets as any) : JSON.stringify([]),
                 stock_available: v.stock_available || 0,
                 stock_defect: v.stock_defect || 0,
               },
@@ -242,8 +243,6 @@ export class ProductsService {
             target_margin: blindbox.target_margin,
           },
         });
-
-        // Smart Sync: Update ALL variants to match Ticket Price
         await tx.product_variants.updateMany({
           where: { product_id: id },
           data: { price: blindbox.price }
@@ -268,29 +267,16 @@ export class ProductsService {
           },
         });
 
-        // smart Sync: Update explicit variants 'Deposit' and 'Full Payment'
-        // Strategy: find by option_name contains/matches, or update if only 2 exist in order.
-        // Robust approach: If we have specific variants, update them. If not, maybe create them.
-        // Simpler for now: Check overlapping names.
-
         const existingVariants = currentProduct.product_variants;
         const depositVariant = existingVariants.find(v => v.option_name.includes('Deposit') || v.option_name.includes('Cọc'));
         const fullVariant = existingVariants.find(v => v.option_name.includes('Full') || v.option_name.includes('Trả thẳng'));
 
         if (depositVariant) {
-          await tx.product_variants.update({
-            where: { variant_id: depositVariant.variant_id },
-            data: { price: preorder.deposit_amount }
-          });
+          await tx.product_variants.update({ where: { variant_id: depositVariant.variant_id }, data: { price: preorder.deposit_amount } });
         }
         if (fullVariant) {
-          await tx.product_variants.update({
-            where: { variant_id: fullVariant.variant_id },
-            data: { price: preorder.full_price }
-          });
+          await tx.product_variants.update({ where: { variant_id: fullVariant.variant_id }, data: { price: preorder.full_price } });
         }
-        // Fallback: If for some reason they don't exist (legacy data), created them? 
-        // Skipping complex migration logic here to keep it simple, assuming new products or standard flow.
       }
 
       return this.findOne(id);
@@ -316,7 +302,7 @@ export class ProductsService {
     return await this.prisma.products.update({
       where: { product_id: id },
       data: {
-        status_code: 'INACTIVE', // Soft Delete status
+        status_code: 'INACTIVE',
         deleted_at: new Date(),
       },
     });

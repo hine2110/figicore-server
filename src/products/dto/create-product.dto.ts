@@ -1,11 +1,22 @@
-
-import { IsEnum, IsString, IsOptional, IsNumber, IsArray, ValidateNested, IsNotEmpty, ValidateIf, Min } from 'class-validator';
+import { IsString, IsNotEmpty, IsArray, ValidateNested, IsOptional, IsNumber, Min, IsEnum, ValidateIf } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export enum ProductType {
     RETAIL = 'RETAIL',
     BLINDBOX = 'BLINDBOX',
     PREORDER = 'PREORDER',
+}
+
+class MediaAssetDto {
+    @IsEnum(['IMAGE', 'VIDEO'])
+    type: 'IMAGE' | 'VIDEO';
+
+    @IsEnum(['CLOUDINARY', 'YOUTUBE'])
+    source: 'CLOUDINARY' | 'YOUTUBE';
+
+    @IsString()
+    @IsNotEmpty()
+    url: string;
 }
 
 class ProductVariantDto {
@@ -35,15 +46,17 @@ class ProductVariantDto {
     @IsOptional()
     barcode?: string;
 
-    @IsString()
+    @IsArray()
     @IsOptional()
-    image_url?: string;
+    @ValidateNested({ each: true })
+    @Type(() => MediaAssetDto)
+    media_assets?: MediaAssetDto[];
 }
 
 class ProductBlindboxDto {
     @IsNumber()
     @Min(0)
-    price: number; // Price of the blindbox itself
+    price: number;
 
     @IsNumber()
     @IsOptional()
@@ -63,7 +76,7 @@ class ProductBlindboxDto {
 class ProductPreorderDto {
     @IsNumber()
     @Min(0)
-    full_price: number; // New field
+    full_price: number;
 
     @IsNumber()
     @Min(0)
@@ -71,7 +84,7 @@ class ProductPreorderDto {
 
     @IsString()
     @IsNotEmpty()
-    release_date: string; // ISO Date string
+    release_date: string;
 
     @IsNumber()
     @IsOptional()
@@ -112,23 +125,20 @@ export class CreateProductDto {
     @IsOptional()
     media_urls?: string[];
 
-    // --- RETAIL VARIANTS ---
     @ValidateIf(o => o.type_code === ProductType.RETAIL)
     @IsArray()
     @ValidateNested({ each: true })
     @Type(() => ProductVariantDto)
     variants?: ProductVariantDto[];
 
-    // --- BLINDBOX CONFIG ---
     @ValidateIf(o => o.type_code === ProductType.BLINDBOX)
-    @IsNotEmpty({ message: 'Blindbox configuration is required' })
+    @IsNotEmpty()
     @ValidateNested()
     @Type(() => ProductBlindboxDto)
     blindbox?: ProductBlindboxDto;
 
-    // --- PREORDER CONFIG ---
     @ValidateIf(o => o.type_code === ProductType.PREORDER)
-    @IsNotEmpty({ message: 'Preorder configuration is required' })
+    @IsNotEmpty()
     @ValidateNested()
     @Type(() => ProductPreorderDto)
     preorder?: ProductPreorderDto;
