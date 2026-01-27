@@ -111,13 +111,13 @@ export class AuthService {
   async login(loginDto: LoginDto) {
     const user = await this.usersService.findByEmail(loginDto.email);
     if (!user) {
-      throw new UnauthorizedException('Invalid credentials');
+      throw new UnauthorizedException('Invalid email');
     }
 
     if (user.password_hash) {
       const isMatch = await bcrypt.compare(loginDto.password, user.password_hash);
       if (!isMatch) {
-        throw new UnauthorizedException('Invalid credentials');
+        throw new UnauthorizedException('Invalid password');
       }
     } else {
       // User might have registered via Google (no password)
