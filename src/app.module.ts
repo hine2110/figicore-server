@@ -26,9 +26,13 @@ import { AddressModule } from './address/address.module';
 import { UploadModule } from './upload/upload.module';
 import { EmployeesModule } from './employees/employees.module';
 import { CustomersModule } from './customers/customers.module';
+import { WorkSchedulesModule } from './work-schedules/work-schedules.module';
+import { WorkSchedulesStaffModule } from './work-schedules-forStaff/work-schedules-staff.module';
+
 
 @Module({
-  imports: [ConfigModule.forRoot({ isGlobal: true }), PrismaModule, SystemModule, AuthModule, UsersModule, StaffModule, ProductsModule, CategoriesModule, BrandsModule, SeriesModule, OrdersModule, ShipmentsModule, CartModule, MarketingModule, NotificationsModule, PosModule, InventoryModule, FinanceModule, AuctionsModule, ChatModule, MailModule, AddressModule, UploadModule, EmployeesModule, CustomersModule],
+
+  imports: [ConfigModule.forRoot({ isGlobal: true }), PrismaModule, SystemModule, AuthModule, UsersModule, StaffModule, ProductsModule, CategoriesModule, BrandsModule, SeriesModule, OrdersModule, ShipmentsModule, CartModule, MarketingModule, NotificationsModule, PosModule, InventoryModule, FinanceModule, AuctionsModule, ChatModule, MailModule, AddressModule, UploadModule, EmployeesModule, CustomersModule, WorkSchedulesModule, WorkSchedulesStaffModule],
   controllers: [AppController],
   providers: [AppService],
 })
