@@ -1,26 +1,31 @@
 import { Injectable } from '@nestjs/common';
-import { CreateSeriesDto } from './dto/create-series.dto';
-import { UpdateSeriesDto } from './dto/update-series.dto';
+import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
 export class SeriesService {
-  create(createSeriesDto: CreateSeriesDto) {
-    return 'This action adds a new series';
-  }
+  constructor(private prisma: PrismaService) { }
 
   findAll() {
-    return `This action returns all series`;
+    return this.prisma.series.findMany({
+      orderBy: { name: 'asc' },
+    });
   }
 
-  findOne(id: number) {
-    return `This action returns a #${id} series`;
-  }
+  async quickCreate(name: string) {
+    if (!name) return null;
+    const trimmedName = name.trim();
 
-  update(id: number, updateSeriesDto: UpdateSeriesDto) {
-    return `This action updates a #${id} series`;
-  }
-
-  remove(id: number) {
-    return `This action removes a #${id} series`;
+    try {
+      return await this.prisma.series.create({
+        data: { name: trimmedName },
+      });
+    } catch (error) {
+      if (error.code === 'P2002') {
+        return this.prisma.series.findUnique({
+          where: { name: trimmedName }
+        });
+      }
+      throw error;
+    }
   }
 }
