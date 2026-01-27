@@ -1,7 +1,9 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, Query } from '@nestjs/common';
 import { ProductsService } from './products.service';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
+
+import { QuickCreateProductDto } from './dto/quick-create-product.dto';
 
 @Controller('products')
 export class ProductsController {
@@ -12,9 +14,23 @@ export class ProductsController {
     return this.productsService.create(createProductDto);
   }
 
+  // ⚠️ IMPORTANT: Place this BEFORE any ':id' routes
+  @Post('quick-create')
+  quickCreate(@Body() body: QuickCreateProductDto) {
+    return this.productsService.quickCreate(body);
+  }
+
   @Get()
-  findAll() {
-    return this.productsService.findAll();
+  findAll(
+    @Query() query: { search?: string, brand_id?: string, category_id?: string, series_id?: string, type_code?: string }
+  ) {
+    return this.productsService.findAll({
+      search: query.search,
+      brand_id: query.brand_id ? Number(query.brand_id) : undefined,
+      category_id: query.category_id ? Number(query.category_id) : undefined,
+      series_id: query.series_id ? Number(query.series_id) : undefined,
+      type_code: query.type_code
+    });
   }
 
   @Get(':id')
