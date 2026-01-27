@@ -1,34 +1,28 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete } from '@nestjs/common';
+import { Controller, Post, Body, UseGuards, Request, Logger, UnauthorizedException } from '@nestjs/common';
 import { InventoryService } from './inventory.service';
-import { CreateInventoryDto } from './dto/create-inventory.dto';
-import { UpdateInventoryDto } from './dto/update-inventory.dto';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
 @Controller('inventory')
 export class InventoryController {
-  constructor(private readonly inventoryService: InventoryService) {}
+  private readonly logger = new Logger(InventoryController.name);
 
-  @Post()
-  create(@Body() createInventoryDto: CreateInventoryDto) {
-    return this.inventoryService.create(createInventoryDto);
-  }
+  constructor(private readonly inventoryService: InventoryService) { }
 
-  @Get()
-  findAll() {
-    return this.inventoryService.findAll();
-  }
+  @Post('receipts')
+  @UseGuards(JwtAuthGuard)
+  async create(@Request() req: any, @Body() dto: any) {
+    const user = req.user;
 
-  @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.inventoryService.findOne(+id);
-  }
+    // Debug Log
+    this.logger.log(`[Inventory] Request received from User ID: ${user?.userId || user?.id || user?.sub || user?.user_id}`);
+    this.logger.debug(`[Inventory] Full User Object: ${JSON.stringify(user)}`);
 
-  @Patch(':id')
-  update(@Param('id') id: string, @Body() updateInventoryDto: UpdateInventoryDto) {
-    return this.inventoryService.update(+id, updateInventoryDto);
-  }
+    if (!user) {
+      throw new UnauthorizedException('User not found in request context');
+    }
 
-  @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.inventoryService.remove(+id);
+    // Extract ID (Fallback to 'sub' or 'userId' or 'id' or 'user_id')
+    const userId = Number(user.userId || user.id || user.sub || user.user_id);
+    return this.inventoryService.createReceipt(userId, dto);
   }
 }

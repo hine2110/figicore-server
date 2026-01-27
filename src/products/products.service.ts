@@ -61,13 +61,31 @@ export class ProductsService {
       else if (productData.type_code === 'BLINDBOX') {
         if (!blindbox) throw new BadRequestException('Blindbox configuration is required.');
 
+        // Weighted Random Algorithm: Auto-Calculate Tiers
+        const price = Number(blindbox.price);
+        const minVal = Number(blindbox.min_value_allow);
+        const maxVal = Number(blindbox.max_value_allow);
+
+        // Tier Logic
+        // Tier 1 (Common - 80%): [Min, Price]
+        // Tier 2 (Rare - 15%): (Price, Price + (Max - Price) * 0.7]
+        // Tier 3 (Legend - 5%): (Tier 2 Max, Max]
+
+        const tier2Max = price + (maxVal - price) * 0.7;
+
+        const tiers = [
+          { probability: 80, min: minVal, max: price, name: "Common" },
+          { probability: 15, min: price + 1, max: tier2Max, name: "Rare" },
+          { probability: 5, min: tier2Max + 1, max: maxVal, name: "Legendary" }
+        ];
+
         await tx.product_blindboxes.create({
           data: {
             product_id: product.product_id,
             price: blindbox.price,
-            min_value_allow: blindbox.min_value_allow,
-            max_value_allow: blindbox.max_value_allow,
-            target_margin: blindbox.target_margin
+            min_value: blindbox.min_value_allow,
+            max_value: blindbox.max_value_allow,
+            tier_config: JSON.stringify(tiers) as any
           }
         });
 
@@ -124,8 +142,78 @@ export class ProductsService {
     });
   }
 
-  findAll() {
+  async quickCreate(data: { name: string, brand_id?: number, variant_names?: string[] }) {
+    const { name, brand_id, variant_names } = data;
+    const names = (variant_names && variant_names.length > 0) ? variant_names : ['Default'];
+
+    // 1. Validate Brand if provided
+    if (brand_id) {
+      const brand = await this.prisma.brands.findUnique({ where: { brand_id } });
+      if (!brand) throw new BadRequestException('Brand not found');
+    }
+
+    return await this.prisma.$transaction(async (tx) => {
+      const product = await tx.products.create({
+        data: {
+          name,
+          brand_id,
+          type_code: 'RETAIL',
+          status_code: 'DRAFT', // Explicitly DRAFT
+          media_urls: Prisma.JsonNull,
+        }
+      });
+
+      await tx.product_variants.createMany({
+        data: names.map((vName, idx) => ({
+          product_id: product.product_id,
+          option_name: vName,
+          sku: `DRAFT-${Date.now()}-${idx}`,
+          barcode: `DRAFT-${Date.now()}-${idx}`,
+          price: 0,
+          stock_available: 0,
+          stock_defect: 0,
+          media_assets: JSON.stringify([])
+        }))
+      });
+
+      // Fetch result using the SAME transaction client to ensure visibility
+      return await tx.products.findUnique({
+        where: { product_id: product.product_id },
+        include: {
+          product_variants: true,
+          product_blindboxes: true,
+          product_preorders: true,
+          brands: true,
+          categories: true,
+          series: true
+        }
+      });
+    });
+  }
+
+  findAll(params: { search?: string, brand_id?: number, category_id?: number, series_id?: number, type_code?: any }) {
+    const { search, brand_id, category_id, series_id, type_code } = params;
+
+    const where: Prisma.productsWhereInput = {
+      AND: [
+        // 1. Exact Filters
+        type_code ? { type_code: type_code } : {},
+        brand_id ? { brand_id: Number(brand_id) } : {},
+        category_id ? { category_id: Number(category_id) } : {},
+        series_id ? { series_id: Number(series_id) } : {},
+
+        // 2. Search Logic (Name OR SKU)
+        search ? {
+          OR: [
+            { name: { contains: search, mode: 'insensitive' } },
+            { product_variants: { some: { sku: { contains: search, mode: 'insensitive' } } } }
+          ]
+        } : {}
+      ]
+    };
+
     return this.prisma.products.findMany({
+      where,
       include: {
         brands: true,
         categories: true,
@@ -227,20 +315,33 @@ export class ProductsService {
       }
 
       else if (type === 'BLINDBOX' && blindbox) {
+        // Weighted Random Algorithm: Auto-Calculate Tiers (Same as Create)
+        const price = Number(blindbox.price);
+        const minVal = Number(blindbox.min_value_allow);
+        const maxVal = Number(blindbox.max_value_allow);
+
+        const tier2Max = price + (maxVal - price) * 0.7;
+
+        const tiers = [
+          { probability: 80, min: minVal, max: price, name: "Common" },
+          { probability: 15, min: price + 1, max: tier2Max, name: "Rare" },
+          { probability: 5, min: tier2Max + 1, max: maxVal, name: "Legendary" }
+        ];
+
         await tx.product_blindboxes.upsert({
           where: { product_id: id },
           create: {
             product_id: id,
             price: blindbox.price,
-            min_value_allow: blindbox.min_value_allow,
-            max_value_allow: blindbox.max_value_allow,
-            target_margin: blindbox.target_margin,
+            min_value: blindbox.min_value_allow,
+            max_value: blindbox.max_value_allow,
+            tier_config: JSON.stringify(tiers) as any
           },
           update: {
             price: blindbox.price,
-            min_value_allow: blindbox.min_value_allow,
-            max_value_allow: blindbox.max_value_allow,
-            target_margin: blindbox.target_margin,
+            min_value: blindbox.min_value_allow,
+            max_value: blindbox.max_value_allow,
+            tier_config: JSON.stringify(tiers) as any
           },
         });
         await tx.product_variants.updateMany({
