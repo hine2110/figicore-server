@@ -11,6 +11,9 @@ export class InventoryService {
     if (!items || items.length === 0) throw new BadRequestException('No items provided for receipt.');
 
     return await this.prisma.$transaction(async (tx) => {
+      // 0. Ensure Employee Exists (Fix Foreign Key Error)
+      await this.ensureEmployeeExists(tx, userId);
+
       // 1. Create Receipt Header
       const receipt = await tx.inventory_receipts.create({
         data: {
@@ -99,6 +102,22 @@ export class InventoryService {
 
       return receipt;
     });
+  }
+
+  private async ensureEmployeeExists(tx: any, userId: number) {
+    const employee = await tx.employees.findUnique({ where: { user_id: userId } });
+    if (!employee) {
+      // Auto-create dummy employee record to satisfy Foreign Key
+      await tx.employees.create({
+        data: {
+          user_id: userId,
+          employee_code: `STAFF-${userId}`,
+          job_title_code: 'WAREHOUSE',
+          base_salary: 0,
+          start_date: new Date()
+        }
+      });
+    }
   }
 
   findAll() {

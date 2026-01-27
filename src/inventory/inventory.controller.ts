@@ -23,6 +23,11 @@ export class InventoryController {
 
     // Extract ID (Fallback to 'sub' or 'userId' or 'id' or 'user_id')
     const userId = Number(user.userId || user.id || user.sub || user.user_id);
-    return this.inventoryService.createReceipt(userId, dto);
+    try {
+      return await this.inventoryService.createReceipt(userId, dto);
+    } catch (error) {
+      this.logger.error(`[Inventory] Error creating receipt: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 }
