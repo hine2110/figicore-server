@@ -230,7 +230,7 @@ export class ProductsService {
     const product = await this.prisma.products.findUnique({
       where: { product_id: id },
       include: {
-        product_variants: true,
+        product_variants: { where: { deleted_at: null } },
         product_blindboxes: true,
         product_preorders: true,
         brands: true,
