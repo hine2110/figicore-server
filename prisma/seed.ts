@@ -117,9 +117,24 @@ async function main() {
     for (const r of ranks) await upsertLookup('CUSTOMER_RANK', r.code, r.value, r.sort, r.meta);
 
     // ==========================================
-    // 5. TÀI KHOẢN QUẢN TRỊ (SUPER ADMIN)
+    // 5. Seed SHIFT_CODE (Mandatory for WorkSchedules)
     // ==========================================
-    console.log('--- 5. Super Admin Account ---');
+    console.log('Seeding SHIFT_CODE...');
+
+    const shifts = [
+        { code: 'MORNING', value: 'Morning Shift (8AM-12PM)', sort: 1 },
+        { code: 'AFTERNOON', value: 'Afternoon Shift (1PM-5PM)', sort: 2 },
+        { code: 'EVENING', value: 'Evening Shift (5PM-9PM)', sort: 3 },
+    ];
+
+    for (const shift of shifts) {
+        await upsertLookup('SHIFT_CODE', shift.code, shift.value, shift.sort);
+    }
+
+    // ==========================================
+    // 6. TÀI KHOẢN QUẢN TRỊ (SUPER ADMIN)
+    // ==========================================
+    console.log('--- 6. Super Admin Account ---');
 
     const adminEmail = 'admin@figicore.com';
     const saltRounds = 10;
