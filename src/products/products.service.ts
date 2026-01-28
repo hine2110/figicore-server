@@ -191,8 +191,8 @@ export class ProductsService {
     });
   }
 
-  findAll(params: { search?: string, brand_id?: number, category_id?: number, series_id?: number, type_code?: any }) {
-    const { search, brand_id, category_id, series_id, type_code } = params;
+  findAll(params: { search?: string, brand_id?: number, category_id?: number, series_id?: number, type_code?: any, min_price?: number, max_price?: number, sort?: string }) {
+    const { search, brand_id, category_id, series_id, type_code, min_price, max_price, sort } = params;
 
     const where: Prisma.productsWhereInput = {
       AND: [
@@ -208,6 +208,18 @@ export class ProductsService {
             { name: { contains: search, mode: 'insensitive' } },
             { product_variants: { some: { sku: { contains: search, mode: 'insensitive' } } } }
           ]
+        } : {},
+
+        // 3. Price Filter (Check if ANY variant matches the price range)
+        (min_price !== undefined || max_price !== undefined) ? {
+          product_variants: {
+            some: {
+              price: {
+                gte: min_price || 0,
+                lte: max_price || 999999999
+              }
+            }
+          }
         } : {}
       ]
     };
