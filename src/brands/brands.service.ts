@@ -1,26 +1,31 @@
 import { Injectable } from '@nestjs/common';
-import { CreateBrandDto } from './dto/create-brand.dto';
-import { UpdateBrandDto } from './dto/update-brand.dto';
+import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
 export class BrandsService {
-  create(createBrandDto: CreateBrandDto) {
-    return 'This action adds a new brand';
-  }
+  constructor(private prisma: PrismaService) { }
 
   findAll() {
-    return `This action returns all brands`;
+    return this.prisma.brands.findMany({
+      orderBy: { name: 'asc' },
+    });
   }
 
-  findOne(id: number) {
-    return `This action returns a #${id} brand`;
-  }
+  async quickCreate(name: string) {
+    if (!name) return null;
+    const trimmedName = name.trim();
 
-  update(id: number, updateBrandDto: UpdateBrandDto) {
-    return `This action updates a #${id} brand`;
-  }
-
-  remove(id: number) {
-    return `This action removes a #${id} brand`;
+    try {
+      return await this.prisma.brands.create({
+        data: { name: trimmedName },
+      });
+    } catch (error) {
+      if (error.code === 'P2002') {
+        return this.prisma.brands.findUnique({
+          where: { name: trimmedName },
+        });
+      }
+      throw error;
+    }
   }
 }
