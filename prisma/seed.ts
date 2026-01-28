@@ -95,7 +95,19 @@ async function main() {
         await upsertLookup('CUSTOMER_RANK', rank.code, rank.value, rank.sort, rank.meta);
     }
 
-    // 4. Seed Super Admin
+    // 4. Seed SHIFT_CODE (Mandatory for WorkSchedules)
+    console.log('Seeding SHIFT_CODE...');
+    const shifts = [
+        { code: 'MORNING', value: 'Morning Shift (8AM-12PM)', sort: 1 },
+        { code: 'AFTERNOON', value: 'Afternoon Shift (1PM-5PM)', sort: 2 },
+        { code: 'EVENING', value: 'Evening Shift (5PM-9PM)', sort: 3 },
+    ];
+
+    for (const shift of shifts) {
+        await upsertLookup('SHIFT_CODE', shift.code, shift.value, shift.sort);
+    }
+
+    // 5. Seed Super Admin
     const saltRounds = 10;
     const adminPassword = 'Admin@123456';
     const hashedPassword = await bcrypt.hash(adminPassword, saltRounds);
