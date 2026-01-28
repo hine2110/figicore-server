@@ -3,24 +3,27 @@ import * as bcrypt from 'bcrypt';
 
 const prisma = new PrismaClient();
 
-// Nâng cấp hàm upsert để hỗ trợ meta_data (JSON)
+/**
+ * Hàm Upsert Lookup chuẩn
+ * Hỗ trợ cập nhật cả Meta Data (JSON) dùng cho Config Frontend/Logic
+ */
 async function upsertLookup(type: string, code: string, value: string, sortOrder: number = 0, metaData: any = null) {
     const existing = await prisma.system_lookups.findFirst({
         where: { type, code }
     });
 
     if (existing) {
-        console.log(`Updated lookup: ${type} - ${code}`);
+        console.log(`🔄 Update: ${type} - ${code}`);
         return prisma.system_lookups.update({
             where: { id: existing.id },
             data: {
                 value,
                 sort_order: sortOrder,
-                meta_data: metaData ?? existing.meta_data // Update meta nếu có
+                meta_data: metaData ?? existing.meta_data // Giữ meta cũ nếu không truyền mới
             }
         });
     } else {
-        console.log(`Created lookup: ${type} - ${code}`);
+        console.log(`✅ Create: ${type} - ${code}`);
         return prisma.system_lookups.create({
             data: {
                 type,
@@ -34,69 +37,90 @@ async function upsertLookup(type: string, code: string, value: string, sortOrder
 }
 
 async function main() {
-    console.log('Start seeding ...');
+    console.log('🚀 BẮT ĐẦU SEED DỮ LIỆU HỆ THỐNG FIGICORE...');
 
-    // 1. Seed Roles
-    console.log('Seeding Roles...');
-    const roles = [
-        { code: 'SUPER_ADMIN', value: 'System Owner', sort: 1 },
-        { code: 'MANAGER', value: 'Store Manager', sort: 2 },
-        { code: 'STAFF_POS', value: 'Sales Staff', sort: 3 },
-        { code: 'STAFF_INVENTORY', value: 'Warehouse Staff', sort: 4 },
-        { code: 'CUSTOMER', value: 'End User', sort: 5 },
-    ];
+    // ==========================================
+    // 1. PHÂN QUYỀN & NGƯỜI DÙNG (USER & ROLES)
+    // ==========================================
+    console.log('--- 1. User Roles & Status ---');
 
-    for (const role of roles) {
-        await upsertLookup('USER_ROLE', role.code, role.value, role.sort);
-    }
+    // Roles
+    await upsertLookup('USER_ROLE', 'SUPER_ADMIN', 'System Owner', 1);
+    await upsertLookup('USER_ROLE', 'MANAGER', 'Cửa Hàng Trưởng', 2);
+    await upsertLookup('USER_ROLE', 'STAFF_POS', 'Nhân Viên Bán Hàng', 3);
+    await upsertLookup('USER_ROLE', 'STAFF_INVENTORY', 'Thủ Kho', 4);
+    await upsertLookup('USER_ROLE', 'CUSTOMER', 'Khách Hàng (Member)', 5);
 
-    // 2. Seed Statuses
-    console.log('Seeding Statuses...');
-    const statuses = [
-        { code: 'ACTIVE', value: 'Active', sort: 1 },
-        { code: 'INACTIVE', value: 'Inactive', sort: 2 },
-        { code: 'BANNED', value: 'Banned', sort: 3 },
-    ];
+    // Status
+    await upsertLookup('USER_STATUS', 'ACTIVE', 'Hoạt Động', 1, { color: 'green' });
+    await upsertLookup('USER_STATUS', 'INACTIVE', 'Tạm Khóa', 2, { color: 'gray' });
+    await upsertLookup('USER_STATUS', 'BANNED', 'Cấm Vĩnh Viễn', 3, { color: 'red' });
 
-    for (const status of statuses) {
-        await upsertLookup('USER_STATUS', status.code, status.value, status.sort);
-    }
+    // ==========================================
+    // 2. DANH MỤC SẢN PHẨM (CORE BUSINESS) 🔥
+    // ==========================================
+    console.log('--- 2. Product Types & Logic ---');
 
-    // 3. Seed Customer Ranks (NEW FEATURE) 🏆
-    console.log('Seeding Customer Ranks...');
+    // PRODUCT_TYPE: Định nghĩa luồng xử lý (Form Flow) cho Frontend & Backend
+    await upsertLookup('PRODUCT_TYPE', 'RETAIL', 'Hàng Bán Lẻ (Standard)', 1, {
+        is_physical: true,
+        has_variants: true,
+        form_fields: ['variants', 'brand'],
+        description: 'Sản phẩm vật lý, quản lý tồn kho theo SKU/Variant.'
+    });
+
+    await upsertLookup('PRODUCT_TYPE', 'BLINDBOX', 'Blind Box (Túi Mù)', 2, {
+        is_physical: false, // Là sản phẩm ảo (Wrapper)
+        has_variants: false,
+        algo_type: 'LUCKY_BAG_DYNAMIC', // Thuật toán túi mù động
+        form_fields: ['price_config', 'min_value', 'max_value', 'margin'],
+        description: 'Gói may mắn, hệ thống tự chọn item Retail để trả khách.'
+    });
+
+    await upsertLookup('PRODUCT_TYPE', 'PREORDER', 'Hàng Đặt Trước', 3, {
+        is_physical: true,
+        is_preorder: true,
+        form_fields: ['deposit_amount', 'release_date', 'max_slots'],
+        description: 'Hàng chưa về kho, quản lý cọc và ngày phát hành.'
+    });
+
+    // PRODUCT_STATUS: Vòng đời sản phẩm
+    await upsertLookup('PRODUCT_STATUS', 'DRAFT', 'Nháp', 1, { allow_sale: false, visible: false });
+    await upsertLookup('PRODUCT_STATUS', 'ACTIVE', 'Đang Kinh Doanh', 2, { allow_sale: true, visible: true });
+    await upsertLookup('PRODUCT_STATUS', 'INACTIVE', 'Ngừng Kinh Doanh', 3, { allow_sale: false, visible: false }); // Soft Delete
+    await upsertLookup('PRODUCT_STATUS', 'COMING_SOON', 'Sắp Ra Mắt', 4, { allow_sale: false, visible: true });
+
+    // ==========================================
+    // 3. KHO VẬN & GIAO DỊCH (INVENTORY LOGIC)
+    // ==========================================
+    console.log('--- 3. Inventory Transaction Types ---');
+
+    // INVENTORY_TYPE: Lý do tăng/giảm kho (Cực quan trọng cho Report)
+    await upsertLookup('INVENTORY_TYPE', 'INBOUND_PO', 'Nhập Kho (Purchase Order)', 1, { sign: 1 });
+    await upsertLookup('INVENTORY_TYPE', 'OUTBOUND_SALE', 'Xuất Bán (Order)', 2, { sign: -1 });
+    await upsertLookup('INVENTORY_TYPE', 'RETURN_REFUND', 'Khách Trả Hàng', 3, { sign: 1 });
+    await upsertLookup('INVENTORY_TYPE', 'ADJUSTMENT_LOSS', 'Xuất Hủy / Vỡ / Mất', 4, { sign: -1 });
+    await upsertLookup('INVENTORY_TYPE', 'ADJUSTMENT_ADD', 'Kiểm Kê (Thừa)', 5, { sign: 1 });
+    await upsertLookup('INVENTORY_TYPE', 'BLINDBOX_CONVERT', 'Dùng Cho Blindbox', 6, { sign: -1 }); // Trừ kho Retail khi bán gói Blindbox
+
+    // ==========================================
+    // 4. KHÁCH HÀNG THÂN THIẾT (LOYALTY)
+    // ==========================================
+    console.log('--- 4. Customer Ranks ---');
+
     const ranks = [
-        {
-            code: 'BRONZE',
-            value: 'Newbie Collector',
-            sort: 1,
-            meta: { threshold: 0, discount_rate: 0, color: '#CD7F32' } // Màu đồng
-        },
-        {
-            code: 'SILVER',
-            value: 'Active Collector',
-            sort: 2,
-            meta: { threshold: 2000000, discount_rate: 2, color: '#C0C0C0' } // Màu bạc (Tiêu 2tr)
-        },
-        {
-            code: 'GOLD',
-            value: 'Elite Collector',
-            sort: 3,
-            meta: { threshold: 10000000, discount_rate: 5, color: '#FFD700' } // Màu vàng (Tiêu 10tr)
-        },
-        {
-            code: 'DIAMOND',
-            value: 'Legendary Collector',
-            sort: 4,
-            meta: { threshold: 50000000, discount_rate: 10, color: '#B9F2FF' } // Màu kim cương (Tiêu 50tr)
-        },
+        { code: 'BRONZE', value: 'Newbie Collector', sort: 1, meta: { threshold: 0, discount: 0, color: '#CD7F32' } },
+        { code: 'SILVER', value: 'Active Collector', sort: 2, meta: { threshold: 2000000, discount: 2, color: '#C0C0C0' } },
+        { code: 'GOLD', value: 'Elite Collector', sort: 3, meta: { threshold: 10000000, discount: 5, color: '#FFD700' } },
+        { code: 'DIAMOND', value: 'Legendary Collector', sort: 4, meta: { threshold: 50000000, discount: 10, color: '#B9F2FF' } },
     ];
+    for (const r of ranks) await upsertLookup('CUSTOMER_RANK', r.code, r.value, r.sort, r.meta);
 
-    for (const rank of ranks) {
-        await upsertLookup('CUSTOMER_RANK', rank.code, rank.value, rank.sort, rank.meta);
-    }
-
-    // 4. Seed SHIFT_CODE (Mandatory for WorkSchedules)
+    // ==========================================
+    // 5. Seed SHIFT_CODE (Mandatory for WorkSchedules)
+    // ==========================================
     console.log('Seeding SHIFT_CODE...');
+
     const shifts = [
         { code: 'MORNING', value: 'Morning Shift (8AM-12PM)', sort: 1 },
         { code: 'AFTERNOON', value: 'Afternoon Shift (1PM-5PM)', sort: 2 },
@@ -107,36 +131,37 @@ async function main() {
         await upsertLookup('SHIFT_CODE', shift.code, shift.value, shift.sort);
     }
 
-    // 5. Seed Super Admin
-    const saltRounds = 10;
-    const adminPassword = 'Admin@123456';
-    const hashedPassword = await bcrypt.hash(adminPassword, saltRounds);
-    const adminEmail = 'admin@figicore.com';
+    // ==========================================
+    // 6. TÀI KHOẢN QUẢN TRỊ (SUPER ADMIN)
+    // ==========================================
+    console.log('--- 6. Super Admin Account ---');
 
-    const adminUser = await prisma.users.upsert({
+    const adminEmail = 'admin@figicore.com';
+    const saltRounds = 10;
+    const hashedPassword = await bcrypt.hash('Admin@123456', saltRounds);
+
+    await prisma.users.upsert({
         where: { email: adminEmail },
-        update: {
-            role_code: 'SUPER_ADMIN',
-        },
+        update: { role_code: 'SUPER_ADMIN' },
         create: {
             email: adminEmail,
-            phone: '0000000000',
-            full_name: 'Super Admin',
+            phone: '0999999999',
+            full_name: 'FigiCore Owner',
             password_hash: hashedPassword,
             role_code: 'SUPER_ADMIN',
             status_code: 'ACTIVE',
             is_verified: true,
-            // Admin thì không cần record trong bảng customers, nhưng nếu hệ thống yêu cầu thì thêm sau
+            // Google ID để trống vì tạo thủ công
         },
     });
+    console.log(`✅ Admin Account Ready: ${adminEmail}`);
 
-    console.log(`Created/Updated Admin: ${adminUser.email}`);
-    console.log('Seeding finished.');
+    console.log('🎉 SEEDING HOÀN TẤT! Hệ thống đã sẵn sàng định danh.');
 }
 
 main()
     .catch((e) => {
-        console.error(e);
+        console.error('❌ Seeding Error:', e);
         process.exit(1);
     })
     .finally(async () => {

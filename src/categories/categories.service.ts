@@ -1,26 +1,37 @@
 import { Injectable } from '@nestjs/common';
-import { CreateCategoryDto } from './dto/create-category.dto';
-import { UpdateCategoryDto } from './dto/update-category.dto';
+import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
 export class CategoriesService {
-  create(createCategoryDto: CreateCategoryDto) {
-    return 'This action adds a new category';
-  }
+  constructor(private prisma: PrismaService) { }
 
   findAll() {
-    return `This action returns all categories`;
+    return this.prisma.categories.findMany({
+      orderBy: { name: 'asc' },
+    });
   }
 
-  findOne(id: number) {
-    return `This action returns a #${id} category`;
-  }
+  async quickCreate(name: string, parent_id?: number) {
+    if (!name) return null;
+    const trimmedName = name.trim();
+    // Simple Slug Generation
+    const slug = trimmedName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '');
 
-  update(id: number, updateCategoryDto: UpdateCategoryDto) {
-    return `This action updates a #${id} category`;
-  }
-
-  remove(id: number) {
-    return `This action removes a #${id} category`;
+    try {
+      return await this.prisma.categories.create({
+        data: {
+          name: trimmedName,
+          slug: slug,
+          parent_id: parent_id || null
+        }
+      });
+    } catch (error) {
+      if (error.code === 'P2002') {
+        return this.prisma.categories.findUnique({
+          where: { name: trimmedName }
+        });
+      }
+      throw error;
+    }
   }
 }
