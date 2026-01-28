@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
@@ -47,5 +47,24 @@ export class CustomersService {
         totalPages: Math.ceil(total / limit),
       },
     };
+  }
+
+  async findOne(id: number) {
+    const customer = await this.prisma.customers.findUnique({
+      where: { user_id: id },
+      include: {
+        users: {
+            include: {
+                addresses: true
+            }
+        }
+      },
+    });
+
+    if (!customer) {
+        throw new NotFoundException(`Customer with ID ${id} not found`);
+    }
+
+    return customer;
   }
 }

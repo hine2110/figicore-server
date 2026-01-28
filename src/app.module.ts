@@ -27,8 +27,17 @@ import { UploadModule } from './upload/upload.module';
 import { EmployeesModule } from './employees/employees.module';
 import { CustomersModule } from './customers/customers.module';
 
+import { ServeStaticModule } from '@nestjs/serve-static';
+import { join } from 'path';
+
 @Module({
-  imports: [ConfigModule.forRoot({ isGlobal: true }), PrismaModule, SystemModule, AuthModule, UsersModule, StaffModule, ProductsModule, CategoriesModule, BrandsModule, SeriesModule, OrdersModule, ShipmentsModule, CartModule, MarketingModule, NotificationsModule, PosModule, InventoryModule, FinanceModule, AuctionsModule, ChatModule, MailModule, AddressModule, UploadModule, EmployeesModule, CustomersModule],
+  imports: [
+    ConfigModule.forRoot({ isGlobal: true }),
+    ServeStaticModule.forRoot({
+      rootPath: join(__dirname, '..', 'uploads'),
+      serveRoot: '/uploads',
+    }),
+    PrismaModule, SystemModule, AuthModule, UsersModule, StaffModule, ProductsModule, CategoriesModule, BrandsModule, SeriesModule, OrdersModule, ShipmentsModule, CartModule, MarketingModule, NotificationsModule, PosModule, InventoryModule, FinanceModule, AuctionsModule, ChatModule, MailModule, AddressModule, UploadModule, EmployeesModule, CustomersModule],
   controllers: [AppController],
   providers: [AppService],
 })
