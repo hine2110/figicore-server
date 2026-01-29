@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
@@ -48,6 +48,26 @@ export class CustomersService {
       },
     };
   }
+
+
+  async findOne(id: number) {
+    const customer = await this.prisma.customers.findUnique({
+      where: { user_id: id },
+      include: {
+        users: {
+            include: {
+                addresses: true
+            }
+        }
+      },
+    });
+
+    if (!customer) {
+        throw new NotFoundException(`Customer with ID ${id} not found`);
+    }
+
+    return customer;
+
   async getDashboardStats(userId: number) {
     // 1. Get Customer Details (Points, Rank)
     const customer = await this.prisma.customers.findUnique({
@@ -77,5 +97,6 @@ export class CustomersService {
       activeOrders: activeOrders,
       rankCode: customer?.current_rank_code || 'BRONZE'
     };
+
   }
 }
