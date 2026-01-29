@@ -1,8 +1,11 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, Req } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, Req, ParseIntPipe, Query, BadRequestException } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { UsersService } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import { Roles } from '../auth/decorators/roles.decorator';
 
 @Controller('users')
 export class UsersController {
@@ -20,6 +23,49 @@ export class UsersController {
   @UseGuards(AuthGuard('jwt'))
   updateProfile(@Req() req, @Body() data: { full_name: string; phone: string }) {
     return this.usersService.updateProfile(req.user.user_id, data);
+  }
+
+  @Post('bulk')
+  @UseGuards(AuthGuard('jwt'))
+  async createBulk(@Body() body: any) {
+    // 1. Normalize Input
+    let usersList: any[] = [];
+    if (body.users && Array.isArray(body.users)) {
+      usersList = body.users;
+    } else if (Array.isArray(body)) {
+      usersList = body;
+    } else {
+      usersList = [body];
+    }
+
+    if (!usersList.length || (usersList.length === 1 && !usersList[0])) {
+       throw new BadRequestException("No user data provided");
+    }
+
+    // 2. Clean Log
+    console.log(`[BulkCreate] Processing request for ${usersList.length} users...`);
+
+    // 3. Call Service
+    const result = await this.usersService.createBulk({ users: usersList });
+
+    // 4. Success Log
+    console.log(`[BulkCreate] Successfully created ${result.length} employees.`);
+    
+    return result;
+  }
+
+  @Get('preview-email')
+  @UseGuards(AuthGuard('jwt'))
+  getPreviewEmail(@Query('role') role: string) {
+      if (!role) throw new BadRequestException('Role is required');
+      return this.usersService.getPreviewEmail(role);
+  }
+
+  @Get('next-id')
+  @UseGuards(AuthGuard('jwt'))
+  getNextEmployeeId(@Query('role') role: string) {
+      if (!role) throw new BadRequestException('Role is required');
+      return this.usersService.getNextEmployeeId(role);
   }
 
   @Post()
@@ -40,6 +86,13 @@ export class UsersController {
   @Patch(':id')
   update(@Param('id') id: string, @Body() updateUserDto: UpdateUserDto) {
     return this.usersService.update(+id, updateUserDto);
+  }
+
+  @Patch(':id/status')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('SUPER_ADMIN', 'ADMIN')
+  updateStatus(@Param('id', ParseIntPipe) id: number, @Body('status') status: 'ACTIVE' | 'INACTIVE') {
+    return this.usersService.updateStatus(id, status);
   }
 
   @Delete(':id')

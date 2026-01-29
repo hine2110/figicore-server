@@ -1,4 +1,4 @@
-import { Controller, Post, Body, UseGuards, Get, Query, DefaultValuePipe, ParseIntPipe } from '@nestjs/common';
+import { Controller, Post, Body, UseGuards, Get, Query, DefaultValuePipe, ParseIntPipe, Param } from '@nestjs/common';
 import { EmployeesService } from './employees.service';
 import { CreateEmployeeDto } from './dto/create-employee.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -23,7 +23,15 @@ export class EmployeesController {
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
     @Query('search') search?: string,
+    @Query('role') role?: string,
   ) {
-    return this.employeesService.findAll(page, limit, search);
+    return this.employeesService.findAll(page, limit, search, role);
+  }
+
+  @Get(':id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('SUPER_ADMIN', 'MANAGER')
+  findOne(@Param('id', ParseIntPipe) id: number) {
+    return this.employeesService.findOne(id);
   }
 }

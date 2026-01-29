@@ -1,5 +1,5 @@
 import { IsEmail, IsEnum, IsNotEmpty, IsNumber, IsOptional, IsPositive, IsString, MinLength, MaxLength } from 'class-validator';
-import { Type } from 'class-transformer';
+import { Type, Transform } from 'class-transformer';
 
 export enum AllowedEmployeeRole {
   MANAGER = 'MANAGER',
@@ -10,7 +10,7 @@ export enum AllowedEmployeeRole {
 export class CreateEmployeeDto {
   // User Fields
   @IsEmail({}, { message: 'Invalid email format' })
-  @IsNotEmpty()
+  @IsOptional()
   email: string;
 
   @IsString()
@@ -42,6 +42,7 @@ export class CreateEmployeeDto {
   @IsPositive()
   @IsNotEmpty()
   @Type(() => Number)
+  @Transform(({ value }) => Number(value))
   base_salary: number;
 
   @IsOptional()
