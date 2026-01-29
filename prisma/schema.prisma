@@ -342,9 +342,9 @@ model pos_sessions {
 model product_blindboxes {
   product_id      Int       @id
   price           Decimal   @db.Decimal(15, 2)
-  min_value_allow Decimal?  @db.Decimal(15, 2)
-  max_value_allow Decimal?  @db.Decimal(15, 2)
-  target_margin   Float?
+  min_value       Decimal?  @db.Decimal(15, 2)
+  max_value       Decimal?  @db.Decimal(15, 2)
+  tier_config     Json?
   created_at      DateTime? @default(now()) @db.Timestamp(6)
   updated_at      DateTime? @default(now()) @db.Timestamp(6)
   deleted_at      DateTime? @db.Timestamp(6)
