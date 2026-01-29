@@ -74,7 +74,7 @@ export class EmployeesService {
       };
     });
   }
-  async findAll(page: number, limit: number, search?: string) {
+  async findAll(page: number, limit: number, search?: string, role?: string) {
     const skip = (page - 1) * limit;
     const where: any = {};
 
@@ -84,6 +84,13 @@ export class EmployeesService {
         { users: { full_name: { contains: search, mode: 'insensitive' } } },
         { users: { email: { contains: search, mode: 'insensitive' } } },
       ];
+    }
+
+    if (role && role !== 'ALL') {
+      where.users = {
+        ...where.users,
+        role_code: role,
+      };
     }
 
     const [data, total] = await Promise.all([
@@ -117,6 +124,23 @@ export class EmployeesService {
         totalPages: Math.ceil(total / limit),
       },
     };
+  }
+
+  async findOne(id: number) {
+    return this.prisma.employees.findUnique({
+      where: { user_id: id },
+      include: {
+        users: {
+          include: {
+            addresses: true,
+          },
+        },
+        work_schedules: {
+          take: 5,
+          orderBy: { date: 'desc' },
+        },
+      },
+    });
   }
 
   private async generateEmployeeCode(): Promise<string> {
