@@ -1,4 +1,8 @@
+
 import { Controller, Get, Query, UseGuards, DefaultValuePipe, ParseIntPipe, Param } from '@nestjs/common';
+
+import { Controller, Get, Query, UseGuards, DefaultValuePipe, ParseIntPipe, Request } from '@nestjs/common';
+
 import { CustomersService } from './customers.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -6,7 +10,14 @@ import { Roles } from '../auth/decorators/roles.decorator';
 
 @Controller('customers')
 export class CustomersController {
-  constructor(private readonly customersService: CustomersService) {}
+  constructor(private readonly customersService: CustomersService) { }
+
+  @Get('dashboard-stats')
+  @UseGuards(JwtAuthGuard)
+  getDashboardStats(@Request() req: any) {
+    const userId = Number(req.user.userId || req.user.id || req.user.sub || req.user.user_id);
+    return this.customersService.getDashboardStats(userId);
+  }
 
   @Get()
   @UseGuards(JwtAuthGuard, RolesGuard)
