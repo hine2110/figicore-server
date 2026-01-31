@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { ScheduleModule } from '@nestjs/schedule';
 import { MailModule } from './mail/mail.module';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -37,13 +38,38 @@ import { join } from 'path';
 
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
+    ScheduleModule.forRoot(),
     ServeStaticModule.forRoot({
       rootPath: join(__dirname, '..', 'uploads'),
       serveRoot: '/uploads',
     }),
-    PrismaModule, SystemModule, AuthModule, UsersModule, StaffModule, ProductsModule, CategoriesModule, BrandsModule, SeriesModule, OrdersModule, ShipmentsModule, CartModule, MarketingModule, NotificationsModule, PosModule, InventoryModule, FinanceModule, AuctionsModule, ChatModule, MailModule, AddressModule, UploadModule, EmployeesModule, CustomersModule],
-
-  imports: [ConfigModule.forRoot({ isGlobal: true }), PrismaModule, SystemModule, AuthModule, UsersModule, StaffModule, ProductsModule, CategoriesModule, BrandsModule, SeriesModule, OrdersModule, ShipmentsModule, CartModule, MarketingModule, NotificationsModule, PosModule, InventoryModule, FinanceModule, AuctionsModule, ChatModule, MailModule, AddressModule, UploadModule, EmployeesModule, CustomersModule, WorkSchedulesModule, WorkSchedulesStaffModule],
+    PrismaModule,
+    SystemModule,
+    AuthModule,
+    UsersModule,
+    StaffModule,
+    ProductsModule,
+    CategoriesModule,
+    BrandsModule,
+    SeriesModule,
+    OrdersModule,
+    ShipmentsModule,
+    CartModule,
+    MarketingModule,
+    NotificationsModule,
+    PosModule,
+    InventoryModule,
+    FinanceModule,
+    AuctionsModule,
+    ChatModule,
+    MailModule,
+    AddressModule,
+    UploadModule,
+    EmployeesModule,
+    CustomersModule,
+    WorkSchedulesModule,
+    WorkSchedulesStaffModule
+  ],
 
   controllers: [AppController],
   providers: [AppService],
