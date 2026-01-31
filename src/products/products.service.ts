@@ -1,4 +1,5 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, ServiceUnavailableException, Logger } from '@nestjs/common';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
@@ -53,6 +54,7 @@ export class ProductsService {
             barcode: genCode('BAR'),
             option_name: v.option_name,
             price: v.price,
+            description: v.description, // Map description
             media_assets: v.media_assets ? (v.media_assets as any) : JSON.stringify([]), // Map media_assets
           }))
         });
@@ -394,6 +396,7 @@ export class ProductsService {
                 option_name: v.option_name,
                 price: v.price,
                 barcode: v.barcode,
+                description: v.description,
                 media_assets: v.media_assets ? (v.media_assets as any) : undefined, // Update media_assets
               },
             });
@@ -405,6 +408,7 @@ export class ProductsService {
                 option_name: v.option_name,
                 price: v.price,
                 barcode: v.barcode,
+                description: v.description,
                 media_assets: v.media_assets ? (v.media_assets as any) : JSON.stringify([]),
                 stock_available: v.stock_available || 0,
                 stock_defect: v.stock_defect || 0,
@@ -507,5 +511,35 @@ export class ProductsService {
         deleted_at: new Date(),
       },
     });
+  }
+
+  async generateAiDescription(dto: { productName: string, attributes?: string }) {
+    if (!process.env.GEMINI_API_KEY) {
+      throw new ServiceUnavailableException("AI service is not configured (Missing API Key).");
+    }
+
+    try {
+      const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+
+      // --- CẬP NHẬT QUAN TRỌNG: Dùng model 2.0 Flash ---
+      const model = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
+
+      const prompt = `
+            Role: Professional Copywriter for E-commerce in Vietnam.
+            Task: Write a concise, attractive product description in Vietnamese.
+            Product Name: ${dto.productName}
+            Attributes: ${dto.attributes || "N/A"}
+            Tone: Enthusiastic, Sales-oriented, Professional.
+            Format: Plain text, max 3 paragraphs, use emojis sparingly. Do not use markdown headers like ##.
+        `;
+
+      const result = await model.generateContent(prompt);
+      const response = await result.response;
+      return { text: response.text() };
+    } catch (error) {
+      Logger.error("AI Gen Failed", error);
+      // Log thêm chi tiết lỗi để dễ debug nếu có
+      throw new ServiceUnavailableException("AI service is currently unavailable. Please try again later.");
+    }
   }
 }

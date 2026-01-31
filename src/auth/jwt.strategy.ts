@@ -1,11 +1,11 @@
-
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { PassportStrategy } from '@nestjs/passport';
-import { Injectable } from '@nestjs/common';
+import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
-    constructor() {
+    constructor(private prisma: PrismaService) {
         const secret = process.env.JWT_SECRET || 'secretKey';
         console.log(`[JwtStrategy] Initialized with secret: ${secret.substring(0, 3)}***`);
         super({
@@ -16,15 +16,18 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     }
 
     async validate(payload: any) {
+        const userId = Number(payload.sub || payload.id || payload.user_id);
+        const user = await this.prisma.users.findUnique({ where: { user_id: userId } });
+
+        if (!user) {
+            throw new UnauthorizedException('User not found or session expired');
+        }
 
         return {
-            user_id: payload.sub,
-            email: payload.email,
-            role_code: payload.role_code,
-            full_name: payload.full_name,
-            // Map legacy fields if needed
-            userId: payload.sub,
-            id: payload.sub
+            ...user, // Return full user object from DB
+            user_id: user.user_id,
+            userId: user.user_id,
+            id: user.user_id
         };
     }
 }

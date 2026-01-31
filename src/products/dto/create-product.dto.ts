@@ -51,6 +51,10 @@ class ProductVariantDto {
     @ValidateNested({ each: true })
     @Type(() => MediaAssetDto)
     media_assets?: MediaAssetDto[];
+
+    @IsString()
+    @IsOptional()
+    description?: string;
 }
 
 class ProductBlindboxDto {
