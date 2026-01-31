@@ -132,10 +132,57 @@ export class OrdersService {
   }
 
   async confirmPayment(orderId: number, userId: number) {
-    // Simple state transition for simulation
-    return this.prisma.orders.update({
-      where: { order_id: orderId, user_id: userId },
-      data: { status_code: 'PROCESSING' } // Confirmed
+    return this.prisma.$transaction(async (tx) => {
+      // 1. Get Order Total Amount
+      const order = await tx.orders.findUnique({
+        where: { order_id: orderId, user_id: userId }
+      });
+
+      if (!order) throw new BadRequestException(`Order #${orderId} not found`);
+
+      // 2. Simple state transition for simulation
+      const updatedOrder = await tx.orders.update({
+        where: { order_id: orderId },
+        data: { status_code: 'PROCESSING', paid_amount: order.total_amount } // Confirmed & Paid
+      });
+
+      // 3. Loyalty Logic
+      const pointsEarned = Math.floor(Number(order.total_amount) / 100000);
+
+      if (pointsEarned > 0) {
+        // Update Customer Points & Spend
+        const customer = await tx.customers.upsert({
+          where: { user_id: userId },
+          update: {
+            loyalty_points: { increment: pointsEarned },
+            total_spent: { increment: order.total_amount }
+          },
+          create: {
+            user_id: userId,
+            loyalty_points: pointsEarned,
+            total_spent: order.total_amount,
+            current_rank_code: 'BRONZE'
+          }
+        });
+
+        // Check & Update Rank
+        // Rank Rules: Bronze < 100, Silver < 500, Gold < 2000, Diamond >= 2000
+        const currentPoints = customer.loyalty_points || 0;
+        let newRank = 'BRONZE';
+
+        if (currentPoints >= 2000) newRank = 'DIAMOND';
+        else if (currentPoints >= 500) newRank = 'GOLD';
+        else if (currentPoints >= 100) newRank = 'SILVER';
+
+        if (newRank !== customer.current_rank_code) {
+          await tx.customers.update({
+            where: { user_id: userId },
+            data: { current_rank_code: newRank }
+          });
+        }
+      }
+
+      return updatedOrder;
     });
   }
 
@@ -233,6 +280,25 @@ export class OrdersService {
 
   findAll() {
     return `This action returns all orders`;
+  }
+
+  async findAllByUser(userId: number) {
+    return this.prisma.orders.findMany({
+      where: { user_id: userId },
+      orderBy: { created_at: 'desc' },
+      include: {
+        order_items: {
+          include: {
+            product_variants: {
+              include: {
+                products: true
+              }
+            }
+          }
+        },
+        addresses: true
+      }
+    });
   }
 
   async findOne(id: number) {
