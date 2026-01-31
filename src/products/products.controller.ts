@@ -55,4 +55,9 @@ export class ProductsController {
   toggleStatus(@Param('id') id: string) {
     return this.productsService.toggleStatus(+id);
   }
+
+  @Post('gen-description')
+  generateDescription(@Body() body: { productName: string, attributes?: string }) {
+    return this.productsService.generateAiDescription(body);
+  }
 }

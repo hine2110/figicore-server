@@ -55,18 +55,20 @@ export class CustomersService {
       where: { user_id: id },
       include: {
         users: {
-            include: {
-                addresses: true
-            }
+          include: {
+            addresses: true
+          }
         }
       },
     });
 
     if (!customer) {
-        throw new NotFoundException(`Customer with ID ${id} not found`);
+      throw new NotFoundException(`Customer with ID ${id} not found`);
     }
 
     return customer;
+
+  }
 
   async getDashboardStats(userId: number) {
     // 1. Get Customer Details (Points, Rank)

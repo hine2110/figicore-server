@@ -28,6 +28,38 @@ export class AddressController {
         return this.ghnService.getWards(Number(districtId));
     }
 
+    @Post('calculate-fee')
+    @UseGuards(AuthGuard('jwt'))
+    async calculateShippingFee(@Body() body: { address_id: number; total_amount: number }) {
+        // 1. Get Address Details
+        const address = await this.prisma.addresses.findUnique({ where: { address_id: body.address_id } });
+        if (!address) throw new BadRequestException('Address not found');
+
+        // 2. Get Real Cost from GHN (Internal) - Calls strict API with full insurance
+        const realFee = await this.ghnService.calculateRealFee({
+            to_district_id: address.district_id,
+            to_ward_code: address.ward_code,
+            weight: 2000, // Estimate 2kg for figures, or pass actual weight
+            insurance_value: body.total_amount
+        });
+
+        // 3. Apply Subsidy Logic (Business Rule: Plan A)
+        let customerFee = 30000; // Flat Rate: 30k default
+
+        // Policy: Free Ship for orders >= 5.000.000 VND
+        if (body.total_amount >= 5000000) {
+            customerFee = 0;
+        }
+
+        // 4. Return BOTH values
+        // 'fee': What the user sees (Subsidized)
+        // 'original_fee': The actual cost (hidden), needed for "Shipping Debt" tracking
+        return {
+            fee: customerFee,
+            original_fee: realFee
+        };
+    }
+
     // --- User Address CRUD ---
 
     @Post()
@@ -60,8 +92,11 @@ export class AddressController {
                 recipient_name: data.recipient_name,
                 recipient_phone: data.recipient_phone,
                 province_id: Number(data.province_id),
+                province_name: data.province_name,
                 district_id: Number(data.district_id),
+                district_name: data.district_name,
                 ward_code: String(data.ward_code),
+                ward_name: data.ward_name,
                 detail_address: data.detail_address,
                 is_default: data.is_default || false,
             },
