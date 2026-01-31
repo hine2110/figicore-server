@@ -1,34 +1,37 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, Request } from '@nestjs/common';
 import { CartService } from './cart.service';
 import { CreateCartDto } from './dto/create-cart.dto';
 import { UpdateCartDto } from './dto/update-cart.dto';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
 @Controller('cart')
+@UseGuards(JwtAuthGuard)
 export class CartController {
-  constructor(private readonly cartService: CartService) {}
+  constructor(private readonly cartService: CartService) { }
 
   @Post()
-  create(@Body() createCartDto: CreateCartDto) {
-    return this.cartService.create(createCartDto);
+  async addToCart(@Request() req, @Body() createCartDto: CreateCartDto) {
+    return await this.cartService.addToCart(req.user.userId, createCartDto);
   }
 
   @Get()
-  findAll() {
-    return this.cartService.findAll();
+  getCart(@Request() req) {
+    return this.cartService.getCart(req.user.userId);
   }
 
-  @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.cartService.findOne(+id);
+  @Patch(':itemId')
+  updateQuantity(@Request() req, @Param('itemId') itemId: string, @Body() updateCartDto: UpdateCartDto) {
+    // Assuming simple update quantity logic. DTO might need check.
+    return this.cartService.updateQuantity(req.user.userId, +itemId, updateCartDto.quantity || 1);
   }
 
-  @Patch(':id')
-  update(@Param('id') id: string, @Body() updateCartDto: UpdateCartDto) {
-    return this.cartService.update(+id, updateCartDto);
+  @Delete(':itemId')
+  remove(@Request() req, @Param('itemId') itemId: string) {
+    return this.cartService.removeFromCart(req.user.userId, +itemId);
   }
 
-  @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.cartService.remove(+id);
+  @Delete()
+  clearCart(@Request() req) {
+    return this.cartService.clearCart(req.user.userId);
   }
 }
