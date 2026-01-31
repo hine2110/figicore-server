@@ -48,6 +48,12 @@ export class OrdersController {
     return this.ordersService.findAll();
   }
 
+  @Get('my-orders')
+  @UseGuards(AuthGuard('jwt'))
+  findMyOrders(@Req() req) {
+    return this.ordersService.findAllByUser(req.user.user_id);
+  }
+
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.ordersService.findOne(+id);
