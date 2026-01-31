@@ -11,10 +11,23 @@ export class WorkSchedulesService {
     constructor(private readonly prisma: PrismaService) { }
 
     async create(createWorkScheduleDto: CreateWorkScheduleDto) {
-        const { user_id, date, shift_code, expected_start, expected_end } = createWorkScheduleDto;
+        const { user_id, date, shift_code } = createWorkScheduleDto;
 
-        // Validate shift_code exists in system_lookups
-        // TODO: Cache this lookup for performance
+        // 1. Define Standard Shift Times (Server Enforcement)
+        const shiftTimes: Record<string, { start: number; end: number }> = {
+            'MORNING': { start: 8, end: 12 },
+            'AFTERNOON': { start: 13, end: 17 },
+            'EVENING': { start: 17, end: 21 },
+        };
+
+        const config = shiftTimes[shift_code];
+        if (!config) {
+            // Fallback: Check DB if not in hardcoded list (optional, but requested Strict Adherence)
+            // For this task, we enforce the 3 shifts strictly as per requirement.
+            throw new BadRequestException(`Invalid shift code: ${shift_code}. Must be MORNING, AFTERNOON, or EVENING.`);
+        }
+
+        // Validate shift_code exists in system_lookups (Data Integrity)
         const validShift = await this.prisma.system_lookups.findFirst({
             where: {
                 type: 'SHIFT_CODE',
@@ -24,7 +37,7 @@ export class WorkSchedulesService {
         });
 
         if (!validShift) {
-            throw new BadRequestException(`Invalid shift code: ${shift_code}`);
+            throw new BadRequestException(`Invalid shift code in system: ${shift_code}`);
         }
 
         // Check for existing schedule to prevent duplicates
@@ -46,13 +59,22 @@ export class WorkSchedulesService {
         // Convert date string to Date object
         const scheduleDate = new Date(date);
 
+        // 2. Set Expected Start/End Time based on Shift Config (Force Asia/Ho_Chi_Minh +07:00)
+        // Format: YYYY-MM-DDTHH:mm:ss+07:00
+        const formatTime = (h: number) => h.toString().padStart(2, '0');
+
+        const expected_start = new Date(0); // Epoch
+        expected_start.setUTCHours(config.start, 0, 0, 0);
+        const expected_end = new Date(0);
+        expected_end.setUTCHours(config.end, 0, 0, 0);
+
         return this.prisma.work_schedules.create({
             data: {
                 user_id,
                 date: scheduleDate,
                 shift_code,
-                expected_start: expected_start ? new Date(expected_start) : null,
-                expected_end: expected_end ? new Date(expected_end) : null,
+                expected_start,
+                expected_end,
             },
         });
     }
@@ -301,6 +323,7 @@ export class WorkSchedulesService {
             avatar_url: string;
             total_shifts: number;
             total_hours: number;
+            email: string;
         }>();
 
         for (const schedule of schedules) {
@@ -318,6 +341,7 @@ export class WorkSchedulesService {
                     avatar_url: user.avatar_url || '',
                     total_shifts: 0,
                     total_hours: 0,
+                    email: user.email || '',
                 });
             }
 

@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { async } from 'rxjs';
 
 @Injectable()
 export class CustomersService {
@@ -61,6 +62,7 @@ export class CustomersService {
     let user = await this.prisma.users.findUnique({
       where: { user_id: id },
       include: {
+
         customers: true,
         addresses: true,
       },
@@ -130,3 +132,4 @@ export class CustomersService {
 
   }
 }
+
