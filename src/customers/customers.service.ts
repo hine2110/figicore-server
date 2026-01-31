@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { async } from 'rxjs';
 
 @Injectable()
 export class CustomersService {
@@ -69,7 +70,6 @@ export class CustomersService {
     return customer;
   }
 
-  }
 
   async getDashboardStats(userId: number) {
     // 1. Get Customer Details (Points, Rank)
@@ -103,3 +103,4 @@ export class CustomersService {
 
   }
 }
+
