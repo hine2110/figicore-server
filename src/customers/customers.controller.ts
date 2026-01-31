@@ -1,8 +1,5 @@
 
-import { Controller, Get, Query, UseGuards, DefaultValuePipe, ParseIntPipe, Param } from '@nestjs/common';
-
-import { Controller, Get, Query, UseGuards, DefaultValuePipe, ParseIntPipe, Request } from '@nestjs/common';
-
+import { Controller, Get, Query, UseGuards, DefaultValuePipe, ParseIntPipe, Param, Request } from '@nestjs/common';
 import { CustomersService } from './customers.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
