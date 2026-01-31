@@ -15,6 +15,10 @@ export class GhnService {
         private readonly configService: ConfigService,
     ) {
         this.apiUrl = this.configService.get<string>('GHN_API_URL') ?? "";
+        // Normalize: If env has /master-data suffix, remove it to get the true base
+        if (this.apiUrl.endsWith('/master-data')) {
+            this.apiUrl = this.apiUrl.replace('/master-data', '');
+        }
         this.token = this.configService.get<string>('GHN_API_TOKEN') ?? "";
         this.shopId = this.configService.get<string>('GHN_SHOP_ID') ?? "";
     }
