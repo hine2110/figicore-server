@@ -51,6 +51,39 @@ export class UsersService {
     return this.prisma.users.findMany();
   }
 
+  async getProfile(userId: number) {
+    const user = await this.prisma.users.findUnique({
+      where: { user_id: userId },
+      include: {
+        employees: true,
+        customers: true,
+        addresses: true,
+      },
+    });
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const pendingRequest = await this.prisma.profile_update_requests.findFirst({
+        where: { user_id: userId, status_code: 'PENDING' }
+    });
+
+    // Flatten Response
+    return {
+      ...user,
+      // Employee Fields
+      employee_code: user.employees?.employee_code || null,
+      job_title_code: user.employees?.job_title_code || null,
+      base_salary: user.employees?.base_salary || null,
+      start_date: user.employees?.start_date || null,
+      // Customer Fields (Optional, but good for consistency)
+      loyalty_points: user.customers?.loyalty_points || 0,
+      current_rank_code: user.customers?.current_rank_code || 'UNRANKED',
+      has_pending_request: !!pendingRequest,
+    };
+  }
+
   async updateProfile(userId: number, data: { full_name?: string; phone?: string }) {
     // Check phone uniqueness if phone is provided
     if (data.phone) {
@@ -79,19 +112,31 @@ export class UsersService {
     });
   }
 
-  async updateStatus(id: number, status: string) {
+  async updateStatus(id: number, status: string, reason?: string) {
     const user = await this.findOne(id);
     if (!user) {
       throw new NotFoundException(`User with ID ${id} not found`);
     }
 
+    // Safety Checks
     if (user.role_code === 'SUPER_ADMIN') {
       throw new ForbiddenException('Cannot change status of Super Admin');
     }
 
+    // Prevent self-ban (Need to pass current user context ideally, but for now simple check)
+    // NOTE: Controller should handle "Can't ban self" by checking Request user vs ID
+
+    // If Banning, require reason (optional but good practice)
+    if (status === 'BANNED' && !reason) {
+        throw new BadRequestException('Reason is required when banning a user');
+    }
+
     return this.prisma.users.update({
       where: { user_id: id },
-      data: { status_code: status },
+      data: { 
+          status_code: status,
+          ban_reason: status === 'BANNED' ? reason : null // Clear reason if unbanning
+      },
     });
   }
   async getPreviewEmail(role: string): Promise<{ email: string }> {
@@ -228,6 +273,122 @@ export class UsersService {
       }
 
       return createdEmployees;
+    });
+  }
+
+  async createProfileUpdateRequest(userId: number, changes: any) {
+    // Check for existing pending request
+    const existing = await this.prisma.profile_update_requests.findFirst({
+        where: { user_id: userId, status_code: 'PENDING' }
+    });
+
+    if (existing) {
+        // Option A: Update existing request
+        // return this.prisma.profile_update_requests.update({
+        //     where: { request_id: existing.request_id },
+        //     data: { changed_data: changes, updated_at: new Date() }
+        // });
+        // Option B: Throw error
+        throw new BadRequestException('You verify have a pending profile update request.');
+    }
+
+    return this.prisma.profile_update_requests.create({
+        data: {
+            user_id: userId,
+            changed_data: changes,
+            status_code: 'PENDING'
+        }
+    });
+  }
+
+  async getPendingRequests() {
+    return this.prisma.profile_update_requests.findMany({
+      where: { status_code: 'PENDING' },
+      include: {
+        users: {
+          select: {
+            full_name: true,
+            email: true,
+            phone: true,
+            avatar_url: true,
+            role_code: true,
+            employees: {
+                select: { employee_code: true }
+            }
+          }
+        }
+      },
+      orderBy: { created_at: 'desc' }
+    });
+  }
+
+  async resolveRequest(requestId: number, status: 'APPROVED' | 'REJECTED') {
+    const request = await this.prisma.profile_update_requests.findUnique({
+        where: { request_id: requestId },
+        include: { users: true }
+    });
+
+    if (!request) throw new NotFoundException('Request not found');
+    if (request.status_code !== 'PENDING') throw new BadRequestException('Request already resolved');
+
+    return this.prisma.$transaction(async (tx) => {
+        // 1. Update Request Status
+        const updatedRequest = await tx.profile_update_requests.update({
+            where: { request_id: requestId },
+            data: { status_code: status, updated_at: new Date() }
+        });
+
+        // 2. If Approved, Update User Profile
+        if (status === 'APPROVED') {
+            const changedData = request.changed_data as Prisma.JsonObject;
+            const updateData: any = {};
+            if (changedData['full_name']) updateData.full_name = changedData['full_name'];
+            if (changedData['phone']) updateData.phone = changedData['phone'];
+            if (changedData['avatar_url']) updateData.avatar_url = changedData['avatar_url'];
+            
+            if (Object.keys(updateData).length > 0) {
+                await tx.users.update({
+                    where: { user_id: request.user_id },
+                    data: updateData
+                });
+            }
+
+            // Handle Address Update (separate table)
+            // Check both potential keys (frontend might send 'address' or 'default_address')
+            const newAddress = (changedData['address'] || changedData['default_address']) as string;
+            
+            if (newAddress) {
+                // Find default address to update
+                const defaultAddress = await tx.addresses.findFirst({
+                    where: { user_id: request.user_id, is_default: true }
+                });
+
+                if (defaultAddress) {
+                    await tx.addresses.update({
+                        where: { address_id: defaultAddress.address_id },
+                        data: { detail_address: newAddress }
+                    });
+                } else {
+                    // Create new address with fallback values for required fields
+                    await tx.addresses.create({
+                        data: {
+                            user_id: request.user_id,
+                            // Prefer new/updated info, fallback to existing profile info
+                            recipient_name: updateData.full_name || request.users.full_name,
+                            recipient_phone: updateData.phone || request.users.phone || 'N/A', 
+                            detail_address: newAddress,
+                            // Dummy values to satisfy constraints
+                            province_id: 0, 
+                            district_id: 0,
+                            ward_code: 'UNMAPPED',
+                            is_default: true
+                        }
+                    });
+                }
+            }
+        }
+
+        return updatedRequest;
     });
   }
 }

@@ -7,36 +7,43 @@ export class CustomersService {
 
   async findAll(page: number, limit: number, search?: string) {
     const skip = (page - 1) * limit;
-    const where: any = {};
+    const where: any = {
+      role_code: 'CUSTOMER',
+    };
 
     if (search) {
       where.OR = [
-        { users: { full_name: { contains: search, mode: 'insensitive' } } },
-        { users: { email: { contains: search, mode: 'insensitive' } } },
-        { users: { phone: { contains: search, mode: 'insensitive' } } },
+        { full_name: { contains: search, mode: 'insensitive' } },
+        { email: { contains: search, mode: 'insensitive' } },
+        { phone: { contains: search, mode: 'insensitive' } },
       ];
     }
 
-    const [data, total] = await Promise.all([
-      this.prisma.customers.findMany({
+    const [users, total] = await Promise.all([
+      this.prisma.users.findMany({
         where,
         include: {
-          users: {
-            select: {
-              full_name: true,
-              email: true,
-              phone: true,
-              status_code: true,
-              avatar_url: true,
-            },
-          },
+          customers: true, 
         },
         skip,
         take: limit,
         orderBy: { created_at: 'desc' },
       }),
-      this.prisma.customers.count({ where }),
+      this.prisma.users.count({ where }),
     ]);
+
+    const data = users.map((u) => ({
+        user_id: u.user_id,
+        full_name: u.full_name,
+        email: u.email,
+        phone: u.phone,
+        status_code: u.status_code,
+        avatar_url: u.avatar_url,
+        loyalty_points: u.customers?.loyalty_points ?? 0,
+        current_rank_code: u.customers?.current_rank_code ?? 'UNRANKED',
+        total_spent: u.customers?.total_spent ?? 0,
+        address: [] // Placeholder if needed, or omit
+    }));
 
     return {
       data,
@@ -51,23 +58,46 @@ export class CustomersService {
 
 
   async findOne(id: number) {
-    const customer = await this.prisma.customers.findUnique({
+    let user = await this.prisma.users.findUnique({
       where: { user_id: id },
       include: {
-        users: {
-            include: {
-                addresses: true
-            }
-        }
+        customers: true,
+        addresses: true,
       },
     });
 
-    if (!customer) {
-        throw new NotFoundException(`Customer with ID ${id} not found`);
+    if (!user) {
+      throw new NotFoundException(`User with ID ${id} not found`);
     }
 
-    return customer;
+    // Self-Healing
+    if (!user.customers && user.role_code === 'CUSTOMER') {
+      const newCustomer = await this.prisma.customers.create({
+        data: {
+          user_id: user.user_id,
+          loyalty_points: 0,
+          current_rank_code: 'BRONZE',
+          total_spent: 0,
+        },
+      });
+      // Attach manually to avoid re-query
+      user = { ...user, customers: newCustomer };
+    }
 
+    // Flatten Response
+    return {
+      user_id: user.user_id,
+      full_name: user.full_name,
+      email: user.email,
+      phone: user.phone,
+      status_code: user.status_code,
+      avatar_url: user.avatar_url,
+      loyalty_points: user.customers?.loyalty_points ?? 0,
+      current_rank_code: user.customers?.current_rank_code ?? 'UNRANKED',
+      total_spent: user.customers?.total_spent ?? 0,
+      addresses: user.addresses ?? [],
+    };
+  }
   async getDashboardStats(userId: number) {
     // 1. Get Customer Details (Points, Rank)
     const customer = await this.prisma.customers.findUnique({
