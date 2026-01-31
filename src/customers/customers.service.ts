@@ -69,6 +69,8 @@ export class CustomersService {
     return customer;
   }
 
+  }
+
   async getDashboardStats(userId: number) {
     // 1. Get Customer Details (Points, Rank)
     const customer = await this.prisma.customers.findUnique({

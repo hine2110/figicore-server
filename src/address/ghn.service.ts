@@ -28,12 +28,9 @@ export class GhnService {
     }
 
     async getProvinces() {
-        // Remove trailing slash if exists to avoid double slash issues, though robust concatenation is better
         const baseUrl = this.apiUrl.endsWith('/') ? this.apiUrl.slice(0, -1) : this.apiUrl;
-        // The master-data endpoint might be required depending on GHN version, usually it is .../master-data/province
-        // User diagnosis said ".../master-data" + "province" became ".../master-dataprovince". 
-        // If env is "https://online-gateway.ghn.vn/shiip/public-api/master-data", we need to append "/province".
-        const url = `${baseUrl}/province`;
+        // API Base is now /public-api, so we append /master-data/province
+        const url = `${baseUrl}/master-data/province`;
         this.logger.log(`Fetching Provinces from: ${url}`);
 
         try {
@@ -52,12 +49,12 @@ export class GhnService {
 
     async getDistricts(provinceId: number) {
         const baseUrl = this.apiUrl.endsWith('/') ? this.apiUrl.slice(0, -1) : this.apiUrl;
-        const url = `${baseUrl}/district`;
+        const url = `${baseUrl}/master-data/district`;
         try {
             const response = await lastValueFrom(
                 this.httpService.get(url, {
                     headers: this.getHeaders(),
-                    params: { province_id: provinceId } // GET request uses params
+                    params: { province_id: provinceId }
                 })
             );
             return response.data;
@@ -69,7 +66,7 @@ export class GhnService {
 
     async getWards(districtId: number) {
         const baseUrl = this.apiUrl.endsWith('/') ? this.apiUrl.slice(0, -1) : this.apiUrl;
-        const url = `${baseUrl}/ward`;
+        const url = `${baseUrl}/master-data/ward`;
         try {
             const response = await lastValueFrom(
                 this.httpService.get(url, {
@@ -81,6 +78,62 @@ export class GhnService {
         } catch (error) {
             this.logger.error(`GHN Error: ${error.message}`);
             throw new HttpException('Failed to fetch wards', HttpStatus.BAD_REQUEST);
+        }
+    }
+
+    async calculateFee(params: { to_district_id: number; to_ward_code: string; weight: number; insurance_value: number }) {
+        const baseUrl = this.apiUrl.endsWith('/') ? this.apiUrl.slice(0, -1) : this.apiUrl;
+        const url = `${baseUrl}/v2/shipping-order/fee`;
+
+        const payload = {
+            "service_type_id": 2, // Standard Delivery
+            "insurance_value": params.insurance_value, // Product Value
+            "coupon": null,
+            "from_district_id": 1542, // Hanoi/Thanh Xuan (Example default)
+            "to_district_id": params.to_district_id,
+            "to_ward_code": params.to_ward_code,
+            "height": 15,
+            "length": 15,
+            "weight": params.weight, // Grams
+            "width": 15
+        };
+
+        try {
+            const response = await lastValueFrom(
+                this.httpService.post(url, payload, { headers: this.getHeaders() })
+            );
+            return response.data; // Returns { data: { total: 35000, ... } }
+        } catch (error) {
+            this.logger.error("GHN Fee Calc Failed", error.response?.data);
+            // Fallback for dev/sandbox if API acts up or config is wrong
+            return { data: { total: 30000 } };
+        }
+    }
+
+    async calculateRealFee(params: { to_district_id: number; to_ward_code: string; weight: number; insurance_value: number }) {
+        // 1. Force use of Public API (Not Master Data)
+        const url = `https://dev-online-gateway.ghn.vn/shiip/public-api/v2/shipping-order/fee`;
+
+        // 2. Payload with FULL Insurance Value (Plan A: Safety First)
+        // We declare the full value to ensure full compensation if lost
+        const payload = {
+            "service_type_id": 2, // Standard Delivery
+            "insurance_value": params.insurance_value, // <--- KEY: Full Order Value
+            "coupon": null,
+            "from_district_id": 1542, // Configurable Shop District
+            "to_district_id": params.to_district_id,
+            "to_ward_code": params.to_ward_code,
+            "height": 15, "length": 20, "width": 20, "weight": params.weight
+        };
+
+        try {
+            const response = await lastValueFrom(
+                this.httpService.post(url, payload, { headers: this.getHeaders() })
+            );
+            return response.data.data.total; // Returns the expensive fee (e.g., 100,000 VND)
+        } catch (error) {
+            this.logger.error("GHN Real Fee Error", error.response?.data);
+            return 50000; // Fallback to a safe estimate if API fails
         }
     }
 }
