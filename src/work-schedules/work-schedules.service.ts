@@ -323,6 +323,7 @@ export class WorkSchedulesService {
             avatar_url: string;
             total_shifts: number;
             total_hours: number;
+            email: string;
         }>();
 
         for (const schedule of schedules) {
@@ -340,6 +341,7 @@ export class WorkSchedulesService {
                     avatar_url: user.avatar_url || '',
                     total_shifts: 0,
                     total_hours: 0,
+                    email: user.email || '',
                 });
             }
 
