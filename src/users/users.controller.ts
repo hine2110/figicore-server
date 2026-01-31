@@ -14,15 +14,19 @@ export class UsersController {
   @Get('profile')
   @UseGuards(AuthGuard('jwt'))
   getProfile(@Req() req) {
-    // This is redundant with AuthController.getProfile but good for user-specific context if needed
-    // However, the task is update profile.
-    return req.user;
+    return this.usersService.getProfile(req.user.user_id);
   }
 
   @Patch('profile')
   @UseGuards(AuthGuard('jwt'))
   updateProfile(@Req() req, @Body() data: { full_name: string; phone: string }) {
     return this.usersService.updateProfile(req.user.user_id, data);
+  }
+
+  @Post('profile/request-update')
+  @UseGuards(AuthGuard('jwt'))
+  requestUpdate(@Req() req, @Body() data: any) {
+    return this.usersService.createProfileUpdateRequest(req.user.user_id, data);
   }
 
   @Post('bulk')
@@ -89,10 +93,18 @@ export class UsersController {
   }
 
   @Patch(':id/status')
-  @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('SUPER_ADMIN', 'ADMIN')
-  updateStatus(@Param('id', ParseIntPipe) id: number, @Body('status') status: 'ACTIVE' | 'INACTIVE') {
-    return this.usersService.updateStatus(id, status);
+  updateStatus(
+      @Param('id', ParseIntPipe) id: number, 
+      @Body('status') status: 'ACTIVE' | 'INACTIVE' | 'BANNED',
+      @Body('reason') reason?: string,
+      @Req() req?
+  ) {
+    // Prevent banning self
+    if (req?.user?.user_id === id && status === 'BANNED') {
+        throw new BadRequestException('You cannot ban yourself');
+    }
+    return this.usersService.updateStatus(id, status, reason);
   }
 
   @Delete(':id')
