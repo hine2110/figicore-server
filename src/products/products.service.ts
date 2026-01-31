@@ -226,6 +226,16 @@ export class ProductsService {
       ]
     };
 
+    // Dynamic Sort Logic (price sorting handled client-side)
+    let orderBy: any = { created_at: 'desc' }; // Default: Newest first (Featured)
+
+    if (sort === 'newest') {
+      orderBy = { created_at: 'desc' };
+    } else if (sort === 'name') {
+      orderBy = { name: 'asc' };
+    }
+    // Note: price_asc and price_desc are handled in the frontend
+
     return this.prisma.products.findMany({
       where,
       include: {
@@ -236,9 +246,87 @@ export class ProductsService {
         product_blindboxes: true,
         product_preorders: true
       },
-      orderBy: { created_at: 'desc' }
+      orderBy
     });
   }
+
+  async findSimilar(id: number) {
+    const product = await this.prisma.products.findUnique({
+      where: { product_id: id },
+      include: { series: true, brands: true, categories: true }
+    });
+
+    if (!product) return [];
+
+    let similarProducts: any[] = []; // Explicit type to avoid never[] inference
+    const limit = 4;
+
+    // 1. Priority: Same Series
+    if (product.series_id) {
+      const bySeries = await this.prisma.products.findMany({
+        where: {
+          series_id: product.series_id,
+          product_id: { not: id },
+          status_code: 'ACTIVE' // Changed from status to status_code
+        },
+        take: limit,
+        include: {
+          brands: true,
+          categories: true,
+          series: true,
+          product_variants: true,
+          product_blindboxes: true,
+          product_preorders: true
+        }
+      });
+      similarProducts = [...bySeries];
+    }
+
+    // 2. Priority: Same Brand
+    if (similarProducts.length < limit && product.brand_id) {
+      const byBrand = await this.prisma.products.findMany({
+        where: {
+          brand_id: product.brand_id,
+          product_id: { not: id, notIn: similarProducts.map(p => p.product_id) },
+          status_code: 'ACTIVE' // Changed from status to status_code
+        },
+        take: limit - similarProducts.length,
+        include: {
+          brands: true,
+          categories: true,
+          series: true,
+          product_variants: true,
+          product_blindboxes: true,
+          product_preorders: true
+        }
+      });
+      similarProducts = [...similarProducts, ...byBrand];
+    }
+
+    // 3. Priority: Same Category
+    if (similarProducts.length < limit && product.category_id) {
+      const byCategory = await this.prisma.products.findMany({
+        where: {
+          category_id: product.category_id,
+          product_id: { not: id, notIn: similarProducts.map(p => p.product_id) },
+          status_code: 'ACTIVE' // Changed from status to status_code
+        },
+        take: limit - similarProducts.length,
+        include: {
+          brands: true,
+          categories: true,
+          series: true,
+          product_variants: true,
+          product_blindboxes: true,
+          product_preorders: true
+        }
+      });
+      similarProducts = [...similarProducts, ...byCategory];
+    }
+
+    return similarProducts;
+  }
+
 
   async findOne(id: number) {
     const product = await this.prisma.products.findUnique({

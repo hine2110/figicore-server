@@ -67,6 +67,7 @@ export class CustomersService {
     }
 
     return customer;
+  }
 
   }
 
