@@ -8,6 +8,9 @@ CREATE TABLE "addresses" (
     "district_id" INTEGER NOT NULL,
     "ward_code" VARCHAR(20) NOT NULL,
     "detail_address" TEXT NOT NULL,
+    "ward_name" VARCHAR(100),
+    "district_name" VARCHAR(100),
+    "province_name" VARCHAR(100),
     "is_default" BOOLEAN DEFAULT false,
     "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
@@ -75,7 +78,7 @@ CREATE TABLE "brands" (
 CREATE TABLE "cart_items" (
     "item_id" SERIAL NOT NULL,
     "cart_id" INTEGER NOT NULL,
-    "product_id" INTEGER NOT NULL,
+    "variant_id" INTEGER NOT NULL,
     "quantity" INTEGER DEFAULT 1,
     "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
@@ -188,7 +191,7 @@ CREATE TABLE "feedbacks" (
 -- CreateTable
 CREATE TABLE "inventory_logs" (
     "log_id" SERIAL NOT NULL,
-    "product_id" INTEGER NOT NULL,
+    "variant_id" INTEGER NOT NULL,
     "change_amount" INTEGER NOT NULL,
     "change_type_code" VARCHAR(50) NOT NULL,
     "reference_id" INTEGER,
@@ -204,7 +207,7 @@ CREATE TABLE "inventory_logs" (
 CREATE TABLE "inventory_receipt_items" (
     "item_id" SERIAL NOT NULL,
     "receipt_id" INTEGER NOT NULL,
-    "product_id" INTEGER NOT NULL,
+    "variant_id" INTEGER NOT NULL,
     "quantity_total" INTEGER NOT NULL,
     "quantity_good" INTEGER DEFAULT 0,
     "quantity_defect" INTEGER DEFAULT 0,
@@ -248,7 +251,7 @@ CREATE TABLE "notifications" (
 CREATE TABLE "order_items" (
     "item_id" SERIAL NOT NULL,
     "order_id" INTEGER NOT NULL,
-    "product_id" INTEGER NOT NULL,
+    "variant_id" INTEGER NOT NULL,
     "allocated_product_id" INTEGER,
     "quantity" INTEGER NOT NULL,
     "unit_price" DECIMAL(15,2) NOT NULL,
@@ -286,6 +289,7 @@ CREATE TABLE "orders" (
     "paid_amount" DECIMAL(15,2) DEFAULT 0,
     "discount_amount" DECIMAL(15,2) DEFAULT 0,
     "shipping_fee" DECIMAL(15,2) DEFAULT 0,
+    "original_shipping_fee" DECIMAL(15,2) DEFAULT 0,
     "payment_deadline" TIMESTAMP(6),
     "channel_code" VARCHAR(20) NOT NULL,
     "payment_method_code" VARCHAR(20),
@@ -336,8 +340,10 @@ CREATE TABLE "pos_sessions" (
 -- CreateTable
 CREATE TABLE "product_blindboxes" (
     "product_id" INTEGER NOT NULL,
-    "price_config" DECIMAL(15,2),
-    "margin_rate" DOUBLE PRECISION,
+    "price" DECIMAL(15,2) NOT NULL,
+    "min_value" DECIMAL(15,2),
+    "max_value" DECIMAL(15,2),
+    "tier_config" JSONB,
     "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "deleted_at" TIMESTAMP(6),
@@ -349,7 +355,9 @@ CREATE TABLE "product_blindboxes" (
 CREATE TABLE "product_preorders" (
     "product_id" INTEGER NOT NULL,
     "deposit_amount" DECIMAL(15,2),
+    "full_price" DECIMAL(15,2) DEFAULT 0,
     "release_date" TIMESTAMP(6),
+    "max_slots" INTEGER,
     "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "deleted_at" TIMESTAMP(6),
@@ -364,11 +372,6 @@ CREATE TABLE "products" (
     "brand_id" INTEGER,
     "series_id" INTEGER,
     "name" VARCHAR(255) NOT NULL,
-    "sku" VARCHAR(50),
-    "barcode" VARCHAR(50),
-    "price" DECIMAL(15,2) DEFAULT 0,
-    "stock_available" INTEGER DEFAULT 0,
-    "stock_defect" INTEGER DEFAULT 0,
     "type_code" VARCHAR(50) NOT NULL,
     "status_code" VARCHAR(50) DEFAULT 'DRAFT',
     "specifications" JSONB,
@@ -380,6 +383,24 @@ CREATE TABLE "products" (
     "deleted_at" TIMESTAMP(6),
 
     CONSTRAINT "products_pkey" PRIMARY KEY ("product_id")
+);
+
+-- CreateTable
+CREATE TABLE "product_variants" (
+    "variant_id" SERIAL NOT NULL,
+    "product_id" INTEGER NOT NULL,
+    "sku" VARCHAR(50) NOT NULL,
+    "option_name" VARCHAR(100) NOT NULL,
+    "price" DECIMAL(15,2) NOT NULL DEFAULT 0,
+    "stock_available" INTEGER NOT NULL DEFAULT 0,
+    "stock_defect" INTEGER NOT NULL DEFAULT 0,
+    "barcode" VARCHAR(50),
+    "media_assets" JSONB DEFAULT '[]',
+    "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
+    "deleted_at" TIMESTAMP(6),
+
+    CONSTRAINT "product_variants_pkey" PRIMARY KEY ("variant_id")
 );
 
 -- CreateTable
@@ -472,10 +493,13 @@ CREATE TABLE "shipments" (
 -- CreateTable
 CREATE TABLE "store_expenses" (
     "expense_id" SERIAL NOT NULL,
-    "session_id" INTEGER NOT NULL,
+    "session_id" INTEGER,
     "user_id" INTEGER NOT NULL,
+    "title" VARCHAR(255),
     "amount" DECIMAL(15,2) NOT NULL,
-    "reason" TEXT NOT NULL,
+    "reason" TEXT,
+    "description" TEXT,
+    "expense_date" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "deleted_at" TIMESTAMP(6),
@@ -574,7 +598,7 @@ CREATE TABLE "user_vouchers" (
 -- CreateTable
 CREATE TABLE "users" (
     "user_id" SERIAL NOT NULL,
-    "phone" VARCHAR(15) NOT NULL,
+    "phone" VARCHAR(15),
     "email" VARCHAR(100),
     "password_hash" VARCHAR(255),
     "full_name" VARCHAR(100) NOT NULL,
@@ -583,7 +607,8 @@ CREATE TABLE "users" (
     "status_code" VARCHAR(50) DEFAULT 'ACTIVE',
     "is_verified" BOOLEAN DEFAULT false,
     "google_id" VARCHAR(100),
-    "verification_token" VARCHAR(255),
+    "otp_code" VARCHAR(10),
+    "otp_expires_at" TIMESTAMP(6),
     "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "deleted_at" TIMESTAMP(6),
@@ -640,6 +665,12 @@ CREATE TABLE "work_schedules" (
 CREATE UNIQUE INDEX "uq_auction_bid_amount" ON "auction_bids"("auction_id", "bid_amount");
 
 -- CreateIndex
+CREATE UNIQUE INDEX "brands_name_key" ON "brands"("name");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "categories_name_key" ON "categories"("name");
+
+-- CreateIndex
 CREATE UNIQUE INDEX "employees_employee_code_key" ON "employees"("employee_code");
 
 -- CreateIndex
@@ -652,16 +683,19 @@ CREATE UNIQUE INDEX "orders_order_code_key" ON "orders"("order_code");
 CREATE INDEX "idx_orders_code" ON "orders"("order_code");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "products_sku_key" ON "products"("sku");
+CREATE UNIQUE INDEX "product_variants_sku_key" ON "product_variants"("sku");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "products_barcode_key" ON "products"("barcode");
+CREATE UNIQUE INDEX "product_variants_barcode_key" ON "product_variants"("barcode");
 
 -- CreateIndex
-CREATE INDEX "idx_products_sku" ON "products"("sku");
+CREATE INDEX "idx_variants_sku" ON "product_variants"("sku");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "promotions_code_key" ON "promotions"("code");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "series_name_key" ON "series"("name");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "shipments_order_id_key" ON "shipments"("order_id");
@@ -686,6 +720,9 @@ CREATE UNIQUE INDEX "users_phone_key" ON "users"("phone");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "users_email_key" ON "users"("email");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "users_google_id_key" ON "users"("google_id");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "wallets_user_id_key" ON "wallets"("user_id");
@@ -715,7 +752,7 @@ ALTER TABLE "auctions" ADD CONSTRAINT "auctions_winner_id_fkey" FOREIGN KEY ("wi
 ALTER TABLE "cart_items" ADD CONSTRAINT "cart_items_cart_id_fkey" FOREIGN KEY ("cart_id") REFERENCES "carts"("cart_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
 
 -- AddForeignKey
-ALTER TABLE "cart_items" ADD CONSTRAINT "cart_items_product_id_fkey" FOREIGN KEY ("product_id") REFERENCES "products"("product_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE "cart_items" ADD CONSTRAINT "cart_items_variant_id_fkey" FOREIGN KEY ("variant_id") REFERENCES "product_variants"("variant_id") ON DELETE CASCADE ON UPDATE NO ACTION;
 
 -- AddForeignKey
 ALTER TABLE "carts" ADD CONSTRAINT "carts_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("user_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
@@ -745,13 +782,13 @@ ALTER TABLE "feedbacks" ADD CONSTRAINT "feedbacks_product_id_fkey" FOREIGN KEY (
 ALTER TABLE "feedbacks" ADD CONSTRAINT "feedbacks_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("user_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
 
 -- AddForeignKey
-ALTER TABLE "inventory_logs" ADD CONSTRAINT "inventory_logs_product_id_fkey" FOREIGN KEY ("product_id") REFERENCES "products"("product_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE "inventory_logs" ADD CONSTRAINT "inventory_logs_variant_id_fkey" FOREIGN KEY ("variant_id") REFERENCES "product_variants"("variant_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
 
 -- AddForeignKey
-ALTER TABLE "inventory_receipt_items" ADD CONSTRAINT "inventory_receipt_items_product_id_fkey" FOREIGN KEY ("product_id") REFERENCES "products"("product_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE "inventory_receipt_items" ADD CONSTRAINT "inventory_receipt_items_variant_id_fkey" FOREIGN KEY ("variant_id") REFERENCES "product_variants"("variant_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
 
 -- AddForeignKey
-ALTER TABLE "inventory_receipt_items" ADD CONSTRAINT "inventory_receipt_items_receipt_id_fkey" FOREIGN KEY ("receipt_id") REFERENCES "inventory_receipts"("receipt_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE "inventory_receipt_items" ADD CONSTRAINT "inventory_receipt_items_receipt_id_fkey" FOREIGN KEY ("receipt_id") REFERENCES "inventory_receipts"("receipt_id") ON DELETE CASCADE ON UPDATE NO ACTION;
 
 -- AddForeignKey
 ALTER TABLE "inventory_receipts" ADD CONSTRAINT "inventory_receipts_warehouse_staff_id_fkey" FOREIGN KEY ("warehouse_staff_id") REFERENCES "employees"("user_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
@@ -760,16 +797,13 @@ ALTER TABLE "inventory_receipts" ADD CONSTRAINT "inventory_receipts_warehouse_st
 ALTER TABLE "notifications" ADD CONSTRAINT "notifications_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("user_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
 
 -- AddForeignKey
-ALTER TABLE "order_items" ADD CONSTRAINT "order_items_allocated_product_id_fkey" FOREIGN KEY ("allocated_product_id") REFERENCES "products"("product_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE "order_items" ADD CONSTRAINT "order_items_order_id_fkey" FOREIGN KEY ("order_id") REFERENCES "orders"("order_id") ON DELETE CASCADE ON UPDATE NO ACTION;
 
 -- AddForeignKey
-ALTER TABLE "order_items" ADD CONSTRAINT "order_items_order_id_fkey" FOREIGN KEY ("order_id") REFERENCES "orders"("order_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE "order_items" ADD CONSTRAINT "order_items_variant_id_fkey" FOREIGN KEY ("variant_id") REFERENCES "product_variants"("variant_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
 
 -- AddForeignKey
-ALTER TABLE "order_items" ADD CONSTRAINT "order_items_product_id_fkey" FOREIGN KEY ("product_id") REFERENCES "products"("product_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE "order_status_history" ADD CONSTRAINT "order_status_history_order_id_fkey" FOREIGN KEY ("order_id") REFERENCES "orders"("order_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE "order_status_history" ADD CONSTRAINT "order_status_history_order_id_fkey" FOREIGN KEY ("order_id") REFERENCES "orders"("order_id") ON DELETE CASCADE ON UPDATE NO ACTION;
 
 -- AddForeignKey
 ALTER TABLE "orders" ADD CONSTRAINT "orders_created_by_staff_id_fkey" FOREIGN KEY ("created_by_staff_id") REFERENCES "employees"("user_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
@@ -793,10 +827,10 @@ ALTER TABLE "payrolls" ADD CONSTRAINT "payrolls_user_id_fkey" FOREIGN KEY ("user
 ALTER TABLE "pos_sessions" ADD CONSTRAINT "pos_sessions_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "employees"("user_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
 
 -- AddForeignKey
-ALTER TABLE "product_blindboxes" ADD CONSTRAINT "product_blindboxes_product_id_fkey" FOREIGN KEY ("product_id") REFERENCES "products"("product_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE "product_blindboxes" ADD CONSTRAINT "product_blindboxes_product_id_fkey" FOREIGN KEY ("product_id") REFERENCES "products"("product_id") ON DELETE CASCADE ON UPDATE NO ACTION;
 
 -- AddForeignKey
-ALTER TABLE "product_preorders" ADD CONSTRAINT "product_preorders_product_id_fkey" FOREIGN KEY ("product_id") REFERENCES "products"("product_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE "product_preorders" ADD CONSTRAINT "product_preorders_product_id_fkey" FOREIGN KEY ("product_id") REFERENCES "products"("product_id") ON DELETE CASCADE ON UPDATE NO ACTION;
 
 -- AddForeignKey
 ALTER TABLE "products" ADD CONSTRAINT "products_brand_id_fkey" FOREIGN KEY ("brand_id") REFERENCES "brands"("brand_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
@@ -806,6 +840,9 @@ ALTER TABLE "products" ADD CONSTRAINT "products_category_id_fkey" FOREIGN KEY ("
 
 -- AddForeignKey
 ALTER TABLE "products" ADD CONSTRAINT "products_series_id_fkey" FOREIGN KEY ("series_id") REFERENCES "series"("series_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
+
+-- AddForeignKey
+ALTER TABLE "product_variants" ADD CONSTRAINT "product_variants_product_id_fkey" FOREIGN KEY ("product_id") REFERENCES "products"("product_id") ON DELETE CASCADE ON UPDATE NO ACTION;
 
 -- AddForeignKey
 ALTER TABLE "profile_update_requests" ADD CONSTRAINT "profile_update_requests_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("user_id") ON DELETE NO ACTION ON UPDATE NO ACTION;

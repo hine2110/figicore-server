@@ -156,6 +156,37 @@ async function main() {
     });
     console.log(`✅ Admin Account Ready: ${adminEmail}`);
 
+    // ==========================================
+    // 7. TRẠNG THÁI ĐƠN HÀNG (ORDER STATUS)
+    // ==========================================
+    console.log('--- 7. Seeding Order Status ---');
+
+    // Initial state: Order created, payment pending
+    await upsertLookup('ORDER_STATUS', 'PENDING_PAYMENT', 'Chờ Thanh Toán', 1);
+
+    // Payment confirmed (or COD verified), ready for packing
+    await upsertLookup('ORDER_STATUS', 'PROCESSING', 'Đang Xử Lý', 2);
+
+    // Handed over to carrier (GHN)
+    await upsertLookup('ORDER_STATUS', 'SHIPPING', 'Đang Vận Chuyển', 3);
+
+    // Customer received goods
+    await upsertLookup('ORDER_STATUS', 'COMPLETED', 'Hoàn Thành', 4);
+
+    // Order cancelled (Stock returned)
+    await upsertLookup('ORDER_STATUS', 'CANCELLED', 'Đã Hủy', 5);
+
+    // Refund processed
+    await upsertLookup('ORDER_STATUS', 'REFUNDED', 'Đã Hoàn Tiền', 6);
+
+    // Failed delivery (Returned to shop)
+    await upsertLookup('ORDER_STATUS', 'RETURNED', 'Trả Hàng', 7);
+
+    // [NEW] Order expired due to timeout (System auto-cancel)
+    await upsertLookup('ORDER_STATUS', 'EXPIRED', 'Hết Hạn Thanh Toán', 8);
+
+    console.log('✅ Order Status Seeding Completed!');
+
     console.log('🎉 SEEDING HOÀN TẤT! Hệ thống đã sẵn sàng định danh.');
 }
 

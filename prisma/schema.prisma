@@ -16,6 +16,9 @@ model addresses {
   district_id     Int
   ward_code       String    @db.VarChar(20)
   detail_address  String
+  ward_name       String?   @db.VarChar(100)
+  district_name   String?   @db.VarChar(100)
+  province_name   String?   @db.VarChar(100)
   is_default      Boolean?  @default(false)
   created_at      DateTime? @default(now()) @db.Timestamp(6)
   updated_at      DateTime? @default(now()) @db.Timestamp(6)
@@ -284,6 +287,7 @@ model orders {
   paid_amount          Decimal?               @default(0) @db.Decimal(15, 2)
   discount_amount      Decimal?               @default(0) @db.Decimal(15, 2)
   shipping_fee         Decimal?               @default(0) @db.Decimal(15, 2)
+  original_shipping_fee Decimal?              @default(0) @db.Decimal(15, 2)
   payment_deadline     DateTime?              @db.Timestamp(6)
   channel_code         String                 @db.VarChar(20)
   payment_method_code  String?                @db.VarChar(20)
@@ -396,8 +400,9 @@ model product_variants {
   price                   Decimal                   @default(0) @db.Decimal(15, 2)
   stock_available         Int                       @default(0)
   stock_defect            Int                       @default(0)
-  barcode                 String?                   @unique @db.VarChar(50)
-  media_assets            Json?     @default("[]")
+  barcode                 String?     @unique @db.VarChar(50)
+  description             String?     @db.Text
+  media_assets            Json?       @default("[]")
   created_at              DateTime?                 @default(now()) @db.Timestamp(6)
   updated_at              DateTime?                 @default(now()) @db.Timestamp(6)
   deleted_at              DateTime?                 @db.Timestamp(6)
@@ -492,14 +497,17 @@ model shipments {
 
 model store_expenses {
   expense_id   Int          @id @default(autoincrement())
-  session_id   Int
+  session_id   Int?
   user_id      Int
+  title        String?      @db.VarChar(255)
   amount       Decimal      @db.Decimal(15, 2)
-  reason       String
+  reason       String? // Deprecated in favor of description, keeping for backwards compat if needed, or map to description
+  description  String?      @db.Text
+  expense_date DateTime?    @default(now()) @db.Timestamp(6)
   created_at   DateTime?    @default(now()) @db.Timestamp(6)
   updated_at   DateTime?    @default(now()) @db.Timestamp(6)
   deleted_at   DateTime?    @db.Timestamp(6)
-  pos_sessions pos_sessions @relation(fields: [session_id], references: [session_id], onDelete: NoAction, onUpdate: NoAction)
+  pos_sessions pos_sessions? @relation(fields: [session_id], references: [session_id], onDelete: NoAction, onUpdate: NoAction)
   employees    employees    @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
 }
 
