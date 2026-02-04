@@ -1,4 +1,5 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, Req, ParseIntPipe, Query, BadRequestException } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, Req, ParseIntPipe, Query, BadRequestException, UseInterceptors, UploadedFile, ForbiddenException } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { AuthGuard } from '@nestjs/passport';
 import { UsersService } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
@@ -21,6 +22,14 @@ export class UsersController {
   @UseGuards(AuthGuard('jwt'))
   updateProfile(@Req() req, @Body() data: { full_name: string; phone: string }) {
     return this.usersService.updateProfile(req.user.user_id, data);
+  }
+
+  @Post('avatar')
+  @UseGuards(AuthGuard('jwt'))
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadAvatar(@Req() req, @UploadedFile() file: Express.Multer.File) {
+      if (!file) throw new BadRequestException('File is required');
+      return this.usersService.updateAvatar(req.user.user_id, file);
   }
 
   @Post('profile/request-update')
@@ -105,6 +114,14 @@ export class UsersController {
         throw new BadRequestException('You cannot ban yourself');
     }
     return this.usersService.updateStatus(id, status, reason);
+  }
+
+  @Patch(':id/reset-avatar')
+  @Roles('SUPER_ADMIN', 'ADMIN', 'MANAGER')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  async resetAvatar(@Param('id', ParseIntPipe) id: number) {
+      await this.usersService.resetAvatar(id);
+      return { message: "Đã reset ảnh đại diện của nhân viên." };
   }
 
   @Delete(':id')

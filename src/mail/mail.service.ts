@@ -55,6 +55,42 @@ export class MailService {
           <p style="color: #999; font-size: 12px;">© 2026 FigiCore. All rights reserved.</p>
         </div>
       `,
+        });
+    }
+    async sendEmployeeActivation(to: string, tempPass: string, token: string) {
+        // Use environment variable for Frontend URL, fallback to localhost if not set (though .env is required)
+        const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+        const activationLink = `${frontendUrl}/auth/activate?token=${token}`;
+
+        await this.mailerService.sendMail({
+            to: to,
+            from: process.env.MAIL_FROM, // Ensure sender is set correctly
+            subject: 'Kích hoạt tài khoản nhân viên FigiCore',
+            html: `
+                <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #eee; border-radius: 8px;">
+                    <h2 style="color: #111;">Chào mừng gia nhập đội ngũ FigiCore!</h2>
+                    <p>Tài khoản của bạn đã được khởi tạo. Dưới đây là thông tin đăng nhập tạm thời:</p>
+                    
+                    <div style="background-color: #f9f9f9; padding: 15px; border-radius: 6px; margin: 20px 0;">
+                        <p style="margin: 5px 0;"><strong>Email:</strong> ${to}</p>
+                        <p style="margin: 5px 0;"><strong>Mật khẩu tạm:</strong> <span style="font-family: monospace; font-size: 16px; background: #eee; padding: 2px 6px; border-radius: 4px;">${tempPass}</span></p>
+                    </div>
+
+                    <p>Vui lòng nhấp vào nút bên dưới để đổi mật khẩu và kích hoạt tài khoản:</p>
+                    
+                    <div style="text-align: center; margin: 30px 0;">
+                        <a href="${activationLink}" 
+                           style="background-color: #000; color: white; padding: 12px 30px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">
+                           Kích Hoạt Tài Khoản
+                        </a>
+                    </div>
+                    
+                    <p style="color: #666; font-size: 14px;">Liên kết này sẽ hết hạn sau 24 giờ.</p>
+                    <p style="color: #999; font-size: 12px; margin-top: 30px;">Hệ thống FigiCore</p>
+                </div>
+            `,
+        });
+    }
     });
   }
   async sendStationVerificationEmail(email: string, stationName: string, confirmLink: string, cancelLink: string) {

@@ -12,13 +12,13 @@ export class UploadService {
         });
     }
 
-    async uploadFile(file: Express.Multer.File): Promise<{ url: string; type: string; public_id: string }> {
+    async uploadFile(file: Express.Multer.File, folder: string = 'figicore_products'): Promise<{ url: string; type: string; public_id: string }> {
         if (!file) throw new BadRequestException('No file provided');
 
         return new Promise((resolve, reject) => {
             const uploadStream = cloudinary.uploader.upload_stream(
                 {
-                    folder: 'figicore_products',
+                    folder: folder,
                     resource_type: 'auto', // Detect image or video
                 },
                 (error, result) => {
