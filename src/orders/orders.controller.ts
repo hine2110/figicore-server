@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, Req, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, Req, UseGuards, Query } from '@nestjs/common';
 import { OrdersService } from './orders.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { UpdateOrderDto } from './dto/update-order.dto';
@@ -44,8 +44,8 @@ export class OrdersController {
   }
 
   @Get()
-  findAll() {
-    return this.ordersService.findAll();
+  findAll(@Query() query: { status?: string }) {
+    return this.ordersService.findAll(query);
   }
 
   @Get('my-orders')

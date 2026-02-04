@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <style>
+        /* Base Reset */
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #f4f4f7;
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        /* Container */
+        .wrapper {
+            width: 100%;
+            background-color: #f4f4f7;
+            padding: 40px 0;
+        }
+
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background-color: #ffffff;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+        }
+
+        /* Header */
+        .header {
+            background-color: #1a1a1a;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            color: #ffffff;
+            margin: 0;
+            font-size: 24px;
+            font-weight: 600;
+            letter-spacing: 1px;
+        }
+
+        /* Content */
+        .content {
+            padding: 40px;
+        }
+
+        .greeting {
+            font-size: 18px;
+            color: #333;
+            margin-bottom: 20px;
+        }
+
+        .message {
+            color: #555;
+            line-height: 1.6;
+            margin-bottom: 30px;
+        }
+
+        /* Order Card */
+        .order-card {
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 6px;
+            padding: 20px;
+            margin-bottom: 30px;
+        }
+
+        .order-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 10px;
+            border-bottom: 1px dashed #ddd;
+            padding-bottom: 10px;
+        }
+
+        .order-row:last-child {
+            border-bottom: none;
+            margin-bottom: 0;
+            padding-bottom: 0;
+        }
+
+        .product-name {
+            font-weight: 500;
+            color: #333;
+        }
+
+        .product-price {
+            color: #666;
+        }
+
+        .total-row {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 2px solid #333;
+            font-weight: bold;
+            font-size: 18px;
+            color: #000;
+        }
+
+        /* Button */
+        .btn-container {
+            text-align: center;
+            margin-top: 40px;
+        }
+
+        .btn {
+            display: inline-block;
+            background-color: #000000;
+            color: #ffffff;
+            padding: 14px 30px;
+            text-decoration: none;
+            border-radius: 50px;
+            font-weight: bold;
+            font-size: 16px;
+            transition: background 0.3s;
+        }
+
+        /* Footer */
+        .footer {
+            background-color: #f4f4f7;
+            padding: 20px;
+            text-align: center;
+            color: #999;
+            font-size: 12px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="wrapper">
+        <div class="container">
+            <div class="header">
+                <h1>FIGICORE</h1>
+            </div>
+
+            <div class="content">
+                <div class="greeting">Hi {{name}},</div>
+                <div class="message">
+                    Thank you for your purchase! We have received your payment and your order is now being processed.
+                </div>
+
+                <div class="order-card">
+                    <div
+                        style="font-weight: bold; margin-bottom: 15px; color: #888; font-size: 12px; text-transform: uppercase;">
+                        Order #{{orderCode}}</div>
+
+                    {{#each items}}
+                    <div class="order-row">
+                        <span class="product-name">{{product_variants.products.name}} <span
+                                style="display: inline-block; background-color: #e9ecef; color: #333; padding: 4px 8px; border-radius: 4px; font-weight: bold; font-size: 14px; margin-left: 8px;">x{{quantity}}</span></span>
+                        <span class="product-price">{{formattedPrice}}</span>
+                    </div>
+                    {{/each}}
+
+                    <div class="total-row" style="font-size: 20px; color: #d9534f;">
+                        <span>TOTAL</span>
+                        <span>{{formattedTotal}}</span>
+                    </div>
+                </div>
+
+                <div class="btn-container">
+                    <a href="{{url}}" class="btn">View Order Details</a>
+                </div>
+            </div>
+
+            <div class="footer">
+                &copy; 2026 FigiCore Store. All rights reserved.<br>
+                Need help? Reply to this email.
+            </div>
+        </div>
+    </div>
+</body>
+
+</html>

@@ -1,60 +1,110 @@
-
 import { Injectable } from '@nestjs/common';
 import { MailerService } from '@nestjs-modules/mailer';
 
 @Injectable()
 export class MailService {
-    constructor(private mailerService: MailerService) { }
+  constructor(private mailerService: MailerService) { }
 
-    async sendVerificationEmail(email: string, token: string) {
-        const url = `http://localhost:3000/auth/verify?token=${token}`;
+  private formatCurrency(amount: number): string {
+    return new Intl.NumberFormat('vi-VN', {
+      style: 'currency',
+      currency: 'VND'
+    }).format(amount).replace('₫', '').trim() + ' ₫';
+  }
 
-        await this.mailerService.sendMail({
-            to: email,
-            subject: 'Welcome to FigiCore! Confirm your Email',
-            html: `
-        <h3>Welcome to FigiCore</h3>
-        <p>Please click the link below to confirm your email:</p>
-        <p><a href="${url}">Confirm Email</a></p>
-        <p>This link is valid for 24 hours.</p>
-      `,
-        });
+  async sendOrderConfirmation(user: any, order: any) {
+    try {
+      const items = order.order_items.map(item => ({
+        ...item,
+        formattedPrice: this.formatCurrency(Number(item.unit_price || item.total_price / item.quantity)),
+        product_variants: item.product_variants
+      }));
+
+      await this.mailerService.sendMail({
+        to: user.email,
+        subject: `Order Confirmed #${order.order_code} - FigiCore`,
+        template: './order-confirmation',
+        context: {
+          name: user.full_name,
+          orderCode: order.order_code || order.order_id,
+          formattedTotal: this.formatCurrency(Number(order.total_amount)),
+          items: items,
+          url: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/customer/profile?tab=orders`
+        },
+      });
+      console.log(`[MailService] Order confirmation sent to ${user.email}`);
+    } catch (error) {
+      console.error(`[MailService] Failed to send order confirmation to ${user.email}`, error);
     }
+  }
 
-    async sendOtpEmail(email: string, otp: string) {
-        await this.mailerService.sendMail({
-            to: email,
-            subject: 'FigiCore Verification Code',
-            html: `
-        <h3>FigiCore Verification</h3>
-        <p>Your verification code is:</p>
-        <h2>${otp}</h2>
-        <p>This code expires in 5 minutes.</p>
-      `,
-        });
+  async sendShippingUpdate(user: any, order: any) {
+    try {
+      await this.mailerService.sendMail({
+        to: user.email,
+        subject: `Your Order #${order.order_code} has been Shipped!`,
+        template: './shipping-alert',
+        context: {
+          name: user.full_name,
+          orderCode: order.order_code || order.order_id,
+          trackingCode: order.shipments?.tracking_code || 'N/A',
+        },
+      });
+      console.log(`[MailService] Shipping update sent to ${user.email}`);
+    } catch (error) {
+      console.error(`[MailService] Failed to send shipping update to ${user.email}`, error);
     }
+  }
 
-    async sendPasswordResetEmail(email: string, name: string, resetLink: string) {
-        await this.mailerService.sendMail({
-            to: email,
-            subject: 'Reset Your Password - FigiCore',
-            html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2>Hi ${name},</h2>
-          <p>You requested to reset your password for your FigiCore account.</p>
-          <p>Click the button below to reset your password:</p>
-          <div style="text-align: center; margin: 30px 0;">
-            <a href="${resetLink}" 
-               style="background-color: #3B82F6; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block;">
-              Reset Password
-            </a>
-          </div>
-          <p style="color: #666;">This link expires in <strong>1 hour</strong>.</p>
-          <p style="color: #666;">If you didn't request this, please ignore this email.</p>
-          <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;">
-          <p style="color: #999; font-size: 12px;">© 2026 FigiCore. All rights reserved.</p>
-        </div>
-      `,
-        });
+  async sendDeliverySuccess(user: any, order: any, earnedPoints: number) {
+    try {
+      await this.mailerService.sendMail({
+        to: user.email,
+        subject: `Delivered Successfully! You earned +${earnedPoints} points`,
+        template: './delivery-success',
+        context: {
+          name: user.full_name,
+          orderCode: order.order_code || order.order_id,
+          earnedPoints: earnedPoints,
+          url: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/customer/profile?tab=orders`
+        },
+      });
+      console.log(`[MailService] Delivery success email sent to ${user.email}`);
+    } catch (error) {
+      console.error(`[MailService] Failed to send delivery success email to ${user.email}`, error);
     }
+  }
+
+  async sendOtpEmail(email: string, otp: string) {
+    try {
+      await this.mailerService.sendMail({
+        to: email,
+        subject: 'OTP Verification - FigiCore',
+        template: './otp-email',
+        context: {
+          otp: otp,
+        },
+      });
+      console.log(`[MailService] OTP sent to ${email}`);
+    } catch (error) {
+      console.error(`[MailService] Failed to send OTP to ${email}`, error);
+    }
+  }
+
+  async sendPasswordResetEmail(email: string, name: string, resetLink: string) {
+    try {
+      await this.mailerService.sendMail({
+        to: email,
+        subject: 'Password Reset Request - FigiCore',
+        template: './password-reset',
+        context: {
+          name: name,
+          resetLink: resetLink,
+        },
+      });
+      console.log(`[MailService] Password reset email sent to ${email}`);
+    } catch (error) {
+      console.error(`[MailService] Failed to send password reset email to ${email}`, error);
+    }
+  }
 }

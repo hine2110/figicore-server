@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #e9ecef;
+            padding: 20px;
+        }
+
+        .box {
+            max-width: 600px;
+            margin: auto;
+            background: white;
+            border-top: 5px solid #28a745;
+            padding: 30px;
+        }
+
+        .reward {
+            background: #fff3cd;
+            color: #856404;
+            padding: 15px;
+            border-radius: 5px;
+            text-align: center;
+            margin: 20px 0;
+            border: 1px solid #ffeeba;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="box">
+        <h1 style="color: #28a745;">Delivered Successfully! 🎉</h1>
+        <p>Hi <strong>{{name}}</strong>,</p>
+        <p>Your order <strong>#{{orderCode}}</strong> has been delivered successfully. We hope you enjoy your purchase!
+        </p>
+
+        <div class="reward">
+            <h3>🎁 Loyalty Reward</h3>
+            <p>You have earned <strong>+{{earnedPoints}} points</strong> from this order!</p>
+        </div>
+
+        <p>Please take a moment to review your products:</p>
+        <p><a href="{{url}}" style="color: #007bff;">Rate your products</a></p>
+
+        <p>Thank you for choosing FigiCore!</p>
+    </div>
+</body>
+
+</html>
