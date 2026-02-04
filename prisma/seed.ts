@@ -205,6 +205,7 @@ async function main() {
     console.log('✅ Order Status Seeding Completed!');
 
     // ==========================================
+
     // 8. PAYMENT METHODS & CHANNELS (SYSTEM LOOKUPS)
     // ==========================================
     console.log('--- 8. Seeding Channels & Payments ---');
@@ -217,6 +218,19 @@ async function main() {
     await upsertLookup('PAYMENT_METHOD', 'QR_BANK', 'QR Banking (VietQR)', 1, { description: 'Scan QR code with banking app', icon: 'qr_code' });
     await upsertLookup('PAYMENT_METHOD', 'WALLET', 'FigiWallet', 2, { description: 'Pay with wallet balance', icon: 'wallet' });
     await upsertLookup('PAYMENT_METHOD', 'CASH', 'Cash', 3, { description: 'Pay cash at counter', icon: 'cash' });
+
+    // 8. TRẠNG THÁI CHẤM CÔNG (TIMESHEET STATUS)
+    // ==========================================
+    console.log('--- 8. Seeding Timesheet Status ---');
+
+    await upsertLookup('TIMESHEET_STATUS', 'ON_TIME', 'Đúng giờ', 1);
+    await upsertLookup('TIMESHEET_STATUS', 'LATE', 'Đi muộn', 2);
+    await upsertLookup('TIMESHEET_STATUS', 'EARLY_LEAVE', 'Về sớm', 3);
+    await upsertLookup('TIMESHEET_STATUS', 'AUTO_CLOSED', 'Tự động đóng ca', 4);
+    await upsertLookup('TIMESHEET_STATUS', 'MISSING_CHECKOUT', 'Quên checkout', 5);
+
+    console.log('✅ Timesheet Status Seeding Completed!');
+
 
     console.log('🎉 SEEDING HOÀN TẤT! Hệ thống đã sẵn sàng định danh.');
 }
