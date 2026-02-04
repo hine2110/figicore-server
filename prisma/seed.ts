@@ -162,30 +162,61 @@ async function main() {
     console.log('--- 7. Seeding Order Status ---');
 
     // Initial state: Order created, payment pending
-    await upsertLookup('ORDER_STATUS', 'PENDING_PAYMENT', 'Chờ Thanh Toán', 1);
+    await upsertLookup('ORDER_STATUS', 'PENDING_PAYMENT', 'Pending Payment', 1);
+
+    // Order expired due to timeout (System auto-cancel)
+    await upsertLookup('ORDER_STATUS', 'EXPIRED', 'Payment Expired', 2);
 
     // Payment confirmed (or COD verified), ready for packing
-    await upsertLookup('ORDER_STATUS', 'PROCESSING', 'Đang Xử Lý', 2);
+    await upsertLookup('ORDER_STATUS', 'PROCESSING', 'Processing', 3);
 
-    // Handed over to carrier (GHN)
-    await upsertLookup('ORDER_STATUS', 'SHIPPING', 'Đang Vận Chuyển', 3);
+    // Ready for GHN to pickup
+    await upsertLookup('ORDER_STATUS', 'PACKED', 'Packed', 4);
+
+    // Handed over to carrier (GHN), waiting for pickup scan
+    await upsertLookup('ORDER_STATUS', 'AWAITING_PICKUP', 'Awaiting Pickup', 5);
+
+    // Actually Shipping (Carrier picked up)
+    await upsertLookup('ORDER_STATUS', 'SHIPPING', 'Shipping', 6);
 
     // Customer received goods
-    await upsertLookup('ORDER_STATUS', 'COMPLETED', 'Hoàn Thành', 4);
+    await upsertLookup('ORDER_STATUS', 'COMPLETED', 'Completed', 7);
 
     // Order cancelled (Stock returned)
-    await upsertLookup('ORDER_STATUS', 'CANCELLED', 'Đã Hủy', 5);
-
-    // Refund processed
-    await upsertLookup('ORDER_STATUS', 'REFUNDED', 'Đã Hoàn Tiền', 6);
+    await upsertLookup('ORDER_STATUS', 'CANCELLED', 'Cancelled', 8);
 
     // Failed delivery (Returned to shop)
-    await upsertLookup('ORDER_STATUS', 'RETURNED', 'Trả Hàng', 7);
+    await upsertLookup('ORDER_STATUS', 'DELIVERY_FAILED', 'Delivery Failed', 9);
 
-    // [NEW] Order expired due to timeout (System auto-cancel)
-    await upsertLookup('ORDER_STATUS', 'EXPIRED', 'Hết Hạn Thanh Toán', 8);
+    // --- RETURN FLOW ---
+    await upsertLookup('ORDER_STATUS', 'RETURN_REQUESTED', 'Return Requested', 10);
+    await upsertLookup('ORDER_STATUS', 'RETURN_APPROVED', 'Return Approved', 11);
+    await upsertLookup('ORDER_STATUS', 'RETURNING', 'Returning', 12); // On the way back
+    await upsertLookup('ORDER_STATUS', 'RETURNED', 'Returned', 13); // Restocked
+    await upsertLookup('ORDER_STATUS', 'REFUNDED', 'Refunded', 14); // Money back
+
+    // --- PRE-ORDER FLOW ---
+    // 15. Customer paid deposit successfully. Waiting for release date.
+    await upsertLookup('ORDER_STATUS', 'DEPOSITED', 'Đã Cọc (Chờ Hàng)', 20, { color: 'purple' });
+
+    // 16. Goods arrived at warehouse. Allocated to customer. Waiting for final payment.
+    await upsertLookup('ORDER_STATUS', 'READY_FOR_PAYMENT', 'Hàng Về (Chờ Thanh Toán)', 21, { color: 'orange' });
 
     console.log('✅ Order Status Seeding Completed!');
+
+    // ==========================================
+    // 8. PAYMENT METHODS & CHANNELS (SYSTEM LOOKUPS)
+    // ==========================================
+    console.log('--- 8. Seeding Channels & Payments ---');
+
+    // Channels
+    await upsertLookup('CHANNEL', 'WEB', 'Website', 1);
+    await upsertLookup('CHANNEL', 'POS', 'Point of Sale (In-Store)', 2);
+
+    // Payment Methods
+    await upsertLookup('PAYMENT_METHOD', 'QR_BANK', 'QR Banking (VietQR)', 1, { description: 'Scan QR code with banking app', icon: 'qr_code' });
+    await upsertLookup('PAYMENT_METHOD', 'WALLET', 'FigiWallet', 2, { description: 'Pay with wallet balance', icon: 'wallet' });
+    await upsertLookup('PAYMENT_METHOD', 'CASH', 'Cash', 3, { description: 'Pay cash at counter', icon: 'cash' });
 
     console.log('🎉 SEEDING HOÀN TẤT! Hệ thống đã sẵn sàng định danh.');
 }

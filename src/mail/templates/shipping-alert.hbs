@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <style>
+        body {
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            background-color: #f8f9fa;
+            padding: 20px;
+        }
+
+        .card {
+            max-width: 600px;
+            margin: auto;
+            background: white;
+            border-radius: 10px;
+            padding: 30px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        .status {
+            color: #28a745;
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .tracking-box {
+            background: #f1f3f5;
+            padding: 15px;
+            border-radius: 5px;
+            text-align: center;
+            margin: 20px 0;
+            font-family: monospace;
+            font-size: 18px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="card">
+        <h2>Your Order is on the way! 🚚</h2>
+        <p class="status">STATUS: SHIPPED</p>
+        <p>Great news, <strong>{{name}}</strong>!</p>
+        <p>Your order <strong>#{{orderCode}}</strong> has been handed over to our shipping partner.</p>
+
+        <div class="tracking-box">
+            Tracking Code: <strong>{{trackingCode}}</strong>
+        </div>
+
+        <p>You can track your package using the link below:</p>
+        <p style="text-align: center;">
+            <a href="https://khachhang.ghn.vn/track-order?order_code={{trackingCode}}"
+                style="background: #17a2b8; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px;">Track
+                My Package</a>
+        </p>
+    </div>
+</body>
+
+</html>

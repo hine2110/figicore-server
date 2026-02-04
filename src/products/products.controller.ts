@@ -62,7 +62,7 @@ export class ProductsController {
   }
 
   @Post('gen-description')
-  generateDescription(@Body() body: { productName: string, attributes?: string }) {
+  generateDescription(@Body() body: { productName: string, variantName?: string, userContext?: string, imageUrl?: string }) {
     return this.productsService.generateAiDescription(body);
   }
 }

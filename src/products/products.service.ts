@@ -56,6 +56,10 @@ export class ProductsService {
             price: v.price,
             description: v.description, // Map description
             media_assets: v.media_assets ? (v.media_assets as any) : JSON.stringify([]), // Map media_assets
+            weight_g: v.weight_g || 200,
+            length_cm: v.length_cm || 10,
+            width_cm: v.width_cm || 10,
+            height_cm: v.height_cm || 10,
           }))
         });
       }
@@ -107,37 +111,36 @@ export class ProductsService {
       else if (productData.type_code === 'PREORDER') {
         if (!preorder) throw new BadRequestException('Preorder configuration is required.');
 
+        // 1. Create Preorder Info (Metadata Only)
         await tx.product_preorders.create({
           data: {
             product_id: product.product_id,
-            deposit_amount: preorder.deposit_amount,
-            full_price: preorder.full_price,
             release_date: new Date(preorder.release_date),
-            max_slots: preorder.max_slots
+            // Removed: deposit_amount, full_price, max_slots (Now in variants)
           }
         });
 
-        // Smart Variants: Generate TWO variants
-        await tx.product_variants.createMany({
-          data: [
-            {
+        // 2. Variants from DTO (Supports Multivariant Preorder)
+        if (variants && variants.length > 0) {
+          await tx.product_variants.createMany({
+            data: variants.map(v => ({
               ...commonVariantData,
-              sku: genCode('PRE-DEP'),
-              barcode: genCode('BAR-DEP'),
-              option_name: 'Deposit (Cọc)',
-              price: preorder.deposit_amount,
-              media_assets: JSON.stringify([])
-            },
-            {
-              ...commonVariantData,
-              sku: genCode('PRE-FULL'),
-              barcode: genCode('BAR-FULL'),
-              option_name: 'Full Payment (Trả thẳng)',
-              price: preorder.full_price,
-              media_assets: JSON.stringify([])
-            }
-          ]
-        });
+              sku: v.sku || genCode('PRE-SKU'),
+              barcode: v.barcode || genCode('PRE-BAR'),
+              option_name: v.option_name,
+              price: v.price,                         // FULL PRICE from frontend
+              deposit_amount: v.deposit_amount || 0,  // <--- VARIANT DEPOSIT
+              stock_available: 0,                     // Physical stock is 0
+              preorder_slot_limit: v.preorder_slot_limit || v.stock_available || 0, // <--- SLOT LIMIT
+              description: v.description,
+              media_assets: v.media_assets ? (v.media_assets as any) : JSON.stringify([]),
+              weight_g: v.weight_g || 200,
+              length_cm: v.length_cm || 10,
+              width_cm: v.width_cm || 10,
+              height_cm: v.height_cm || 10,
+            }))
+          });
+        }
       }
 
       return product;
@@ -398,6 +401,10 @@ export class ProductsService {
                 barcode: v.barcode,
                 description: v.description,
                 media_assets: v.media_assets ? (v.media_assets as any) : undefined, // Update media_assets
+                weight_g: v.weight_g,
+                length_cm: v.length_cm,
+                width_cm: v.width_cm,
+                height_cm: v.height_cm,
               },
             });
           } else {
@@ -412,6 +419,10 @@ export class ProductsService {
                 media_assets: v.media_assets ? (v.media_assets as any) : JSON.stringify([]),
                 stock_available: v.stock_available || 0,
                 stock_defect: v.stock_defect || 0,
+                weight_g: v.weight_g || 200,
+                length_cm: v.length_cm || 10,
+                width_cm: v.width_cm || 10,
+                height_cm: v.height_cm || 10,
               },
             });
           }
@@ -459,28 +470,64 @@ export class ProductsService {
           where: { product_id: id },
           create: {
             product_id: id,
-            deposit_amount: preorder.deposit_amount,
-            full_price: preorder.full_price,
             release_date: new Date(preorder.release_date),
-            max_slots: preorder.max_slots,
+            // Legacy fields removed
           },
           update: {
-            deposit_amount: preorder.deposit_amount,
-            full_price: preorder.full_price,
             release_date: new Date(preorder.release_date),
-            max_slots: preorder.max_slots,
+            // Legacy fields removed
           },
         });
 
-        const existingVariants = currentProduct.product_variants;
-        const depositVariant = existingVariants.find(v => v.option_name.includes('Deposit') || v.option_name.includes('Cọc'));
-        const fullVariant = existingVariants.find(v => v.option_name.includes('Full') || v.option_name.includes('Trả thẳng'));
+        // Loop through variants and update/create them
+        if (variants && variants.length > 0) {
+          for (const v of variants) {
+            const existingVariant = await tx.product_variants.findUnique({
+              where: { sku: v.sku },
+            });
 
-        if (depositVariant) {
-          await tx.product_variants.update({ where: { variant_id: depositVariant.variant_id }, data: { price: preorder.deposit_amount } });
-        }
-        if (fullVariant) {
-          await tx.product_variants.update({ where: { variant_id: fullVariant.variant_id }, data: { price: preorder.full_price } });
+            if (existingVariant && existingVariant.product_id !== id) {
+              // Skip or throw, but here we proceed
+            }
+
+            if (existingVariant) {
+              await tx.product_variants.update({
+                where: { variant_id: existingVariant.variant_id },
+                data: {
+                  option_name: v.option_name,
+                  price: v.price,
+                  deposit_amount: v.deposit_amount, // Update Deposit
+                  preorder_slot_limit: v.preorder_slot_limit ?? v.stock_available, // Update Slot Limit
+                  barcode: v.barcode,
+                  description: v.description,
+                  media_assets: v.media_assets ? (v.media_assets as any) : undefined,
+                  weight_g: v.weight_g,
+                  length_cm: v.length_cm,
+                  width_cm: v.width_cm,
+                  height_cm: v.height_cm,
+                },
+              });
+            } else {
+              await tx.product_variants.create({
+                data: {
+                  product_id: id,
+                  sku: v.sku,
+                  option_name: v.option_name,
+                  price: v.price,
+                  deposit_amount: v.deposit_amount || 0,
+                  preorder_slot_limit: v.preorder_slot_limit || v.stock_available || 0,
+                  stock_available: 0, // Physical stock 0
+                  barcode: v.barcode,
+                  description: v.description,
+                  media_assets: v.media_assets ? (v.media_assets as any) : JSON.stringify([]),
+                  weight_g: v.weight_g || 200,
+                  length_cm: v.length_cm || 10,
+                  width_cm: v.width_cm || 10,
+                  height_cm: v.height_cm || 10,
+                },
+              });
+            }
+          }
         }
       }
 
@@ -513,32 +560,79 @@ export class ProductsService {
     });
   }
 
-  async generateAiDescription(dto: { productName: string, attributes?: string }) {
+  async generateAiDescription(dto: {
+    productName: string;
+    variantName?: string;
+    userContext?: string;
+    imageUrl?: string; // Multimodal Input
+  }) {
     if (!process.env.GEMINI_API_KEY) {
       throw new ServiceUnavailableException("AI service is not configured (Missing API Key).");
     }
 
-    try {
-      const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-      // --- CẬP NHẬT QUAN TRỌNG: Dùng model 2.0 Flash ---
-      const model = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
+    const context = dto.userContext ? `User Notes/Context: "${dto.userContext}"` : "User Notes: N/A";
+    const variantContext = dto.variantName ? `Target Specific Variant: "${dto.variantName}"` : "Target: Main Product Overview";
 
-      const prompt = `
-            Role: Professional Copywriter for E-commerce in Vietnam.
-            Task: Write a concise, attractive product description in Vietnamese.
-            Product Name: ${dto.productName}
-            Attributes: ${dto.attributes || "N/A"}
-            Tone: Enthusiastic, Sales-oriented, Professional.
-            Format: Plain text, max 3 paragraphs, use emojis sparingly. Do not use markdown headers like ##.
+    const prompt = `
+            Role: Expert Copywriter for Collectibles (Gunpla, Figures, Toys).
+            Task: Write a professional, engaging description in Vietnamese.
+            
+            Product: ${dto.productName}
+            ${variantContext}
+            ${context}
+            
+            Guidelines:
+            1. **Tone**: Enthusiastic, professional, "Dan choi" friendly.
+            2. **Content**: Use the provided User Notes to highlight specific details. If an image is provided, describe the visual details (pose, accessories, color) accurately.
+            3. **Format**: Plain text, clear paragraph breaks, 2-3 paragraphs max. Use relevant emojis 🤖✨.
+            4. **Hallucination Check**: Only describe features visible in the image or explicitly stated in notes.
+            5. **Language**: Vietnamese.
         `;
 
-      const result = await model.generateContent(prompt);
-      const response = await result.response;
-      return { text: response.text() };
-    } catch (error) {
-      Logger.error("AI Gen Failed", error);
-      // Log thêm chi tiết lỗi để dễ debug nếu có
+    const parts: any[] = [prompt];
+
+    // MULTIMODAL: Fetch Image if provided
+    if (dto.imageUrl) {
+      try {
+        const imgResp = await fetch(dto.imageUrl);
+        if (imgResp.ok) {
+          const arrayBuffer = await imgResp.arrayBuffer();
+          const buffer = Buffer.from(arrayBuffer);
+          parts.push({
+            inlineData: {
+              data: buffer.toString("base64"),
+              mimeType: imgResp.headers.get("content-type") || "image/jpeg"
+            }
+          });
+        } else {
+          Logger.warn(`Failed to fetch AI Image: ${dto.imageUrl}`);
+        }
+      } catch (imgErr) {
+        Logger.error("AI Image Fetch Error", imgErr);
+      }
+    }
+
+    // GENERATION LOGIC WITH FALLBACK
+    try {
+      try {
+        // Attempt 1: Gemini Flash Latest
+        const model = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
+        const result = await model.generateContent(parts);
+        const response = await result.response;
+        return { text: response.text() };
+      } catch (primaryError) {
+        Logger.warn(`Primary Model (gemini-flash-latest) failed: ${primaryError.message}. Retrying with Fallback...`);
+
+        // Attempt 2: Fallback to Stable 1.5 Flash
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+        const result = await model.generateContent(parts);
+        const response = await result.response;
+        return { text: response.text() };
+      }
+    } catch (finalError) {
+      Logger.error("AI Gen Failed (All Models)", finalError);
       throw new ServiceUnavailableException("AI service is currently unavailable. Please try again later.");
     }
   }

@@ -1,32 +1,38 @@
-
-import { Module } from '@nestjs/common';
+import { Module, Global } from '@nestjs/common';
 import { MailerModule } from '@nestjs-modules/mailer';
-import { ConfigModule, ConfigService } from '@nestjs/config';
+import { HandlebarsAdapter } from '@nestjs-modules/mailer/dist/adapters/handlebars.adapter';
 import { MailService } from './mail.service';
+import { join } from 'path';
+import { ConfigService } from '@nestjs/config';
 
+@Global()
 @Module({
     imports: [
-        ConfigModule, // Ensure ConfigModule is available if we use ConfigService, or we can use process.env directly
         MailerModule.forRootAsync({
-            // imports: [ConfigModule], // If using ConfigService
-            // inject: [ConfigService],
-            useFactory: () => ({
+            useFactory: async (config: ConfigService) => ({
                 transport: {
-                    host: process.env.MAIL_HOST,
-                    port: 587, // Standard SMTP port, or use env if needed
-                    secure: false, // true for 465, false for other ports
+                    host: 'smtp.gmail.com', // Placeholder/Default
+                    secure: false,
                     auth: {
-                        user: process.env.MAIL_USER,
-                        pass: process.env.MAIL_PASS,
+                        user: process.env.MAIL_USER || 'placeholder@gmail.com',
+                        pass: process.env.MAIL_PASS || 'placeholder!password',
                     },
                 },
                 defaults: {
-                    from: `"No Reply" <${process.env.MAIL_FROM}>`,
+                    from: '"No Reply" <noreply@figicore.com>',
+                },
+                template: {
+                    dir: join(__dirname, 'templates'),
+                    adapter: new HandlebarsAdapter(),
+                    options: {
+                        strict: true,
+                    },
                 },
             }),
+            inject: [ConfigService],
         }),
     ],
     providers: [MailService],
-    exports: [MailerModule, MailService], // Export MailerModule so MailerService is available
+    exports: [MailService],
 })
 export class MailModule { }
