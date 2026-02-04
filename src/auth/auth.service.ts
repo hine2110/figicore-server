@@ -5,6 +5,7 @@ import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
+import { ActivateAccountDto } from './dto/activate-account.dto';
 import { MailService } from '../mail/mail.service';
 import { randomBytes } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
@@ -274,6 +275,48 @@ export class AuthService {
         throw new UnauthorizedException('Reset link has expired');
       }
       throw new UnauthorizedException('Invalid or expired token');
+    }
+  }
+
+  async activateAccount(data: ActivateAccountDto) {
+    try {
+        // 1. Verify Token
+        const payload = await this.jwtService.verifyAsync(data.token, {
+            secret: process.env.JWT_SECRET || 'figicore_secret_key'
+        });
+        // Payload should contain { sub: userId, email: ... }
+
+        const user = await this.usersService.findByEmail(payload.email);
+        if (!user) {
+            throw new NotFoundException('User not found');
+        }
+
+        // 2. Verify Temp Password
+        // Note: For security, we should check if they are already active?
+        // But maybe they want to reset password using this flow? 
+        // Let's assume this is strictly for first-time activation (PENDING status or just verify flow)
+        
+        const isMatch = await bcrypt.compare(data.tempPassword, user.password_hash || '');
+        if (!isMatch) {
+            throw new UnauthorizedException('Invalid temporary password');
+        }
+
+        // 3. Update Password & Status
+        const newHash = await bcrypt.hash(data.newPassword, 10);
+        
+        await this.usersService.update(user.user_id, {
+            password_hash: newHash,
+            status_code: 'ACTIVE',
+            is_verified: true,
+        });
+
+        return { message: 'Account activated successfully. Please login.' };
+
+    } catch (error) {
+        if (error.name === 'TokenExpiredError') {
+            throw new UnauthorizedException('Activation link has expired');
+        }
+        throw error;
     }
   }
 }

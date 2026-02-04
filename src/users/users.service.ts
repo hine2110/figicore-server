@@ -5,9 +5,40 @@ import { Prisma } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { CreateEmployeeDto } from '../employees/dto/create-employee.dto';
 
+import { UploadService } from '../upload/upload.service';
+
 @Injectable()
 export class UsersService {
-  constructor(private prisma: PrismaService) { }
+  constructor(
+      private prisma: PrismaService,
+      private uploadService: UploadService
+  ) { }
+
+  async updateAvatar(userId: number, file: Express.Multer.File) {
+      const user = await this.findOne(userId);
+      if (!user) throw new NotFoundException('User not found');
+
+      if (user.avatar_url) {
+          throw new ForbiddenException("Bạn chỉ được phép cập nhật ảnh đại diện một lần duy nhất.");
+      }
+
+      const uploadResult = await this.uploadService.uploadFile(file, 'figicore_avatars');
+      
+      return this.prisma.users.update({
+          where: { user_id: userId },
+          data: { avatar_url: uploadResult.url }
+      });
+  }
+
+  async resetAvatar(userId: number) {
+      const user = await this.findOne(userId);
+      if (!user) throw new NotFoundException('User not found');
+
+      return this.prisma.users.update({
+          where: { user_id: userId },
+          data: { avatar_url: null }
+      });
+  }
 
   async create(data: any) {
     return this.prisma.users.create({

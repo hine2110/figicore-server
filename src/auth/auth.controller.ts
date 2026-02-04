@@ -6,6 +6,7 @@ import { AuthGuard } from '@nestjs/passport';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+import { ActivateAccountDto } from './dto/activate-account.dto';
 
 @Controller('auth')
 export class AuthController {
@@ -67,5 +68,10 @@ export class AuthController {
   @Post('reset-password')
   async resetPassword(@Body() dto: ResetPasswordDto) {
     return this.authService.resetPassword(dto.token, dto.newPassword);
+  }
+
+  @Post('activate')
+  async activate(@Body() dto: ActivateAccountDto) {
+    return this.authService.activateAccount(dto);
   }
 }
