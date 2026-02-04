@@ -1,6 +1,7 @@
 import { Controller, Post, Body, UseGuards, Get, Query, DefaultValuePipe, ParseIntPipe, Param } from '@nestjs/common';
 import { EmployeesService } from './employees.service';
 import { CreateEmployeeDto } from './dto/create-employee.dto';
+import { ImportEmployeeDto } from './dto/import-employee.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -14,6 +15,13 @@ export class EmployeesController {
   @Roles('SUPER_ADMIN')
   create(@Body() createEmployeeDto: CreateEmployeeDto) {
     return this.employeesService.create(createEmployeeDto);
+  }
+
+  @Post('import')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('SUPER_ADMIN')
+  import(@Body() importData: ImportEmployeeDto[]) {
+    return this.employeesService.importEmployees(importData);
   }
 
   @Get()

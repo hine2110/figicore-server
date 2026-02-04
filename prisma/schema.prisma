@@ -145,7 +145,19 @@ model chat_sessions {
   users             users?          @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
 }
 
+
+model checkin_stations {
+  station_id    Int          @id @default(autoincrement())
+  station_name  String       @db.VarChar(100)
+  station_token      String       @unique @db.VarChar(255)
+  verification_token String?      @unique @db.VarChar(255)
+  is_active          Boolean?     @default(true)
+  created_at    DateTime?    @default(now()) @db.Timestamp(6)
+  timesheets    timesheets[]
+}
+
 model customers {
+
   user_id           Int       @id
   loyalty_points    Int?      @default(0)
   current_rank_code String?   @default("BRONZE") @db.VarChar(50)
@@ -161,6 +173,7 @@ model employees {
   employee_code      String               @unique @db.VarChar(20)
   job_title_code     String               @db.VarChar(50)
   base_salary        Decimal              @default(0) @db.Decimal(15, 2)
+  face_descriptor    Json?
   start_date         DateTime?            @db.Date
   created_at         DateTime?            @default(now()) @db.Timestamp(6)
   updated_at         DateTime?            @default(now()) @db.Timestamp(6)
@@ -551,17 +564,21 @@ model system_lookups {
 }
 
 model timesheets {
-  timesheet_id        Int             @id @default(autoincrement())
+  timesheet_id        Int               @id @default(autoincrement())
   schedule_id         Int?
-  check_in_at         DateTime?       @db.Timestamp(6)
-  check_out_at        DateTime?       @db.Timestamp(6)
-  real_work_hours     Float?          @default(0)
-  applied_hourly_rate Decimal?        @db.Decimal(15, 2)
-  status_code         String?         @db.VarChar(20)
-  created_at          DateTime?       @default(now()) @db.Timestamp(6)
-  updated_at          DateTime?       @default(now()) @db.Timestamp(6)
-  deleted_at          DateTime?       @db.Timestamp(6)
-  work_schedules      work_schedules? @relation(fields: [schedule_id], references: [schedule_id], onDelete: NoAction, onUpdate: NoAction)
+  station_id          Int?
+  check_in_at         DateTime?         @db.Timestamp(6)
+  check_out_at        DateTime?         @db.Timestamp(6)
+  real_work_hours     Float?            @default(0)
+  applied_hourly_rate Decimal?          @db.Decimal(15, 2)
+  status_code         String?           @db.VarChar(20)
+  is_flagged          Boolean?          @default(false)
+  checkin_payload     Json?
+  created_at          DateTime?         @default(now()) @db.Timestamp(6)
+  updated_at          DateTime?         @default(now()) @db.Timestamp(6)
+  deleted_at          DateTime?         @db.Timestamp(6)
+  work_schedules      work_schedules?   @relation(fields: [schedule_id], references: [schedule_id], onDelete: NoAction, onUpdate: NoAction)
+  checkin_stations    checkin_stations? @relation(fields: [station_id], references: [station_id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model user_login_logs {
