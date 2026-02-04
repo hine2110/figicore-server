@@ -120,7 +120,7 @@ export class GhnService {
             "service_type_id": 2, // Standard Delivery
             "insurance_value": params.insurance_value, // <--- KEY: Full Order Value
             "coupon": null,
-            "from_district_id": 1542, // Configurable Shop District
+            "from_district_id": 1534, // UPDATE: Correct Warehouse District (Da Nang/Example)
             "to_district_id": params.to_district_id,
             "to_ward_code": params.to_ward_code,
             "height": 15, "length": 20, "width": 20, "weight": params.weight

@@ -24,7 +24,7 @@ export class CustomersService {
       this.prisma.users.findMany({
         where,
         include: {
-          customers: true, 
+          customers: true,
         },
         skip,
         take: limit,
@@ -34,16 +34,16 @@ export class CustomersService {
     ]);
 
     const data = users.map((u) => ({
-        user_id: u.user_id,
-        full_name: u.full_name,
-        email: u.email,
-        phone: u.phone,
-        status_code: u.status_code,
-        avatar_url: u.avatar_url,
-        loyalty_points: u.customers?.loyalty_points ?? 0,
-        current_rank_code: u.customers?.current_rank_code ?? 'UNRANKED',
-        total_spent: u.customers?.total_spent ?? 0,
-        address: [] // Placeholder if needed, or omit
+      user_id: u.user_id,
+      full_name: u.full_name,
+      email: u.email,
+      phone: u.phone,
+      status_code: u.status_code,
+      avatar_url: u.avatar_url,
+      loyalty_points: u.customers?.loyalty_points ?? 0,
+      current_rank_code: u.customers?.current_rank_code ?? 'UNRANKED',
+      total_spent: u.customers?.total_spent ?? 0,
+      address: [] // Placeholder if needed, or omit
     }));
 
     return {
@@ -130,6 +130,47 @@ export class CustomersService {
       rankCode: customer?.current_rank_code || 'BRONZE'
     };
 
+
+  }
+
+  async addPoints(userId: number, amountSpent: number) {
+    // 1 Point per 100,000 VND (Example Rule)
+    const pointsEarned = Math.floor(amountSpent / 100000);
+
+    if (pointsEarned > 0) {
+      // Update Customer Points & Spend
+      const customer = await this.prisma.customers.upsert({
+        where: { user_id: userId },
+        update: {
+          loyalty_points: { increment: pointsEarned },
+          total_spent: { increment: amountSpent }
+        },
+        create: {
+          user_id: userId,
+          loyalty_points: pointsEarned,
+          total_spent: amountSpent,
+          current_rank_code: 'BRONZE'
+        }
+      });
+
+      // Check & Update Rank
+      // Rank Rules: Bronze < 100, Silver < 500, Gold < 2000, Diamond >= 2000
+      const currentPoints = customer.loyalty_points || 0;
+      let newRank = 'BRONZE';
+
+      if (currentPoints >= 2000) newRank = 'DIAMOND';
+      else if (currentPoints >= 500) newRank = 'GOLD';
+      else if (currentPoints >= 100) newRank = 'SILVER';
+
+      if (newRank !== customer.current_rank_code) {
+        await this.prisma.customers.update({
+          where: { user_id: userId },
+          data: { current_rank_code: newRank }
+        });
+      }
+      return { success: true, pointsAdded: pointsEarned, newRank };
+    }
+    return { success: true, pointsAdded: 0 };
   }
 }
 

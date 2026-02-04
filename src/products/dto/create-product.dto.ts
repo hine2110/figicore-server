@@ -42,6 +42,36 @@ class ProductVariantDto {
     @Min(0)
     stock_defect?: number;
 
+    @IsNumber()
+    @IsOptional()
+    @Min(0)
+    deposit_amount?: number; // <--- NEW: Variant Level Deposit
+
+    @IsNumber()
+    @IsOptional()
+    @Min(0)
+    preorder_slot_limit?: number;
+
+    @IsNumber()
+    @IsOptional()
+    @Min(0)
+    weight_g?: number;
+
+    @IsNumber()
+    @IsOptional()
+    @Min(0)
+    length_cm?: number;
+
+    @IsNumber()
+    @IsOptional()
+    @Min(0)
+    width_cm?: number;
+
+    @IsNumber()
+    @IsOptional()
+    @Min(0)
+    height_cm?: number;
+
     @IsString()
     @IsOptional()
     barcode?: string;
@@ -79,12 +109,14 @@ class ProductBlindboxDto {
 
 class ProductPreorderDto {
     @IsNumber()
+    @IsOptional()
     @Min(0)
-    full_price: number;
+    full_price?: number;
 
     @IsNumber()
+    @IsOptional()
     @Min(0)
-    deposit_amount: number;
+    deposit_amount?: number;
 
     @IsString()
     @IsNotEmpty()

@@ -1,74 +1,95 @@
-import { Injectable, BadRequestException, InternalServerErrorException, Logger } from '@nestjs/common';
+import { Injectable, BadRequestException, InternalServerErrorException, Logger, NotFoundException } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
+import { CustomersService } from '../customers/customers.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { UpdateOrderDto } from './dto/update-order.dto';
+import { GhnService } from '../address/ghn.service';
+import { MailService } from '../mail/mail.service';
+import { EventsGateway } from '../events/events.gateway';
 
 @Injectable()
 export class OrdersService {
   private readonly logger = new Logger(OrdersService.name);
-  constructor(private prisma: PrismaService) { }
+  constructor(
+    private prisma: PrismaService,
+    private ghnService: GhnService,
+    private customersService: CustomersService,
+    private mailService: MailService,
+    private eventsGateway: EventsGateway
+  ) { }
 
   async create(userId: number, createOrderDto: CreateOrderDto) {
     const {
       shipping_address_id,
       items,
       shipping_fee,
-      original_shipping_fee,
       payment_method_code
     } = createOrderDto;
 
-    // 1. Calculate Deadline (15 minutes from now) - BOX LOCK LOGIC
+    // 1. Calculate Deadline (15 minutes from now)
     const paymentDeadline = new Date();
     paymentDeadline.setMinutes(paymentDeadline.getMinutes() + 1);
 
     try {
-      // Use Prisma Transaction
-      return await this.prisma.$transaction(async (tx) => {
-        let totalAmount = 0;
+      // Fetch Address + Items info OUTSIDE transaction for fee calculation
+      // (Or inside, but GHN call is external, better to prep args first or do inside if read-dependant)
+      // Since we need to look up variants for weight, we can do it inside the loop or beforehand.
+      // Let's do it efficiently.
 
-        // 2. Process Items & Deduct Stock
+      const address = await this.prisma.addresses.findUnique({
+        where: { address_id: shipping_address_id }
+      });
+      if (!address) throw new BadRequestException("Address not found");
+
+      // Transaction
+      const newOrder = await this.prisma.$transaction(async (tx) => {
+        let totalAmount = 0;
+        let totalWeight = 0;
+
+        // 2. Process Items & Deduct Stock & Calc Weight
         for (const item of items) {
-          // Lock & Get Variant
           const variant = await tx.product_variants.findUnique({
             where: { variant_id: item.variant_id }
           });
 
-          if (!variant) {
-            throw new BadRequestException(`Variant not found: ${item.variant_id}`);
-          }
-
+          if (!variant) throw new BadRequestException(`Variant not found: ${item.variant_id}`);
           if (variant.stock_available < item.quantity) {
-            throw new BadRequestException(`Out of stock: ${variant.sku} (Available: ${variant.stock_available})`);
+            throw new BadRequestException(`Out of stock: ${variant.sku}`);
           }
 
-          // DEDUCT STOCK (Hard Reserve)
+          // Deduct Stock
           await tx.product_variants.update({
             where: { variant_id: item.variant_id },
-            data: {
-              stock_available: { decrement: item.quantity }
-            }
+            data: { stock_available: { decrement: item.quantity } }
           });
 
-          // Log Inventory (Optional but good for tracking)
-          // Note: Ensure inventory_logs table exists and has these fields.
-          // If it fails, we might need to adjust based on schema.
-          // Assuming schema supports it based on user request.
-          await tx.inventory_logs.create({
-            data: {
-              variant_id: item.variant_id,
-              change_amount: -item.quantity,
-              change_type_code: 'OUTBOUND_SALE',
-              note: `Order Lock for User ${userId}`
-            }
-          });
-
+          // Calc Totals
           totalAmount += Number(item.price) * item.quantity;
+          totalWeight += (variant.weight_g || 200) * item.quantity; // Default 200g
+        }
+
+        // 3. Calculate Real Shipping Fee via GHN
+        let realShippingFee = 0;
+        try {
+          // If district/ward is missing, fallback or throw. Assuming address has valid IDs from checks.
+          // Note: address.district_id is number, ward_code is string.
+          if (address.district_id && address.ward_code) {
+            realShippingFee = await this.ghnService.calculateRealFee({
+              to_district_id: address.district_id,
+              to_ward_code: address.ward_code,
+              weight: totalWeight,
+              insurance_value: totalAmount
+            });
+          }
+        } catch (feeError) {
+          console.error("Fee Calc Error, using default", feeError);
+          realShippingFee = 50000; // Fallback
         }
 
         const finalTotal = totalAmount + Number(shipping_fee);
 
-        // 3. Create Order Record
+        // 4. Create Order
         const orderCode = `ORD-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
         const newOrder = await tx.orders.create({
@@ -77,8 +98,8 @@ export class OrdersService {
             order_code: orderCode,
             shipping_address_id: shipping_address_id,
             total_amount: finalTotal,
-            shipping_fee: shipping_fee,
-            original_shipping_fee: original_shipping_fee || shipping_fee,
+            shipping_fee: shipping_fee, // Customer pays this
+            original_shipping_fee: realShippingFee, // Real cost
             payment_method_code: payment_method_code,
             status_code: 'PENDING_PAYMENT',
             payment_deadline: paymentDeadline,
@@ -105,14 +126,12 @@ export class OrdersService {
           } as any
         });
 
-        // 4. Clear Cart for this User
-        // We use deleteMany directly on cart_items linked to the user's cart
+        // 5. Clear Cart
         const cart = await tx.carts.findFirst({
           where: { user_id: userId, deleted_at: null }
         });
 
         if (cart) {
-          // FIX: Clear ONLY selected items from Cart
           const variantIds = items.map(i => i.variant_id);
           await tx.cart_items.deleteMany({
             where: {
@@ -123,7 +142,13 @@ export class OrdersService {
         }
 
         return newOrder;
-      });
+      }); // End Transaction
+
+      // Emit Real-time Notification to Warehouse
+      // Emit Real-time Notification to Warehouse
+      // this.eventsGateway.notifyNewOrder(newOrder);
+
+      return newOrder;
     } catch (error) {
       console.error("CREATE ORDER ERROR:", error);
       if (error instanceof BadRequestException) throw error;
@@ -132,58 +157,43 @@ export class OrdersService {
   }
 
   async confirmPayment(orderId: number, userId: number) {
-    return this.prisma.$transaction(async (tx) => {
-      // 1. Get Order Total Amount
+    // 1. Run Transaction (Update Status)
+    await this.prisma.$transaction(async (tx) => {
       const order = await tx.orders.findUnique({
-        where: { order_id: orderId, user_id: userId }
+        where: { order_id: orderId, user_id: userId },
       });
 
       if (!order) throw new BadRequestException(`Order #${orderId} not found`);
 
-      // 2. Simple state transition for simulation
-      const updatedOrder = await tx.orders.update({
+      await tx.orders.update({
         where: { order_id: orderId },
-        data: { status_code: 'PROCESSING', paid_amount: order.total_amount } // Confirmed & Paid
+        data: { status_code: 'PROCESSING', paid_amount: order.total_amount }
       });
+    });
 
-      // 3. Loyalty Logic
-      const pointsEarned = Math.floor(Number(order.total_amount) / 100000);
-
-      if (pointsEarned > 0) {
-        // Update Customer Points & Spend
-        const customer = await tx.customers.upsert({
-          where: { user_id: userId },
-          update: {
-            loyalty_points: { increment: pointsEarned },
-            total_spent: { increment: order.total_amount }
-          },
-          create: {
-            user_id: userId,
-            loyalty_points: pointsEarned,
-            total_spent: order.total_amount,
-            current_rank_code: 'BRONZE'
-          }
-        });
-
-        // Check & Update Rank
-        // Rank Rules: Bronze < 100, Silver < 500, Gold < 2000, Diamond >= 2000
-        const currentPoints = customer.loyalty_points || 0;
-        let newRank = 'BRONZE';
-
-        if (currentPoints >= 2000) newRank = 'DIAMOND';
-        else if (currentPoints >= 500) newRank = 'GOLD';
-        else if (currentPoints >= 100) newRank = 'SILVER';
-
-        if (newRank !== customer.current_rank_code) {
-          await tx.customers.update({
-            where: { user_id: userId },
-            data: { current_rank_code: newRank }
-          });
+    // 2. Fetch Full Order for Email
+    const fullOrder = await this.prisma.orders.findUnique({
+      where: { order_id: orderId },
+      include: {
+        users: true, // Relation: users? (Optional)
+        order_items: {
+          include: { product_variants: { include: { products: true } } }
         }
       }
-
-      return updatedOrder;
     });
+
+    // FIX: Guard Clause - If order or user is missing, skip email safely
+    if (!fullOrder || !fullOrder.users) {
+      console.warn(`[ConfirmPayment] Skip email. Order or User not found for ID: ${orderId}`);
+      return { success: true, message: 'Payment confirmed (No email sent)' };
+    }
+
+    // Now TypeScript knows 'fullOrder' and 'fullOrder.users' are NOT null
+    this.mailService.sendOrderConfirmation(fullOrder.users, fullOrder);
+    // FIX: Trigger Realtime Notification for Warehouse HERE (Processing/Paid only)
+    this.eventsGateway.notifyNewOrder(fullOrder);
+
+    return { success: true, message: 'Payment confirmed' };
   }
 
   private async _processExpireTransaction(orderId: number) {
@@ -278,8 +288,22 @@ export class OrdersService {
     }
   }
 
-  findAll() {
-    return `This action returns all orders`;
+  async findAll(params?: { status?: string }) {
+    const { status } = params || {};
+    return this.prisma.orders.findMany({
+      where: status ? { status_code: status } : {},
+      orderBy: { created_at: 'asc' }, // FIFO: Oldest First
+      include: {
+        order_items: {
+          include: {
+            product_variants: {
+              include: { products: true }
+            }
+          }
+        },
+        addresses: true,
+      }
+    });
   }
 
   async findAllByUser(userId: number) {
@@ -314,7 +338,8 @@ export class OrdersService {
             }
           }
         },
-        addresses: true // To show address
+        addresses: true, // To show address
+        shipments: true // To show tracking info
       }
     });
 
@@ -403,5 +428,78 @@ export class OrdersService {
 
   remove(id: number) {
     return `This action removes a #${id} order`;
+  }
+
+  // --- WEBHOOK HELPERS ---
+
+  async updateStatusByTrackingCode(trackingCode: string, status: string) {
+    // Map string status to Enum or DB value if needed, or pass directly
+    const order = await this.prisma.orders.findFirst({
+      where: {
+        shipments: {
+          tracking_code: trackingCode
+        }
+      },
+      include: { users: true, shipments: true }
+    });
+
+    if (!order) {
+      console.warn(`Order with tracking/order code ${trackingCode} not found`);
+      return null;
+    }
+
+    // Trigger Shipping Email
+    if (status === 'SHIPPING' && order.users) {
+      // Run async
+      this.mailService.sendShippingUpdate(order.users, order);
+    }
+
+    return this.prisma.orders.update({
+      where: { order_id: order.order_id },
+      data: { status_code: status }
+    });
+  }
+
+  async completeOrder(trackingCode: string, realShippingFee?: number) {
+    const order = await this.prisma.orders.findFirst({
+      where: {
+        shipments: {
+          tracking_code: trackingCode
+        }
+      },
+      include: {
+        users: {
+          include: { customers: true }
+        }
+      }
+    });
+
+    if (!order) throw new NotFoundException('Order not found');
+    if (order.status_code === 'COMPLETED') return; // Idempotency check
+
+    // A. Update Order Status & Financials
+    await this.prisma.orders.update({
+      where: { order_id: order.order_id },
+      data: {
+        status_code: 'COMPLETED',
+        // payment_status: 'PAID', // Removed: Invalid field. COD paid means paid_amount = total
+        paid_amount: order.total_amount,
+        // delivered_at: new Date(), // Removed: Field does not exist in schema
+        // Sync the REAL fee from GHN if provided
+        original_shipping_fee: realShippingFee ? realShippingFee : undefined
+      }
+    });
+
+    // B. Trigger Loyalty Points
+    if (this.customersService && order.user_id) {
+      await this.customersService.addPoints(order.user_id, Number(order.total_amount));
+    }
+
+    // C. Trigger Delivery Success Email
+    if (order.users) {
+      this.mailService.sendDeliverySuccess(order.users, order, Number(order.total_amount));
+    }
+
+    return { success: true, message: `Order ${trackingCode} completed and points added.` };
   }
 }

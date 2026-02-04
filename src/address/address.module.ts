@@ -9,5 +9,6 @@ import { PrismaService } from '../prisma/prisma.service';
     imports: [HttpModule],
     controllers: [AddressController],
     providers: [GhnService, PrismaService],
+    exports: [GhnService], // Export GhnService for use in other modules
 })
 export class AddressModule { }
