@@ -1,10 +1,16 @@
-import { Controller, Post, Body, Get, Query, ParseArrayPipe, Patch, Delete, Param, ParseIntPipe } from '@nestjs/common';
+import { Controller, Post, Body, Get, Query, ParseArrayPipe, Patch, Delete, Param, ParseIntPipe, UseGuards } from '@nestjs/common';
 import { WorkSchedulesService } from './work-schedules.service';
 import { CreateWorkScheduleDto } from './dto/create-work-schedule.dto';
 import { CloneWorkScheduleDto } from './dto/clone-work-schedule.dto';
 import { GetSchedulesFilterDto } from './dto/get-schedules-filter.dto';
 import { UpdateWorkScheduleDto } from './dto/update-work-schedule.dto';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import { StoreIpGuard } from '../common/guards/store-ip.guard';
+import { Roles } from '../auth/decorators/roles.decorator';
 
+@UseGuards(JwtAuthGuard, RolesGuard, StoreIpGuard)
+@Roles('SUPER_ADMIN', 'MANAGER')
 @Controller('schedules')
 export class WorkSchedulesController {
     constructor(private readonly workSchedulesService: WorkSchedulesService) { }
