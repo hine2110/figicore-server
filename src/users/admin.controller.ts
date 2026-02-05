@@ -6,9 +6,9 @@ import { Roles } from '../auth/decorators/roles.decorator';
 
 @Controller('admin')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles('SUPER_ADMIN', 'ADMIN', 'MANAGER') 
+@Roles('SUPER_ADMIN', 'ADMIN', 'MANAGER')
 export class AdminController {
-  constructor(private readonly usersService: UsersService) {}
+  constructor(private readonly usersService: UsersService) { }
 
   @Get('requests')
   getPendingRequests() {
