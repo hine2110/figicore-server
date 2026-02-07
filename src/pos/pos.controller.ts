@@ -5,7 +5,7 @@ import { UpdatePoDto } from './dto/update-po.dto';
 
 @Controller('pos')
 export class PosController {
-  constructor(private readonly posService: PosService) {}
+  constructor(private readonly posService: PosService) { }
 
   @Post()
   create(@Body() createPoDto: CreatePoDto) {
