@@ -6,13 +6,19 @@ import {
     ForbiddenException,
     Logger,
 } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
+import { ALLOW_ANY_IP_KEY } from '../decorators/allow-any-ip.decorator';
 import { PrismaService } from '../../prisma/prisma.service';
+
 
 @Injectable()
 export class StoreIpGuard implements CanActivate {
     private readonly logger = new Logger(StoreIpGuard.name);
 
-    constructor(private readonly prisma: PrismaService) { }
+    constructor(
+        private readonly prisma: PrismaService,
+        private readonly reflector: Reflector,
+    ) { }
 
     async canActivate(context: ExecutionContext): Promise<boolean> {
         const request = context.switchToHttp().getRequest();
@@ -26,33 +32,34 @@ export class StoreIpGuard implements CanActivate {
 
         const { role_code } = user;
 
-        // 2. Bypass Roles
+        // 2. Bypass Roles (Admins, Customers, Guests)
         const bypassRoles = ['SUPER_ADMIN', 'CUSTOMER'];
         if (bypassRoles.includes(role_code)) {
             return true;
         }
 
-        // 3. Roles requiring IP Check
-        const restrictedRoles = ['MANAGER', 'STAFF_POS', 'STAFF_INVENTORY'];
-        if (!restrictedRoles.includes(role_code)) {
-            // If role is not explicitly restricted or bypassed, we default to allow? 
-            // Or block? Based on requirement, only these need check.
-            // Assuming others are safe or handled elsewhere. 
-            // For safety, let's allow, as requirement only specified restricted roles.
+        // 3. Flexible Mode: Check for @AllowAnyIp decorator
+        const allowAnyIp = this.reflector.getAllAndOverride<boolean>(ALLOW_ANY_IP_KEY, [
+            context.getHandler(),
+            context.getClass(),
+        ]);
+
+        if (allowAnyIp) {
             return true;
         }
 
-        // 4. Get Client IP
-        // Handling standard express request.ip and potential proxy headers
-        let clientIp = request.ip || request.connection.remoteAddress;
-
-        // If behind proxy (e.g., Nginx), allow x-forwarded-for validation if needed
-        // Simple normalization for IPv6 mapped IPv4
-        if (clientIp.startsWith('::ffff:')) {
-            clientIp = clientIp.substring(7);
+        // 4. Roles requiring IP Check (Strict Mode)
+        const restrictedRoles = ['MANAGER', 'STAFF_POS', 'STAFF_INVENTORY'];
+        if (!restrictedRoles.includes(role_code)) {
+            // For safety, let's allow if not restricted, as requirement only specified restricted roles.
+            return true;
         }
 
-        // 5. Query DB
+        // 5. Get Client IP & Strict Check
+        let clientIp = this.getClientIp(request);
+
+        this.logger.log(`Checking Access - User: ${user.user_id} (${role_code}) - IP: ${clientIp}`);
+
         const accessControl = await this.prisma.access_controls.findFirst({
             where: {
                 role_code: role_code,
@@ -69,5 +76,21 @@ export class StoreIpGuard implements CanActivate {
         throw new ForbiddenException(
             `Access denied. You must be connected to the Store Wifi (IP: ${clientIp}).`,
         );
+    }
+
+    private getClientIp(request: any): string {
+        let ip = request.ip;
+
+        // Xử lý IPv6 mapping sang IPv4
+        if (ip.startsWith('::ffff:')) {
+            ip = ip.substring(7);
+        }
+
+        // Xử lý Localhost IPv6 
+        if (ip === '::1') {
+            ip = '127.0.0.1';
+        }
+
+        return ip;
     }
 }
