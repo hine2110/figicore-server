@@ -5,7 +5,7 @@ import { UpdateFinanceDto } from './dto/update-finance.dto';
 
 @Controller('finance')
 export class FinanceController {
-  constructor(private readonly financeService: FinanceService) {}
+  constructor(private readonly financeService: FinanceService) { }
 
   @Post()
   create(@Body() createFinanceDto: CreateFinanceDto) {
