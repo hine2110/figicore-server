@@ -39,17 +39,18 @@
     "@prisma/client": "^5.10.2",
     "@tensorflow/tfjs": "^4.22.0",
     "@tensorflow/tfjs-backend-wasm": "^4.22.0",
+    "@types/adm-zip": "^0.5.7",
     "@types/cron": "^2.0.1",
     "@types/multer": "^2.0.0",
+    "adm-zip": "^0.5.16",
     "axios": "^1.13.2",
     "bcrypt": "^6.0.0",
     "canvas": "^3.2.1",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.3",
     "cloudinary": "^2.9.0",
-    "handlebars": "^4.7.8",
     "face-api.js": "^0.22.2",
-
+    "handlebars": "^4.7.8",
     "multer": "^2.0.2",
     "nodemailer": "^7.0.13",
     "passport": "^0.7.0",
@@ -57,11 +58,9 @@
     "passport-jwt": "^4.0.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
-
-    "socket.io": "^4.8.3"
-
-    "uuid": "^13.0.0"
-
+    "socket.io": "^4.8.3",
+    "uuid": "^13.0.0",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.2.0",
