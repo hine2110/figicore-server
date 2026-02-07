@@ -5,7 +5,7 @@ import { UpdateMarketingDto } from './dto/update-marketing.dto';
 
 @Controller('marketing')
 export class MarketingController {
-  constructor(private readonly marketingService: MarketingService) {}
+  constructor(private readonly marketingService: MarketingService) { }
 
   @Post()
   create(@Body() createMarketingDto: CreateMarketingDto) {
