@@ -74,7 +74,7 @@ import { join } from 'path';
     WorkSchedulesStaffModule,
     WebhooksModule,
     EventsModule,
-    AccessControlModule
+    CheckInModule
   ],
 
   controllers: [AppController],

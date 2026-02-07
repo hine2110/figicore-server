@@ -69,6 +69,26 @@ export class UsersController {
     return result;
   }
 
+  @Post('import-zip')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles('SUPER_ADMIN', 'MANAGER')
+  @UseInterceptors(FileInterceptor('file'))
+  async importZip(@UploadedFile() file: Express.Multer.File) {
+      if (!file) throw new BadRequestException('File is required');
+      
+      // Basic MIME check, though extensions can vary. 
+      // zip, x-zip-compressed, octet-stream are common.
+      const allowedMimes = ['application/zip', 'application/x-zip-compressed', 'application/octet-stream', 'application/x-zip'];
+      if (!allowedMimes.includes(file.mimetype)) {
+          // Fallback check on extension if mime is generic octet-stream
+          if (!file.originalname.match(/\.(zip)$/i)) {
+             throw new BadRequestException('Invalid file type. Only ZIP files are allowed.');
+          }
+      }
+
+      return this.usersService.importUsersFromZip(file);
+  }
+
   @Get('preview-email')
   @UseGuards(AuthGuard('jwt'))
   getPreviewEmail(@Query('role') role: string) {
@@ -118,13 +138,6 @@ export class UsersController {
     return this.usersService.updateStatus(id, status, reason);
   }
 
-  @Patch(':id/reset-avatar')
-  @Roles('SUPER_ADMIN', 'ADMIN', 'MANAGER')
-  @UseGuards(AuthGuard('jwt'), RolesGuard)
-  async resetAvatar(@Param('id', ParseIntPipe) id: number) {
-    await this.usersService.resetAvatar(id);
-    return { message: "Đã reset ảnh đại diện của nhân viên." };
-  }
 
   @Delete(':id')
   remove(@Param('id') id: string) {
