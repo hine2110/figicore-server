@@ -7,6 +7,7 @@ import { UpdateUserDto } from './dto/update-user.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
+import { AllowAnyIp } from '../common/decorators/allow-any-ip.decorator';
 
 @Controller('users')
 export class UsersController {
@@ -14,6 +15,7 @@ export class UsersController {
 
   @Get('profile')
   @UseGuards(AuthGuard('jwt'))
+  @AllowAnyIp()
   getProfile(@Req() req) {
     return this.usersService.getProfile(req.user.user_id);
   }
@@ -28,8 +30,8 @@ export class UsersController {
   @UseGuards(AuthGuard('jwt'))
   @UseInterceptors(FileInterceptor('file'))
   async uploadAvatar(@Req() req, @UploadedFile() file: Express.Multer.File) {
-      if (!file) throw new BadRequestException('File is required');
-      return this.usersService.updateAvatar(req.user.user_id, file);
+    if (!file) throw new BadRequestException('File is required');
+    return this.usersService.updateAvatar(req.user.user_id, file);
   }
 
   @Post('profile/request-update')
@@ -52,7 +54,7 @@ export class UsersController {
     }
 
     if (!usersList.length || (usersList.length === 1 && !usersList[0])) {
-       throw new BadRequestException("No user data provided");
+      throw new BadRequestException("No user data provided");
     }
 
     // 2. Clean Log
@@ -63,22 +65,22 @@ export class UsersController {
 
     // 4. Success Log
     console.log(`[BulkCreate] Successfully created ${result.length} employees.`);
-    
+
     return result;
   }
 
   @Get('preview-email')
   @UseGuards(AuthGuard('jwt'))
   getPreviewEmail(@Query('role') role: string) {
-      if (!role) throw new BadRequestException('Role is required');
-      return this.usersService.getPreviewEmail(role);
+    if (!role) throw new BadRequestException('Role is required');
+    return this.usersService.getPreviewEmail(role);
   }
 
   @Get('next-id')
   @UseGuards(AuthGuard('jwt'))
   getNextEmployeeId(@Query('role') role: string) {
-      if (!role) throw new BadRequestException('Role is required');
-      return this.usersService.getNextEmployeeId(role);
+    if (!role) throw new BadRequestException('Role is required');
+    return this.usersService.getNextEmployeeId(role);
   }
 
   @Post()
@@ -104,14 +106,14 @@ export class UsersController {
   @Patch(':id/status')
   @Roles('SUPER_ADMIN', 'ADMIN')
   updateStatus(
-      @Param('id', ParseIntPipe) id: number, 
-      @Body('status') status: 'ACTIVE' | 'INACTIVE' | 'BANNED',
-      @Body('reason') reason?: string,
-      @Req() req?
+    @Param('id', ParseIntPipe) id: number,
+    @Body('status') status: 'ACTIVE' | 'INACTIVE' | 'BANNED',
+    @Body('reason') reason?: string,
+    @Req() req?
   ) {
     // Prevent banning self
     if (req?.user?.user_id === id && status === 'BANNED') {
-        throw new BadRequestException('You cannot ban yourself');
+      throw new BadRequestException('You cannot ban yourself');
     }
     return this.usersService.updateStatus(id, status, reason);
   }
@@ -120,8 +122,8 @@ export class UsersController {
   @Roles('SUPER_ADMIN', 'ADMIN', 'MANAGER')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   async resetAvatar(@Param('id', ParseIntPipe) id: number) {
-      await this.usersService.resetAvatar(id);
-      return { message: "Đã reset ảnh đại diện của nhân viên." };
+    await this.usersService.resetAvatar(id);
+    return { message: "Đã reset ảnh đại diện của nhân viên." };
   }
 
   @Delete(':id')

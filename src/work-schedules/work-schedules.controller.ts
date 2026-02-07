@@ -8,6 +8,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { StoreIpGuard } from '../common/guards/store-ip.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
+import { AllowAnyIp } from '../common/decorators/allow-any-ip.decorator';
 
 @UseGuards(JwtAuthGuard, RolesGuard, StoreIpGuard)
 @Roles('SUPER_ADMIN', 'MANAGER')
@@ -41,11 +42,13 @@ export class WorkSchedulesController {
     }
 
     @Get()
+    @AllowAnyIp()
     findAll(@Query() filter: GetSchedulesFilterDto) {
         return this.workSchedulesService.findAll(filter);
     }
 
     @Get('summary')
+    @AllowAnyIp()
     getSummary(@Query() filter: GetSchedulesFilterDto) {
         return this.workSchedulesService.getSummary(filter);
     }
