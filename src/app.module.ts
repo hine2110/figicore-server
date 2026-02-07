@@ -73,7 +73,7 @@ import { join } from 'path';
     WorkSchedulesModule,
     WorkSchedulesStaffModule,
     WebhooksModule,
-    EventsModule
+    EventsModule,
     CheckInModule
   ],
 

@@ -107,6 +107,8 @@ export class MailService {
     } catch (error) {
       console.error(`[MailService] Failed to send password reset email to ${email}`, error);
     }
+  }
+
   async sendVerificationEmail(email: string, token: string) {
     const url = `http://localhost:3000/auth/verify?token=${token}`;
 
@@ -122,54 +124,21 @@ export class MailService {
     });
   }
 
-  async sendOtpEmail(email: string, otp: string) {
-    await this.mailerService.sendMail({
-      to: email,
-      subject: 'FigiCore Verification Code',
-      html: `
-        <h3>FigiCore Verification</h3>
-        <p>Your verification code is:</p>
-        <h2>${otp}</h2>
-        <p>This code expires in 5 minutes.</p>
-      `,
-    });
-  }
 
-  async sendPasswordResetEmail(email: string, name: string, resetLink: string) {
-    await this.mailerService.sendMail({
-      to: email,
-      subject: 'Reset Your Password - FigiCore',
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2>Hi ${name},</h2>
-          <p>You requested to reset your password for your FigiCore account.</p>
-          <p>Click the button below to reset your password:</p>
-          <div style="text-align: center; margin: 30px 0;">
-            <a href="${resetLink}" 
-               style="background-color: #3B82F6; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block;">
-              Reset Password
-            </a>
-          </div>
-          <p style="color: #666;">This link expires in <strong>1 hour</strong>.</p>
-          <p style="color: #666;">If you didn't request this, please ignore this email.</p>
-          <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;">
-          <p style="color: #999; font-size: 12px;">© 2026 FigiCore. All rights reserved.</p>
-        </div>
-      `,
-        });
-    }
-    async sendEmployeeActivation(to: string, tempPass: string, token: string) {
-        // Use environment variable for Frontend URL, fallback to localhost if not set (though .env is required)
-        const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-        const activationLink = `${frontendUrl}/auth/activate?token=${token}`;
 
-        await this.mailerService.sendMail({
-            to: to,
-            from: process.env.MAIL_FROM, // Ensure sender is set correctly
-            subject: 'Kích hoạt tài khoản nhân viên FigiCore',
-            html: `
+
+  async sendEmployeeActivation(to: string, tempPass: string, token: string, name: string) {
+    // Use environment variable for Frontend URL, fallback to localhost if not set (though .env is required)
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const activationLink = `${frontendUrl}/auth/activate?token=${token}`;
+
+    await this.mailerService.sendMail({
+      to: to,
+      from: process.env.MAIL_FROM, // Ensure sender is set correctly
+      subject: 'Kích hoạt tài khoản nhân viên FigiCore',
+      html: `
                 <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #eee; border-radius: 8px;">
-                    <h2 style="color: #111;">Chào mừng gia nhập đội ngũ FigiCore!</h2>
+                    <h2 style="color: #111;">Chào mừng ${name} gia nhập đội ngũ FigiCore!</h2>
                     <p>Tài khoản của bạn đã được khởi tạo. Dưới đây là thông tin đăng nhập tạm thời:</p>
                     
                     <div style="background-color: #f9f9f9; padding: 15px; border-radius: 6px; margin: 20px 0;">
@@ -190,10 +159,9 @@ export class MailService {
                     <p style="color: #999; font-size: 12px; margin-top: 30px;">Hệ thống FigiCore</p>
                 </div>
             `,
-        });
-    }
     });
   }
+
   async sendStationVerificationEmail(email: string, stationName: string, confirmLink: string, cancelLink: string) {
     await this.mailerService.sendMail({
       to: email,
