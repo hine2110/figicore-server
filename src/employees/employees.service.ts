@@ -116,7 +116,7 @@ export class EmployeesService {
                 
                 // Trigger Email
                 try {
-                    await this.mailService.sendEmployeeActivation(row.email, tempPassword, token);
+                    await this.mailService.sendEmployeeActivation(row.email, tempPassword, token, row.full_name);
                 } catch (emailErr) {
                     console.error(`Failed to send email to ${row.email}`, emailErr);
                     // We don't rollback transaction for email failure, but log it. Admin can resend.
