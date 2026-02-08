@@ -190,4 +190,39 @@ export class MailService {
       `,
     });
   }
+  async sendPreorderArrivalEmail(email: string, data: { customerName: string, productName: string, paymentLink: string, remainingAmount: number }) {
+    try {
+      await this.mailerService.sendMail({
+        to: email,
+        subject: 'Pre-order Arrival Notification - FigiCore',
+        template: './preorder-arrival', // Ensure this template exists or use HTML string if templates are not strictly checked
+        context: {
+          name: data.customerName,
+          productName: data.productName,
+          paymentLink: data.paymentLink,
+          formattedRemaining: this.formatCurrency(data.remainingAmount)
+        },
+        // Fallback HTML if template issue
+        html: `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                <h2>Good News, ${data.customerName}!</h2>
+                <p>Your pre-order for <strong>${data.productName}</strong> has arrived at our warehouse.</p>
+                <p>Please finalize your payment to have it shipped.</p>
+                <p><strong>Remaining Balance:</strong> ${this.formatCurrency(data.remainingAmount)}</p>
+                
+                <div style="text-align: center; margin: 30px 0;">
+                    <a href="${data.paymentLink}" 
+                       style="background-color: #000; color: white; padding: 12px 30px; text-decoration: none; border-radius: 6px; font-weight: bold;">
+                       Pay Now
+                    </a>
+                </div>
+                <p>This link is valid for 7 days.</p>
+            </div>
+        `
+      });
+      console.log(`[MailService] Pre-order arrival email sent to ${email}`);
+    } catch (error) {
+      console.error(`[MailService] Failed to send pre-order arrival email to ${email}`, error);
+    }
+  }
 }

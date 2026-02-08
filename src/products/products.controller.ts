@@ -56,10 +56,17 @@ export class ProductsController {
     return this.productsService.remove(+id);
   }
 
+  @Get('attributes/suggestions')
+  findAttributeSuggestions(@Query('key') key: string) {
+    return this.productsService.findAttributeSuggestions(key);
+  }
+
   @Patch(':id/toggle-status')
   toggleStatus(@Param('id') id: string) {
     return this.productsService.toggleStatus(+id);
   }
+
+
 
   @Post('gen-description')
   generateDescription(@Body() body: { productName: string, variantName?: string, userContext?: string, imageUrl?: string }) {
