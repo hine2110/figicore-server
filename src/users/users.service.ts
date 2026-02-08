@@ -4,14 +4,21 @@ import { PrismaService } from '../prisma/prisma.service';
 import { Prisma } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { CreateEmployeeDto } from '../employees/dto/create-employee.dto';
+import AdmZip from 'adm-zip';
+import * as XLSX from 'xlsx';
 
 import { UploadService } from '../upload/upload.service';
+import { JwtService } from '@nestjs/jwt';
+import { MailService } from '../mail/mail.service';
+import * as crypto from 'crypto';
 
 @Injectable()
 export class UsersService {
   constructor(
       private prisma: PrismaService,
-      private uploadService: UploadService
+      private uploadService: UploadService,
+      private jwtService: JwtService,
+      private mailService: MailService
   ) { }
 
   async updateAvatar(userId: number, file: Express.Multer.File) {
@@ -30,15 +37,6 @@ export class UsersService {
       });
   }
 
-  async resetAvatar(userId: number) {
-      const user = await this.findOne(userId);
-      if (!user) throw new NotFoundException('User not found');
-
-      return this.prisma.users.update({
-          where: { user_id: userId },
-          data: { avatar_url: null }
-      });
-  }
 
   async create(data: any) {
     return this.prisma.users.create({
@@ -229,14 +227,8 @@ export class UsersService {
   }
 
   async createBulk(dto: { users: CreateEmployeeDto[] }) {
-    const defaultPassword = 'Figi@2026';
-    const saltRounds = 10;
-    const passwordHash = await bcrypt.hash(defaultPassword, saltRounds);
-
     return this.prisma.$transaction(async (tx) => {
       const createdEmployees: any[] = [];
-      
-      // Cache to store the "Next Available Number" for each prefix
       const nextNumberCache: Record<string, number> = {};
 
       for (const userDto of dto.users) {
@@ -246,36 +238,31 @@ export class UsersService {
           else if (userDto.role_code === 'STAFF_POS') prefix = 'POS';
           else if (userDto.role_code === 'STAFF_INVENTORY') prefix = 'INV';
 
-          // 2. Calculate Next Number (Only once per prefix)
+          // 2. Calculate Next Number
           if (nextNumberCache[prefix] === undefined) {
-              // STRATEGY: Fetch ALL codes to find the true max (ignoring gaps/messy data)
               const allCodes = await tx.employees.findMany({
                   where: { employee_code: { startsWith: prefix } },
                   select: { employee_code: true }
               });
-
-              // Extract numbers: "INV-005" -> 5
               const existingNumbers = allCodes
                   .map(e => {
                       const parts = e.employee_code.split('-');
                       return parts.length > 1 ? parseInt(parts[1], 10) : 0;
                   })
                   .filter(n => !isNaN(n))
-                  .sort((a, b) => a - b); // Sort ascending
-
-              // Find max
+                  .sort((a, b) => a - b);
               const maxNum = existingNumbers.length > 0 ? existingNumbers[existingNumbers.length - 1] : 0;
               nextNumberCache[prefix] = maxNum + 1;
           } else {
-              // If already calculated in this loop, just increment
               nextNumberCache[prefix]++;
           }
-
           const currentNum = nextNumberCache[prefix];
-
-          // 3. Generate ID & Email
           const employeeCode = `${prefix}-${String(currentNum).padStart(3, '0')}`;
           const email = `${prefix.toLowerCase()}${currentNum}@figicore.com`;
+
+          // 3. Generate Auth Data
+          const tempPassword = crypto.randomBytes(4).toString('hex');
+          const passwordHash = await bcrypt.hash(tempPassword, 10);
 
           // 4. Create Records
           const newUser = await tx.users.create({
@@ -285,8 +272,8 @@ export class UsersService {
                   password_hash: passwordHash, 
                   role_code: userDto.role_code,
                   phone: userDto.phone,
-                  status_code: 'ACTIVE',
-                  is_verified: true,
+                  status_code: 'PENDING',
+                  is_verified: false,
               }
           });
 
@@ -299,6 +286,17 @@ export class UsersService {
                   start_date: userDto.start_date ? new Date(userDto.start_date) : new Date(),
               }
           });
+
+          // 5. Send Activation Email
+          const payload = { 
+              sub: newUser.user_id, 
+              email: newUser.email,
+              role_code: newUser.role_code 
+          };
+          const token = this.jwtService.sign(payload);
+          if (newUser.email) {
+            await this.mailService.sendEmployeeActivation(newUser.email, tempPassword, token, newUser.full_name);
+          }
           
           createdEmployees.push({ ...newUser, employee_details: newEmployee });
       }
@@ -421,5 +419,201 @@ export class UsersService {
 
         return updatedRequest;
     });
+  }
+
+  async importUsersFromZip(file: Express.Multer.File) {
+    const results = {
+      success: 0,
+      failed: 0,
+      errors: [] as any[],
+    };
+
+    let zip: AdmZip;
+    try {
+      zip = new AdmZip(file.buffer);
+    } catch (e) {
+      throw new BadRequestException('Could not read ZIP file');
+    }
+
+    const zipEntries = zip.getEntries();
+    
+    // 1. Find Excel File
+    const excelEntry = zipEntries.find(entry => 
+      !entry.isDirectory && 
+      !entry.entryName.includes('__MACOSX') && 
+      (entry.entryName.endsWith('.xlsx') || entry.entryName.endsWith('.xls'))
+    );
+
+    if (!excelEntry) {
+      throw new BadRequestException('ZIP must contain an Excel file (.xlsx or .xls)');
+    }
+
+    // 2. Parse Excel
+    const workbook = XLSX.read(excelEntry.getData(), { type: 'buffer' });
+    const sheetName = workbook.SheetNames[0];
+    const sheet = workbook.Sheets[sheetName];
+    const jsonData: any[] = XLSX.utils.sheet_to_json(sheet);
+
+    if (jsonData.length === 0) {
+      throw new BadRequestException('Excel file is empty');
+    }
+
+    // 3. Process Rows
+    for (const [index, row] of jsonData.entries()) {
+      const rowNum = index + 1;
+      try {
+        const rawData = row as any;
+        const fullName = rawData['Tên'] || rawData['Name'];
+        const phone = rawData['Số điện thoại']?.toString() || rawData['Phone']?.toString();
+        const email = rawData['Email'];
+        const roleInput = rawData['Role'] || rawData['Chức vụ'];
+        const salary = rawData['Lương'] || rawData['Salary'] || 0;
+        const avatarFilename = rawData['avatar_filename'] || rawData['Avatar File'];
+
+        if (!fullName || !phone || !email || !roleInput) {
+          results.failed++;
+          results.errors.push({ row: rowNum, message: 'Missing required fields (Name, Phone, Email, Role)' });
+          continue;
+        }
+
+        // Map Role
+        let roleCode = 'STAFF_POS';
+        const roleStr = roleInput.toString().toLowerCase();
+        if (roleStr.includes('quản lý') || roleStr.includes('manager')) roleCode = 'MANAGER';
+        else if (roleStr.includes('kho') || roleStr.includes('warehouse') || roleStr.includes('kiểm kho')) roleCode = 'STAFF_INVENTORY';
+
+        // Check Duplication
+        const existing = await this.prisma.users.findFirst({
+            where: { OR: [{ email: email.toString() }, { phone: phone.toString() }] }
+        });
+
+        if (existing) {
+            results.failed++;
+            results.errors.push({ row: rowNum, message: `Email (${email}) or Phone (${phone}) already exists` });
+            continue;
+        }
+
+        // 4. Handle Avatar
+        let avatarUrl: string | null = null;
+        if (avatarFilename) {
+          const targetName = avatarFilename.toString().toLowerCase().trim();
+          const imageEntry = zipEntries.find(entry => {
+             const entryName = entry.entryName.toLowerCase();
+             // Check strict equality OR if it's inside a folder (ends with /filename)
+             return entryName === targetName || entryName.endsWith('/' + targetName);
+          });
+
+          if (imageEntry) {
+             try {
+                const imageBuffer = imageEntry.getData();
+                const mockFile: any = {
+                    buffer: imageBuffer,
+                    mimetype: 'image/jpeg', 
+                    originalname: avatarFilename
+                };
+                
+                const uploadRes = await this.uploadService.uploadFile(mockFile, 'figicore_avatars');
+                avatarUrl = uploadRes.url;
+             } catch (err) {
+                console.error(`Failed to upload avatar for ${email}`, err);
+                results.errors.push({ row: rowNum, message: `Warning: Avatar upload failed - ${err.message}` });
+             }
+          } else {
+             results.errors.push({ row: rowNum, message: `Warning: Avatar file '${avatarFilename}' not found in ZIP` });
+          }
+        }
+
+        // 5. Create User Transaction
+        await this.createSingleEmployee({
+            full_name: fullName,
+            phone: phone.toString(),
+            email: email.toString(),
+            role_code: roleCode,
+            base_salary: salary,
+            avatar_url: avatarUrl
+        });
+
+        results.success++;
+
+      } catch (error) {
+         console.error(error);
+         results.failed++;
+         results.errors.push({ row: rowNum, message: error.message });
+      }
+    }
+
+    return results;
+  }
+
+  private async createSingleEmployee(data: { full_name: string, phone: string, email: string, role_code: string, base_salary: number, avatar_url: string | null }) {
+      // 1. Generate Temp Password (8 chars)
+      const tempPassword = crypto.randomBytes(4).toString('hex');
+      const passwordHash = await bcrypt.hash(tempPassword, 10);
+      
+      let prefix = 'EMP';
+      if (data.role_code === 'MANAGER') prefix = 'MGR';
+      if (data.role_code === 'STAFF_POS') prefix = 'POS';
+      if (data.role_code === 'STAFF_INVENTORY') prefix = 'INV';
+
+      const last = await this.prisma.employees.findFirst({
+          where: { employee_code: { startsWith: prefix } },
+          orderBy: { created_at: 'desc' },
+          take: 1
+      });
+      
+      let nextNum = 1;
+      if (last?.employee_code) {
+          const parts = last.employee_code.split('-');
+          if (parts.length > 1) {
+              const num = parseInt(parts[1], 10);
+              if (!isNaN(num)) nextNum = num + 1;
+          }
+      }
+      const employeeCode = `${prefix}-${String(nextNum).padStart(3, '0')}`;
+      
+      return this.prisma.$transaction(async (tx) => {
+          // 2. Create User as PENDING
+          const newUser = await tx.users.create({
+              data: {
+                  full_name: data.full_name,
+                  email: data.email,
+                  phone: data.phone,
+                  password_hash: passwordHash,
+                  role_code: data.role_code,
+                  status_code: 'PENDING', // Start as PENDING
+                  is_verified: false,
+                  avatar_url: data.avatar_url
+              }
+          });
+
+          await tx.employees.create({
+              data: {
+                  user_id: newUser.user_id,
+                  employee_code: employeeCode,
+                  base_salary: Number(data.base_salary),
+                  job_title_code: data.role_code,
+                  start_date: new Date()
+              }
+          });
+
+          // 3. Generate Activation Token
+          const payload = { 
+              sub: newUser.user_id, 
+              email: newUser.email,
+              role_code: newUser.role_code 
+          };
+          const token = this.jwtService.sign(payload);
+
+          // 4. Send Activation Email
+          // Note: using this.mailService here. Since we are inside a transaction, if email fails, 
+          // we might want to catch it to avoid rolling back the user creation? 
+          // Ideally: Email failure shouldn't block creation, but for "Activation Flow", it's critical.
+          // Let's allow it to fail the transaction so we don't have "orphan pending users".
+          if (newUser.email) {
+             await this.mailService.sendEmployeeActivation(newUser.email, tempPassword, token, newUser.full_name);
+          }
+
+          return newUser;
+      });
   }
 }

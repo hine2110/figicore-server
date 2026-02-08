@@ -1,5 +1,5 @@
 
-import { Injectable, BadRequestException, UnauthorizedException, NotFoundException } from '@nestjs/common';
+import { Injectable, BadRequestException, UnauthorizedException, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { UsersService } from '../users/users.service';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
@@ -281,43 +281,43 @@ export class AuthService {
 
   async activateAccount(data: ActivateAccountDto) {
     try {
-        // 1. Verify Token
-        const payload = await this.jwtService.verifyAsync(data.token, {
-            secret: process.env.JWT_SECRET || 'figicore_secret_key'
-        });
-        // Payload should contain { sub: userId, email: ... }
+      // 1. Verify Token
+      const payload = await this.jwtService.verifyAsync(data.token, {
+        secret: process.env.JWT_SECRET || 'figicore_secret_key'
+      });
+      // Payload should contain { sub: userId, email: ... }
 
-        const user = await this.usersService.findByEmail(payload.email);
-        if (!user) {
-            throw new NotFoundException('User not found');
-        }
+      const user = await this.usersService.findByEmail(payload.email);
+      if (!user) {
+        throw new NotFoundException('User not found');
+      }
 
-        // 2. Verify Temp Password
-        // Note: For security, we should check if they are already active?
-        // But maybe they want to reset password using this flow? 
-        // Let's assume this is strictly for first-time activation (PENDING status or just verify flow)
-        
-        const isMatch = await bcrypt.compare(data.tempPassword, user.password_hash || '');
-        if (!isMatch) {
-            throw new UnauthorizedException('Invalid temporary password');
-        }
+      // 2. Verify Temp Password
+      // Note: For security, we should check if they are already active?
+      // But maybe they want to reset password using this flow? 
+      // Let's assume this is strictly for first-time activation (PENDING status or just verify flow)
 
-        // 3. Update Password & Status
-        const newHash = await bcrypt.hash(data.newPassword, 10);
-        
-        await this.usersService.update(user.user_id, {
-            password_hash: newHash,
-            status_code: 'ACTIVE',
-            is_verified: true,
-        });
+      const isMatch = await bcrypt.compare(data.tempPassword, user.password_hash || '');
+      if (!isMatch) {
+        throw new UnauthorizedException('Invalid temporary password');
+      }
 
-        return { message: 'Account activated successfully. Please login.' };
+      // 3. Update Password & Status
+      const newHash = await bcrypt.hash(data.newPassword, 10);
+
+      await this.usersService.update(user.user_id, {
+        password_hash: newHash,
+        status_code: 'ACTIVE',
+        is_verified: true,
+      });
+
+      return { message: 'Account activated successfully. Please login.' };
 
     } catch (error) {
-        if (error.name === 'TokenExpiredError') {
-            throw new UnauthorizedException('Activation link has expired');
-        }
-        throw error;
+      if (error.name === 'TokenExpiredError') {
+        throw new UnauthorizedException('Activation link has expired');
+      }
+      throw error;
     }
   }
 }
