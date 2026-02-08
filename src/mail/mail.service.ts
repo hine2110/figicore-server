@@ -127,7 +127,7 @@ export class MailService {
 
 
 
-  async sendEmployeeActivation(to: string, tempPass: string, token: string) {
+  async sendEmployeeActivation(to: string, tempPass: string, token: string, name: string) {
     // Use environment variable for Frontend URL, fallback to localhost if not set (though .env is required)
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
     const activationLink = `${frontendUrl}/auth/activate?token=${token}`;
@@ -138,7 +138,7 @@ export class MailService {
       subject: 'Kích hoạt tài khoản nhân viên FigiCore',
       html: `
                 <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #eee; border-radius: 8px;">
-                    <h2 style="color: #111;">Chào mừng gia nhập đội ngũ FigiCore!</h2>
+                    <h2 style="color: #111;">Chào mừng ${name} gia nhập đội ngũ FigiCore!</h2>
                     <p>Tài khoản của bạn đã được khởi tạo. Dưới đây là thông tin đăng nhập tạm thời:</p>
                     
                     <div style="background-color: #f9f9f9; padding: 15px; border-radius: 6px; margin: 20px 0;">
