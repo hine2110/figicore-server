@@ -32,6 +32,7 @@ import { WorkSchedulesStaffModule } from './work-schedules-forStaff/work-schedul
 import { WebhooksModule } from './webhooks/webhooks.module';
 import { EventsModule } from './events/events.module';
 import { CheckInModule } from './check-in/check-in.module';
+import { WalletModule } from './wallet/wallet.module';
 
 
 import { ServeStaticModule } from '@nestjs/serve-static';
@@ -73,8 +74,11 @@ import { join } from 'path';
     WorkSchedulesModule,
     WorkSchedulesStaffModule,
     WebhooksModule,
-    EventsModule
-    CheckInModule
+    EventsModule,
+    WebhooksModule,
+    EventsModule,
+    CheckInModule,
+    WalletModule
   ],
 
   controllers: [AppController],

@@ -49,7 +49,6 @@
     "cloudinary": "^2.9.0",
     "handlebars": "^4.7.8",
     "face-api.js": "^0.22.2",
-
     "multer": "^2.0.2",
     "nodemailer": "^7.0.13",
     "passport": "^0.7.0",
@@ -57,11 +56,8 @@
     "passport-jwt": "^4.0.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
-
-    "socket.io": "^4.8.3"
-
+    "socket.io": "^4.8.3",
     "uuid": "^13.0.0"
-
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.2.0",
