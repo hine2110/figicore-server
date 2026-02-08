@@ -19,6 +19,28 @@ class MediaAssetDto {
     url: string;
 }
 
+class ProductVariantPreorderConfigDto {
+    @IsNumber()
+    @Min(0)
+    deposit_amount: number;
+
+    @IsNumber()
+    @Min(0)
+    full_price: number;
+
+    @IsNumber()
+    @Min(0)
+    total_slots: number;
+
+    @IsNumber()
+    @Min(1)
+    max_qty_per_user: number;
+
+    @IsString()
+    @IsOptional()
+    release_date?: string;
+}
+
 class ProductVariantDto {
     @IsString()
     @IsNotEmpty()
@@ -42,15 +64,13 @@ class ProductVariantDto {
     @Min(0)
     stock_defect?: number;
 
-    @IsNumber()
-    @IsOptional()
-    @Min(0)
-    deposit_amount?: number; // <--- NEW: Variant Level Deposit
+    // REMOVED old separate fields -> Moved to preorder_config
+    // deposit_amount, preorder_slot_limit
 
-    @IsNumber()
     @IsOptional()
-    @Min(0)
-    preorder_slot_limit?: number;
+    @ValidateNested()
+    @Type(() => ProductVariantPreorderConfigDto)
+    preorder_config?: ProductVariantPreorderConfigDto;
 
     @IsNumber()
     @IsOptional()
@@ -85,6 +105,19 @@ class ProductVariantDto {
     @IsString()
     @IsOptional()
     description?: string;
+
+    @IsString()
+    @IsOptional()
+    scale?: string;
+
+    @IsString()
+    @IsOptional()
+    material?: string;
+
+    @IsArray()
+    @IsOptional()
+    @IsString({ each: true })
+    included_items?: string[];
 }
 
 class ProductBlindboxDto {
@@ -161,7 +194,7 @@ export class CreateProductDto {
     @IsOptional()
     media_urls?: string[];
 
-    @ValidateIf(o => o.type_code === ProductType.RETAIL)
+    @ValidateIf(o => o.type_code === ProductType.RETAIL || o.type_code === ProductType.PREORDER)
     @IsArray()
     @ValidateNested({ each: true })
     @Type(() => ProductVariantDto)

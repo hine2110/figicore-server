@@ -12,4 +12,8 @@ export class CreateCartDto {
     @IsInt()
     @IsOptional()
     variantId?: number;
+
+    @IsString()
+    @IsOptional()
+    paymentOption?: string;
 }
