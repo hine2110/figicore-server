@@ -43,13 +43,11 @@ export class AddressController {
             insurance_value: body.total_amount
         });
 
-        // 3. Apply Subsidy Logic (Business Rule: Plan A)
-        let customerFee = 30000; // Flat Rate: 30k default
+        // 3. Apply Subsidy Logic (Business Rule: Fixed 30k)
+        const customerFee = 30000; // Flat Rate: 30k default (Strict)
 
-        // Policy: Free Ship for orders >= 5.000.000 VND
-        if (body.total_amount >= 5000000) {
-            customerFee = 0;
-        }
+        // Policy: Free Ship > 5M is currently DISABLED by request.
+        // if (body.total_amount >= 5000000) { customerFee = 0; }
 
         // 4. Return BOTH values
         // 'fee': What the user sees (Subsidized)
