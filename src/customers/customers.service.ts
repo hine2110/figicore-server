@@ -133,44 +133,51 @@ export class CustomersService {
 
   }
 
-  async addPoints(userId: number, amountSpent: number) {
-    // 1 Point per 100,000 VND (Example Rule)
+  async updateCustomerStats(userId: number, amountSpent: number) {
+    console.log(`[DEBUG] updateCustomerStats for User ${userId}. Amount Spent: ${amountSpent}`);
+
+    // 1 Point per 100,000 VND
     const pointsEarned = Math.floor(amountSpent / 100000);
 
-    if (pointsEarned > 0) {
-      // Update Customer Points & Spend
-      const customer = await this.prisma.customers.upsert({
-        where: { user_id: userId },
-        update: {
-          loyalty_points: { increment: pointsEarned },
-          total_spent: { increment: amountSpent }
-        },
-        create: {
-          user_id: userId,
-          loyalty_points: pointsEarned,
-          total_spent: amountSpent,
-          current_rank_code: 'BRONZE'
-        }
-      });
-
-      // Check & Update Rank
-      // Rank Rules: Bronze < 100, Silver < 500, Gold < 2000, Diamond >= 2000
-      const currentPoints = customer.loyalty_points || 0;
-      let newRank = 'BRONZE';
-
-      if (currentPoints >= 2000) newRank = 'DIAMOND';
-      else if (currentPoints >= 500) newRank = 'GOLD';
-      else if (currentPoints >= 100) newRank = 'SILVER';
-
-      if (newRank !== customer.current_rank_code) {
-        await this.prisma.customers.update({
-          where: { user_id: userId },
-          data: { current_rank_code: newRank }
-        });
+    // Update Customer Points & Spend
+    const customer = await this.prisma.customers.upsert({
+      where: { user_id: userId },
+      update: {
+        loyalty_points: { increment: pointsEarned },
+        total_spent: { increment: amountSpent }
+      },
+      create: {
+        user_id: userId,
+        loyalty_points: pointsEarned,
+        total_spent: amountSpent,
+        current_rank_code: 'BRONZE'
       }
-      return { success: true, pointsAdded: pointsEarned, newRank };
+    });
+
+    // Check & Update Rank based on Total Spent
+    const totalSpent = Number(customer.total_spent);
+    let newRank = 'BRONZE';
+
+    if (totalSpent >= 50000000) newRank = 'DIAMOND';      // 50M
+    else if (totalSpent >= 10000000) newRank = 'GOLD';    // 10M
+    else if (totalSpent >= 2000000) newRank = 'SILVER';   // 2M
+
+    let rankUpgraded = false;
+    if (newRank !== customer.current_rank_code) {
+      await this.prisma.customers.update({
+        where: { user_id: userId },
+        data: { current_rank_code: newRank }
+      });
+      rankUpgraded = true;
     }
-    return { success: true, pointsAdded: 0 };
+
+    return {
+      success: true,
+      pointsAdded: pointsEarned,
+      newTotalSpent: totalSpent,
+      rankUpgraded,
+      newRank
+    };
   }
 }
 
