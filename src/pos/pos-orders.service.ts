@@ -1,7 +1,9 @@
+
 import { Injectable, BadRequestException, NotFoundException, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreatePosOrderDto } from './dto/create-pos-order.dto';
 import { RegisterCustomerDto } from './dto/register-customer.dto';
+import { SyncPosOrderDto } from './dto/sync-pos-order.dto';
 import * as bcrypt from 'bcrypt';
 
 import { CustomersService } from '../customers/customers.service';
@@ -14,7 +16,7 @@ export class PosOrdersService {
     ) { }
 
     /**
-     * Tạo đơn hàng POS
+     * Tạo đơn hàng POS (Finalize)
      */
     async createOrder(staffId: number, dto: CreatePosOrderDto) {
         // 1. Validate session đang mở
@@ -27,9 +29,7 @@ export class PosOrdersService {
         });
 
         if (!activeSession) {
-            throw new BadRequestException(
-                'Không có ca làm việc đang mở. Vui lòng mở ca trước khi tạo đơn.',
-            );
+            throw new BadRequestException('Không có ca làm việc đang mở. Vui lòng mở ca trước khi tạo đơn.');
         }
 
         // 2. Validate và lấy thông tin variants
@@ -39,50 +39,20 @@ export class PosOrdersService {
                 variant_id: { in: variantIds },
                 deleted_at: null,
             },
-            include: {
-                products: true,
-            },
+            include: { products: true },
         });
 
-        if (variants.length !== variantIds.length) {
-            throw new BadRequestException('Một số sản phẩm không tồn tại');
-        }
-
-        // 3. Kiểm tra tồn kho
-        for (const item of dto.items) {
-            const variant = variants.find(v => v.variant_id === item.variant_id);
-            if (!variant) continue;
-
-            if (variant.stock_available < item.quantity) {
-                throw new BadRequestException(
-                    `Sản phẩm "${variant.products.name} - ${variant.option_name}" chỉ còn ${variant.stock_available} trong kho`,
-                );
-            }
-
-            // Kiểm tra product phải ACTIVE
-            if (variant.products.status_code !== 'ACTIVE') {
-                throw new BadRequestException(
-                    `Sản phẩm "${variant.products.name}" không còn hoạt động`,
-                );
-            }
-        }
-
-        // 4. Tính toán tổng tiền
+        // 3. Tính toán tổng tiền
         let totalAmount = 0;
         const orderItems = dto.items.map(item => {
             const variant = variants.find(v => v.variant_id === item.variant_id);
-            if (!variant) {
-                throw new BadRequestException('Variant not found');
-            }
-
+            if (!variant) throw new BadRequestException('Sản phẩm không tồn tại');
             const unitPrice = Number(variant.price);
-            const quantity = item.quantity;
-            const totalPrice = unitPrice * quantity;
+            const totalPrice = unitPrice * item.quantity;
             totalAmount += totalPrice;
-
             return {
                 variant_id: variant.variant_id,
-                quantity,
+                quantity: item.quantity,
                 unit_price: unitPrice,
                 total_price: totalPrice,
             };
@@ -90,192 +60,169 @@ export class PosOrdersService {
 
         const discountAmount = dto.discount_amount || 0;
         const finalAmount = totalAmount - discountAmount;
-
-        // 5. Tạo order code
         const orderCode = this.generateOrderCode();
 
-        // 6. Transaction: Tạo đơn + Trừ kho
+        // 4. Transaction: Tạo đơn + Finalize Sync
         const order = await this.prisma.$transaction(async (tx) => {
-            // Tạo đơn hàng
-            const newOrder = await tx.orders.create({
-                data: {
-                    order_code: orderCode,
-                    user_id: dto.user_id || null,
+            // Kiểm tra xem có đơn hàng PENDING nào đang sync không
+            let existingOrder = await tx.orders.findFirst({
+                where: {
                     session_id: activeSession.session_id,
                     created_by_staff_id: staffId,
+                    status_code: 'PENDING',
                     channel_code: 'POS',
-                    payment_method_code: dto.payment_method_code,
-                    total_amount: finalAmount,
-                    paid_amount: finalAmount,
-                    discount_amount: discountAmount,
-                    shipping_fee: 0,
-                    status_code: 'COMPLETED', // POS luôn COMPLETED ngay
-                    note: dto.note,
+                    deleted_at: null
                 },
+                include: { order_items: true }
             });
 
-            // Tạo order items
-            for (const item of orderItems) {
-                await tx.order_items.create({
+            let newOrder;
+            if (existingOrder) {
+                // Finalize existing pending order
+                newOrder = await tx.orders.update({
+                    where: { order_id: existingOrder.order_id },
                     data: {
-                        order_id: newOrder.order_id,
-                        variant_id: item.variant_id,
-                        quantity: item.quantity,
-                        unit_price: item.unit_price,
-                        total_price: item.total_price,
+                        user_id: dto.user_id || null,
+                        payment_method_code: dto.payment_method_code,
+                        total_amount: finalAmount,
+                        paid_amount: finalAmount,
+                        discount_amount: discountAmount,
+                        status_code: 'COMPLETED',
+                        note: dto.note,
+                        updated_at: new Date(),
                     },
                 });
-            }
-
-            // Trừ kho
-            for (const item of orderItems) {
-                // Trừ stock_available
-                await tx.product_variants.update({
-                    where: { variant_id: item.variant_id },
+            } else {
+                // Tạo mới hoàn toàn (Trường hợp skip sync)
+                newOrder = await tx.orders.create({
                     data: {
-                        stock_available: {
-                            decrement: item.quantity,
+                        order_code: orderCode,
+                        user_id: dto.user_id || null,
+                        session_id: activeSession.session_id,
+                        created_by_staff_id: staffId,
+                        channel_code: 'POS',
+                        payment_method_code: dto.payment_method_code,
+                        total_amount: finalAmount,
+                        paid_amount: finalAmount,
+                        discount_amount: discountAmount,
+                        shipping_fee: 0,
+                        status_code: 'COMPLETED',
+                        note: dto.note,
+                    },
+                });
+
+                for (const item of orderItems) {
+                    await tx.order_items.create({
+                        data: {
+                            order_id: newOrder.order_id,
+                            variant_id: item.variant_id,
+                            quantity: item.quantity,
+                            unit_price: item.unit_price,
+                            total_price: item.total_price,
                         },
-                    },
-                });
+                    });
 
-                // Note: Inventory tracking done via order_items
-                // Stock changes are recorded through order history
+                    await tx.product_variants.update({
+                        where: { variant_id: item.variant_id },
+                        data: { stock_available: { decrement: item.quantity } },
+                    });
+                }
             }
 
-            // Lấy đơn hàng đầy đủ
             return tx.orders.findUnique({
                 where: { order_id: newOrder.order_id },
                 include: {
                     order_items: {
                         include: {
-                            product_variants: {
-                                include: {
-                                    products: true,
-                                },
-                            },
+                            product_variants: { include: { products: true } },
                         },
                     },
                 },
             });
         });
 
-        // 7. Cập nhật hạng thành viên và điểm thưởng (nếu có khách hàng)
+        // 5. Cập nhật hạng thành viên
         if (dto.user_id) {
             try {
                 await this.customersService.updateCustomerStats(dto.user_id, Number(finalAmount));
-            } catch (error) {
-                console.error('Failed to update customer stats:', error);
-                // Fail silently, don't block order creation
+            } catch (e) {
+                console.error('Failed to update customer stats', e);
             }
         }
 
-        return {
-            success: true,
-            message: 'Tạo đơn hàng thành công',
-            data: order,
-        };
+        return { success: true, message: 'Tạo đơn hàng thành công', data: order };
     }
 
-    /**
-     * Generate order code: POS-YYYYMMDD-XXXX
-     */
     private generateOrderCode(): string {
         const date = new Date();
-        const year = date.getFullYear();
-        const month = String(date.getMonth() + 1).padStart(2, '0');
-        const day = String(date.getDate()).padStart(2, '0');
+        const dateStr = date.toISOString().slice(0, 10).replace(/-/g, '');
         const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
-
-        return `POS-${year}${month}${day}-${random}`;
+        return `POS-${dateStr}-${random}`;
     }
 
-    /**
-     * Lấy danh sách đơn hàng từ session hiện tại
-     */
-    async getOrdersByStaff(staffId: number) {
-        // Lấy session đang mở (nếu có)
+    async cancelOrder(staffId: number, orderId: number) {
+        return this.prisma.$transaction(async (tx) => {
+            const order = await tx.orders.findUnique({
+                where: { order_id: orderId },
+                include: { order_items: true },
+            });
+
+            if (!order) throw new NotFoundException('Không tìm thấy đơn hàng');
+            if (order.status_code === 'CANCELLED') return { success: true, message: 'Đã hủy' };
+
+            // Trả kho
+            for (const item of order.order_items) {
+                await tx.product_variants.update({
+                    where: { variant_id: item.variant_id },
+                    data: { stock_available: { increment: item.quantity } },
+                });
+            }
+
+            const updatedOrder = await tx.orders.update({
+                where: { order_id: orderId },
+                data: { status_code: 'CANCELLED', updated_at: new Date() },
+            });
+
+            return { success: true, message: 'Hủy đơn hàng thành công', data: updatedOrder };
+        });
+    }
+
+    async getOrdersByStaff(staffId: number, page: number = 1, limit: number = 12) {
         const activeSession = await this.prisma.pos_sessions.findFirst({
-            where: {
-                user_id: staffId,
-                status_code: 'OPEN',
-                deleted_at: null,
-            },
+            where: { user_id: staffId, status_code: 'OPEN', deleted_at: null },
         });
 
-        if (!activeSession) {
-            // Không có session đang mở, trả về mảng rỗng
-            return {
-                success: true,
-                count: 0,
-                data: [],
-            };
-        }
+        if (!activeSession) return { success: true, count: 0, data: [], total: 0, page: 1, limit };
 
-        // Lấy tất cả orders của session này
-        const orders = await this.prisma.orders.findMany({
-            where: {
-                session_id: activeSession.session_id,
-                channel_code: 'POS',
-                deleted_at: null,
-            },
-            include: {
-                order_items: {
-                    include: {
-                        product_variants: {
-                            include: {
-                                products: true,
-                            },
-                        },
-                    },
-                },
-                users: {
-                    select: {
-                        user_id: true,
-                        full_name: true,
-                        phone: true,
-                        email: true,
-                    },
-                },
-                employees: {
-                    select: {
-                        users: {
-                            select: {
-                                full_name: true
-                            }
-                        }
-                    }
-                }
-            },
-            orderBy: {
-                created_at: 'desc', // Mới nhất lên đầu
-            },
-        });
+        const where = { session_id: activeSession.session_id, channel_code: 'POS', deleted_at: null, status_code: { not: 'PENDING' } };
 
-        return {
-            success: true,
-            count: orders.length,
-            data: orders,
-        };
+        const [orders, total] = await Promise.all([
+            this.prisma.orders.findMany({
+                where,
+                include: {
+                    order_items: { include: { product_variants: { include: { products: true } } } },
+                    users: true,
+                    employees: { include: { users: true } }
+                },
+                orderBy: { created_at: 'desc' },
+                skip: (page - 1) * limit,
+                take: limit,
+            }),
+            this.prisma.orders.count({ where })
+        ]);
+
+        return { success: true, count: orders.length, data: orders, total, page, limit };
     }
 
-    /**
-     * Tìm kiếm khách hàng (cho POS)
-     */
-    async searchCustomer(query: { phone?: string; email?: string; q?: string }) {
+    async searchCustomer(query: { phone?: string; email?: string; q?: string; page?: number; limit?: number }) {
+        const page = Number(query.page) || 1;
+        const limit = Number(query.limit) || 15;
         const { phone, email, q } = query;
+        const where: any = { deleted_at: null, role_code: 'CUSTOMER' };
 
-        // Build search conditions
-        const where: any = {
-            deleted_at: null,
-            role_code: 'CUSTOMER', // Only search customers
-        };
-
-        if (phone) {
-            where.phone = { contains: phone };
-        } else if (email) {
-            where.email = { contains: email, mode: 'insensitive' };
-        } else if (q) {
+        if (phone) where.phone = { contains: phone };
+        else if (email) where.email = { contains: email, mode: 'insensitive' };
+        else if (q) {
             where.OR = [
                 { phone: { contains: q } },
                 { email: { contains: q, mode: 'insensitive' } },
@@ -283,219 +230,114 @@ export class PosOrdersService {
             ];
         }
 
-        const customers = await this.prisma.users.findMany({
-            where,
-            select: {
-                user_id: true,
-                full_name: true,
-                phone: true,
-                email: true,
-                customers: {
-                    select: {
-                        current_rank_code: true,
-                        total_spent: true,
-                        loyalty_points: true
-                    }
-                },
-                _count: {
-                    select: {
-                        orders: true
-                    }
-                }
-            },
-            orderBy: {
-                created_at: 'desc'
-            },
-            take: 20, // Limit results
-        });
+        const [customers, total] = await Promise.all([
+            this.prisma.users.findMany({
+                where,
+                include: { customers: true, wallets: true, _count: { select: { orders: true } } },
+                orderBy: { created_at: 'desc' },
+                skip: (page - 1) * limit,
+                take: limit,
+            }),
+            this.prisma.users.count({ where })
+        ]);
 
-        const formattedCustomers = customers.map(customer => ({
-            ...customer,
-            total_orders: customer._count.orders,
+        const formatted = customers.map(c => ({
+            ...c,
+            loyalty_points: c.customers?.loyalty_points || 0,
+            rank_code: c.customers?.current_rank_code || 'BRONZE',
+            total_spent: c.customers?.total_spent || 0,
+            wallet_balance: Number(c.wallets?.balance_available || 0),
+            total_orders: c._count.orders,
             _count: undefined
         }));
 
-        return {
-            success: true,
-            count: formattedCustomers.length,
-            data: formattedCustomers,
-        };
+        return { success: true, count: formatted.length, data: formatted, total, page, limit };
     }
 
-    /**
-     * Lấy lịch sử mua hàng của khách hàng
-     */
     async getCustomerOrderHistory(customerId: number, staffId: number) {
-        // 1. Lấy thông tin khách hàng
         const customer = await this.prisma.users.findUnique({
             where: { user_id: customerId, deleted_at: null },
-            include: {
-                customers: true  // Correct relation name from schema
-            }
+            include: { customers: true, wallets: true }
         });
 
-        if (!customer) {
-            throw new NotFoundException('Không tìm thấy khách hàng');
-        }
+        if (!customer) throw new NotFoundException('Khách hàng không tồn tại');
 
-        // 2. Lấy tất cả đơn hàng của khách (không giới hạn session)
         const orders = await this.prisma.orders.findMany({
-            where: {
-                user_id: customerId,
-                deleted_at: null,
-                channel_code: 'POS' // Chỉ lấy đơn POS
-            },
+            where: { user_id: customerId, deleted_at: null, channel_code: 'POS', status_code: { not: 'PENDING' } },
             include: {
-                order_items: {
-                    include: {
-                        product_variants: {
-                            include: {
-                                products: true  // Get products through product_variants
-                            }
-                        }
-                    }
-                },
-                employees: {
-                    select: {
-                        users: {
-                            select: {
-                                full_name: true
-                            }
-                        }
-                    }
-                }
+                order_items: { include: { product_variants: { include: { products: true } } } },
+                users: true,
+                employees: { include: { users: true } }
             },
             orderBy: { created_at: 'desc' },
-            take: 50 // Giới hạn 50 đơn gần nhất để tránh quá tải
+            take: 50
         });
 
-        // 3. Tính thống kê
-        const totalOrders = orders.length;
-        const totalSpent = orders.reduce((sum, order) => sum + Number(order.total_amount), 0);
+        // Calculate Statistics
+        const completedOrders = orders.filter(o => o.status_code === 'COMPLETED');
+        const totalSpent = completedOrders.reduce((sum, o) => sum + Number(o.total_amount), 0);
+        const totalOrders = completedOrders.length;
         const avgOrderValue = totalOrders > 0 ? totalSpent / totalOrders : 0;
 
-        const firstOrder = orders[orders.length - 1];
-        const lastOrder = orders[0];
-
-        // 4. Phân tích top sản phẩm
-        const productStats: Record<number, { product_name: string; quantity: number; total_spent: number }> = {};
-
+        // Calculate Top Products (Favorites)
+        const productStats = new Map<number, { product_name: string, quantity: number, total_spent: number }>();
         orders.forEach(order => {
             order.order_items.forEach(item => {
-                const productId = item.variant_id;  // Use variant_id as key
-                if (!productStats[productId]) {
-                    productStats[productId] = {
-                        product_name: item.product_variants.products.name,
-                        quantity: 0,
-                        total_spent: 0
-                    };
-                }
-                productStats[productId].quantity += item.quantity;
-                productStats[productId].total_spent += Number(item.total_price);  // Use total_price from schema
+                const variant = item.product_variants;
+                if (!variant) return;
+                const productId = variant.product_id;
+                const current = productStats.get(productId) || {
+                    product_name: variant.products.name,
+                    quantity: 0,
+                    total_spent: 0
+                };
+                current.quantity += item.quantity;
+                current.total_spent += Number(item.total_price);
+                productStats.set(productId, current);
             });
         });
 
-        const topProducts = Object.values(productStats)
-            .sort((a, b) => b.total_spent - a.total_spent)
+        const topProducts = Array.from(productStats.values())
+            .sort((a, b) => b.quantity - a.quantity)
             .slice(0, 5);
 
-        // 5. Format orders
-        const formattedOrders = orders.map(order => ({
-            order_id: order.order_id,
-            order_code: order.order_code,
-            created_at: order.created_at,
-            total_amount: Number(order.total_amount),
-            discount_amount: Number(order.discount_amount),
-            payment_method_code: order.payment_method_code,
-            status_code: order.status_code,
-            employees: order['employees'] ? {
-                users: {
-                    full_name: order['employees'].users.full_name
-                }
-            } : undefined,
-            users: { // Attach customer info to each order for consistency
-                user_id: customer.user_id,
-                full_name: customer.full_name,
-                phone: customer.phone,
-                email: customer.email
-            },
-            order_items: order.order_items.map(item => ({
-                order_item_id: item.item_id,
-                quantity: item.quantity,
-                unit_price: Number(item.unit_price),
-                total_price: Number(item.total_price),
-                product_variants: {
-                    sku: item.product_variants.sku,
-                    option_name: item.product_variants.option_name,
-                    products: {
-                        name: item.product_variants.products.name
-                    }
-                }
-            }))
-        }));
+        // Flatten customer object for frontend
+        const formattedCustomer = {
+            ...customer,
+            loyalty_points: customer.customers?.loyalty_points || 0,
+            rank_code: customer.customers?.current_rank_code || 'BRONZE',
+            total_spent: customer.customers?.total_spent || 0,
+            wallet_balance: Number(customer.wallets?.balance_available || 0),
+            address: '', // Placeholder
+        };
 
         return {
             success: true,
             data: {
-                customer: {
-                    user_id: customer.user_id,
-                    full_name: customer.full_name,
-                    email: customer.email,
-                    phone: customer.phone,
-                    rank_code: customer.customers?.current_rank_code || 'BRONZE',
-                    rank_name: customer.customers?.current_rank_code || 'BRONZE'  // Will format on frontend
-                },
+                customer: formattedCustomer,
+                orders,
                 statistics: {
-                    total_orders: totalOrders,
                     total_spent: totalSpent,
-                    avg_order_value: avgOrderValue,
-                    first_order_date: firstOrder?.created_at || null,
-                    last_order_date: lastOrder?.created_at || null
+                    total_orders: totalOrders,
+                    avg_order_value: avgOrderValue
                 },
-                top_products: topProducts,
-                orders: formattedOrders
+                top_products: topProducts
             }
         };
     }
 
-    /**
-     * Đăng ký khách hàng nhanh tại quầy POS
-     */
     async registerCustomer(dto: RegisterCustomerDto) {
-        // 1. Kiểm tra số điện thoại đã tồn tại chưa
-        const existingPhone = await this.prisma.users.findFirst({
-            where: {
-                phone: dto.phone,
-                deleted_at: null
-            }
+        const existing = await this.prisma.users.findFirst({
+            where: { phone: dto.phone, deleted_at: null }
         });
+        if (existing) throw new ConflictException('Số điện thoại đã tồn tại');
 
-        if (existingPhone) {
-            throw new ConflictException('Số điện thoại đã được đăng ký');
-        }
-
-        // 2. Kiểm tra email đã tồn tại chưa (nếu có)
-        if (dto.email) {
-            const existingEmail = await this.prisma.users.findFirst({
-                where: {
-                    email: dto.email,
-                    deleted_at: null
-                }
-            });
-
-            if (existingEmail) {
-                throw new ConflictException('Email đã được đăng ký');
-            }
-        }
-
-        // 3. Tạo mật khẩu ngẫu nhiên cho khách hàng
         const randomPassword = Math.random().toString(36).slice(-16);
         const hashedPassword = await bcrypt.hash(randomPassword, 10);
 
-        // 4. Tạo user mới
         const user = await this.prisma.users.create({
             data: {
-                email: dto.email || `customer${Date.now()}@temp.figicore.com`,
+                email: dto.email || `pos${Date.now()}@figicore.com`,
                 password_hash: hashedPassword,
                 full_name: dto.full_name,
                 phone: dto.phone,
@@ -504,30 +346,100 @@ export class PosOrdersService {
             }
         });
 
-        // 5. Tạo customer profile
-        const customer = await this.prisma.customers.create({
-            data: {
-                user_id: user.user_id,
-                current_rank_code: 'BRONZE',
-                total_spent: 0,
-                loyalty_points: 0
-            }
+        const profile = await this.prisma.customers.create({
+            data: { user_id: user.user_id, current_rank_code: 'BRONZE' }
         });
 
-        // 6. Trả về thông tin khách hàng
-        return {
-            success: true,
-            message: 'Đăng ký thành công',
-            data: {
-                user_id: user.user_id,
-                full_name: user.full_name,
-                phone: user.phone,
-                email: dto.email || null,
-                customers: {
-                    current_rank_code: customer.current_rank_code,
-                    total_spent: customer.total_spent
+        return { success: true, data: { ...user, customers: profile } };
+    }
+
+    async getActiveOrder(staffId: number) {
+        const activeSession = await this.prisma.pos_sessions.findFirst({
+            where: { user_id: staffId, status_code: 'OPEN', deleted_at: null },
+            orderBy: { opened_at: 'desc' }
+        });
+        if (!activeSession) return null;
+
+        return this.prisma.orders.findFirst({
+            where: { session_id: activeSession.session_id, created_by_staff_id: staffId, status_code: 'PENDING', channel_code: 'POS', deleted_at: null },
+            include: { order_items: { include: { product_variants: { include: { products: true } } } }, users: true }
+        });
+    }
+
+    async syncActiveOrder(staffId: number, dto: SyncPosOrderDto) {
+        const activeSession = await this.prisma.pos_sessions.findFirst({
+            where: { user_id: staffId, status_code: 'OPEN', deleted_at: null },
+            orderBy: { opened_at: 'desc' }
+        });
+        if (!activeSession) throw new BadRequestException('Session POS đóng');
+
+        return await this.prisma.$transaction(async (tx) => {
+            let order = await tx.orders.findFirst({
+                where: { session_id: activeSession.session_id, created_by_staff_id: staffId, status_code: 'PENDING', channel_code: 'POS', deleted_at: null },
+                include: { order_items: true }
+            });
+
+            if (!order && dto.items.length === 0) return null;
+
+            if (order && dto.items.length === 0) {
+                for (const item of order.order_items) {
+                    await tx.product_variants.update({ where: { variant_id: item.variant_id }, data: { stock_available: { increment: item.quantity } } });
+                }
+                await tx.order_items.deleteMany({ where: { order_id: order.order_id } });
+                await tx.orders.delete({ where: { order_id: order.order_id } });
+                return null;
+            }
+
+            if (!order) {
+                order = await tx.orders.create({
+                    data: {
+                        order_code: this.generateOrderCode(),
+                        session_id: activeSession.session_id,
+                        created_by_staff_id: staffId,
+                        user_id: dto.user_id || null,
+                        channel_code: 'POS',
+                        total_amount: 0,
+                        status_code: 'PENDING',
+                        note: dto.note
+                    },
+                    include: { order_items: true }
+                });
+            } else {
+                await tx.orders.update({ where: { order_id: order.order_id }, data: { user_id: dto.user_id || null, note: dto.note } });
+            }
+
+            const currentMap = new Map(dto.items.map(i => [i.variant_id, i.quantity]));
+            const dbMap = new Map(order.order_items.map(i => [i.variant_id, i.quantity]));
+
+            for (const [vId, nQty] of currentMap) {
+                const oQty = dbMap.get(vId) || 0;
+                const delta = nQty - oQty;
+                if (delta === 0) continue;
+
+                await tx.product_variants.update({ where: { variant_id: vId }, data: { stock_available: { decrement: delta } } });
+                const variant = await tx.product_variants.findUnique({ where: { variant_id: vId } });
+                if (!variant) throw new BadRequestException(`Variant ${vId} not found`);
+                const price = Number(variant.price);
+
+                if (oQty > 0) {
+                    await tx.order_items.updateMany({ where: { order_id: order.order_id, variant_id: vId }, data: { quantity: nQty, total_price: price * nQty } });
+                } else {
+                    await tx.order_items.create({ data: { order_id: order.order_id, variant_id: vId, quantity: nQty, unit_price: price, total_price: price * nQty } });
                 }
             }
-        };
+
+            for (const item of order.order_items) {
+                if (!currentMap.has(item.variant_id)) {
+                    await tx.product_variants.update({ where: { variant_id: item.variant_id }, data: { stock_available: { increment: item.quantity } } });
+                    await tx.order_items.delete({ where: { item_id: item.item_id } });
+                }
+            }
+
+            const finalItems = await tx.order_items.findMany({ where: { order_id: order.order_id } });
+            const total = finalItems.reduce((sum, i) => sum + Number(i.total_price), 0);
+            const discount = dto.discount_amount || 0;
+
+            return tx.orders.update({ where: { order_id: order.order_id }, data: { total_amount: total - discount, discount_amount: discount }, include: { order_items: true } });
+        });
     }
 }
