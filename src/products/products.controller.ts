@@ -26,9 +26,20 @@ export class ProductsController {
    */
   @Get('pos-search')
   posSearch(
-    @Query() query: { q?: string, category_id?: string, brand_id?: string }
+    @Query() query: {
+      q?: string,
+      category_id?: string,
+      brand_id?: string,
+      min_price?: string,
+      max_price?: string,
+      sort?: string
+    }
   ) {
-    return this.productsService.posSearch(query);
+    return this.productsService.posSearch({
+      ...query,
+      min_price: query.min_price ? Number(query.min_price) : undefined,
+      max_price: query.max_price ? Number(query.max_price) : undefined
+    });
   }
 
   @Get()
