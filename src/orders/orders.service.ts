@@ -955,7 +955,7 @@ export class OrdersService {
 
     // B. Trigger Loyalty Points
     if (this.customersService && order.user_id) {
-      await this.customersService.addPoints(order.user_id, Number(order.total_amount));
+      await this.customersService.updateCustomerStats(order.user_id, Number(order.total_amount));
     }
 
     // C. Trigger Delivery Success Email
