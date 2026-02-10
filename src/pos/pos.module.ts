@@ -4,7 +4,10 @@ import { PosController } from './pos.controller';
 import { PosOrdersController } from './pos-orders.controller';
 import { PosOrdersService } from './pos-orders.service';
 
+import { CustomersModule } from '../customers/customers.module';
+
 @Module({
+  imports: [CustomersModule],
   controllers: [PosController, PosOrdersController],
   providers: [PosService, PosOrdersService],
 })

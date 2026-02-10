@@ -270,7 +270,7 @@ export class PosService {
     // 6. Low stock alerts (products with stock < 5)
     const lowStockProducts = await this.prisma.product_variants.findMany({
       where: {
-        stock_available: { lt: 5, gt: 0 },
+        stock_available: { lte: 5, gt: 0 },
         deleted_at: null,
         products: {
           status_code: 'ACTIVE',
