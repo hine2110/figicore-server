@@ -26,4 +26,5 @@ export class CreatePosOrderDto {
     @IsPositive()
     @Type(() => Number)
     discount_amount?: number;
+
 }

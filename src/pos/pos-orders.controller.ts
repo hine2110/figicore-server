@@ -3,6 +3,7 @@ import { PosOrdersService } from './pos-orders.service';
 import { CreatePosOrderDto } from './dto/create-pos-order.dto';
 import { SearchCustomerDto } from './dto/search-customer.dto';
 import { RegisterCustomerDto } from './dto/register-customer.dto';
+import { SyncPosOrderDto } from './dto/sync-pos-order.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PosService } from './pos.service';
 
@@ -38,9 +39,13 @@ export class PosOrdersController {
      * GET /pos/orders
      */
     @Get()
-    async getOrders(@Request() req) {
+    async getOrders(
+        @Request() req,
+        @Query('page') page: string = '1',
+        @Query('limit') limit: string = '12',
+    ) {
         const staffId = req.user.userId;
-        return this.posOrdersService.getOrdersByStaff(staffId);
+        return this.posOrdersService.getOrdersByStaff(staffId, parseInt(page.toString()), parseInt(limit.toString()));
     }
 
     /**
@@ -50,9 +55,29 @@ export class PosOrdersController {
     @Post()
     @UsePipes(new ValidationPipe({ transform: true }))
     async createOrder(@Request() req, @Body() dto: CreatePosOrderDto) {
-        console.log(`[DEBUG_CONTROLLER] createOrder Payload. UserID: ${dto.user_id}, Type: ${typeof dto.user_id}`);
         const staffId = req.user.userId;
         return this.posOrdersService.createOrder(staffId, dto);
+    }
+
+    /**
+     * Lấy đơn hàng PENDING hiện tại (cho Sync)
+     * GET /pos/orders/active
+     */
+    @Get('active')
+    async getActiveOrder(@Request() req) {
+        const staffId = req.user.userId;
+        return this.posOrdersService.getActiveOrder(staffId);
+    }
+
+    /**
+     * Đồng bộ giỏ hàng thời gian thực
+     * POST /pos/orders/sync
+     */
+    @Post('sync')
+    @UsePipes(new ValidationPipe({ transform: true }))
+    async syncActiveOrder(@Request() req, @Body() dto: SyncPosOrderDto) {
+        const staffId = req.user.userId;
+        return this.posOrdersService.syncActiveOrder(staffId, dto);
     }
 
     /**
@@ -66,6 +91,16 @@ export class PosOrdersController {
     ) {
         const staffId = req.user.userId;
         return this.posOrdersService.getCustomerOrderHistory(parseInt(userId), staffId);
+    }
+
+    /**
+     * Hủy đơn hàng POS
+     * POST /pos/orders/:id/cancel
+     */
+    @Post(':id/cancel')
+    async cancelOrder(@Param('id') id: string, @Request() req) {
+        const staffId = req.user.userId;
+        return this.posOrdersService.cancelOrder(staffId, parseInt(id));
     }
 
     /**

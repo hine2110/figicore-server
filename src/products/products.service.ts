@@ -253,8 +253,8 @@ export class ProductsService {
    * POS Product Search - Tìm kiếm sản phẩm cho POS
    * Trả về variants với tồn kho, giá, hình ảnh
    */
-  async posSearch(query: { q?: string, category_id?: string, brand_id?: string }) {
-    const { q, category_id, brand_id } = query;
+  async posSearch(query: { q?: string, category_id?: string, brand_id?: string, min_price?: number, max_price?: number, sort?: string }) {
+    const { q, category_id, brand_id, min_price, max_price, sort } = query;
 
     // Build where clause cho products
     const productWhere: Prisma.productsWhereInput = {
@@ -272,8 +272,33 @@ export class ProductsService {
         category_id ? { category_id: Number(category_id) } : {},
         // Filter by brand
         brand_id ? { brand_id: Number(brand_id) } : {},
+        // Filter by Price Range (at least one variant matches)
+        (min_price !== undefined || max_price !== undefined) ? {
+          product_variants: {
+            some: {
+              price: {
+                gte: min_price || 0,
+                lte: max_price || 9999999999
+              }
+            }
+          }
+        } : {}
       ]
     };
+
+    // Sorting Logic
+    let orderBy: any = { name: 'asc' }; // Default POS sort
+    if (sort === 'newest') {
+      orderBy = { created_at: 'desc' };
+    } else if (sort === 'name_asc') {
+      orderBy = { name: 'asc' };
+    } else if (sort === 'name_desc') {
+      orderBy = { name: 'desc' };
+    }
+    // Note: price sorting for grouped products is complex via SQL, 
+    // we'll handle basic text/date sorting here. 
+    // If sort is price_asc/desc, we might need a different approach or client-side sort for the grouped result.
+    // Let's stick to these for now.
 
     // Lấy products với variants
     const products = await this.prisma.products.findMany({
@@ -287,59 +312,83 @@ export class ProductsService {
         categories: true,
         brands: true,
       },
-      orderBy: {
-        name: 'asc',
-      },
+      orderBy: orderBy,
     });
 
-    // Flatten variants và format response cho POS
-    const posItems = products.flatMap(product =>
-      product.product_variants.map(variant => {
-        // Lấy thumbnail từ media_urls của product hoặc media_assets của variant
-        let thumbnail = null;
+    // Group by product and return with variants array
+    const groupedProducts = products.map(product => {
+      // Get all active variants with stock > 0
+      const activeVariants = product.product_variants
+        .filter(v => (v.stock_available || 0) > 0)
+        .map(variant => {
+          // Get thumbnail from media_urls or media_assets
+          let thumbnail = null;
 
-        // Ưu tiên lấy từ product.media_urls
-        if (product.media_urls && typeof product.media_urls === 'object') {
-          const mediaArray = Array.isArray(product.media_urls)
-            ? product.media_urls
-            : (product.media_urls as any).images || [];
-          thumbnail = mediaArray[0] || null;
-        }
-
-        // Nếu không có, lấy từ variant.media_assets
-        if (!thumbnail && variant.media_assets) {
-          try {
-            const assets = typeof variant.media_assets === 'string'
-              ? JSON.parse(variant.media_assets)
-              : variant.media_assets;
-            thumbnail = Array.isArray(assets) && assets[0] ? assets[0] : null;
-          } catch (e) {
-            thumbnail = null;
+          // Try product.media_urls first
+          if (product.media_urls && typeof product.media_urls === 'object') {
+            const mediaArray = Array.isArray(product.media_urls)
+              ? product.media_urls
+              : (product.media_urls as any).images || [];
+            thumbnail = mediaArray[0] || null;
           }
-        }
 
-        return {
-          variant_id: variant.variant_id,
-          sku: variant.sku,
-          product_name: product.name,
-          option_name: variant.option_name,
-          price: Number(variant.price),
-          current_stock: variant.stock_available || 0,
-          thumbnail: thumbnail,
-          category: product.categories?.name || 'Uncategorized',
-          brand: product.brands?.name || null,
-          product_type: product.type_code,
-        };
-      })
-    );
+          // Fallback to variant.media_assets
+          if (!thumbnail && variant.media_assets) {
+            try {
+              const assets = typeof variant.media_assets === 'string'
+                ? JSON.parse(variant.media_assets)
+                : variant.media_assets;
+              thumbnail = Array.isArray(assets) && assets[0] ? assets[0] : null;
+            } catch (e) {
+              thumbnail = null;
+            }
+          }
 
-    // Chỉ trả về items có stock > 0
-    const availableItems = posItems.filter(item => item.current_stock > 0);
+          return {
+            variant_id: variant.variant_id,
+            sku: variant.sku,
+            option_name: variant.option_name,
+            price: Number(variant.price),
+            current_stock: variant.stock_available || 0,
+            thumbnail: thumbnail,
+          };
+        });
+
+      // Only return products that have at least one available variant
+      if (activeVariants.length === 0) return null;
+
+      // Use first variant's thumbnail for product thumbnail
+      const productThumbnail = activeVariants[0]?.thumbnail || null;
+
+      return {
+        product_id: product.product_id,
+        product_name: product.name,
+        thumbnail: productThumbnail,
+        category: product.categories?.name || 'Uncategorized',
+        brand: product.brands?.name || null,
+        product_type: product.type_code,
+        variants: activeVariants,
+      };
+    }).filter((p): p is NonNullable<typeof p> => p !== null); // Remove null entries and narrow type
+
+    // Sorting grouped products
+    const sortedProducts = groupedProducts.sort((a, b) => {
+      if (sort === 'price_asc') {
+        const minA = Math.min(...a.variants.map((v: any) => v.price));
+        const minB = Math.min(...b.variants.map((v: any) => v.price));
+        return minA - minB;
+      } else if (sort === 'price_desc') {
+        const maxA = Math.max(...a.variants.map((v: any) => v.price));
+        const maxB = Math.max(...b.variants.map((v: any) => v.price));
+        return maxB - maxA;
+      }
+      return 0; // Already sorted by name/date via SQL if sort is name_* or newest
+    });
 
     return {
       success: true,
-      count: availableItems.length,
-      data: availableItems,
+      count: sortedProducts.length,
+      data: sortedProducts,
     };
   }
 
