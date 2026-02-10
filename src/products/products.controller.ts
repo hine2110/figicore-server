@@ -20,6 +20,17 @@ export class ProductsController {
     return this.productsService.quickCreate(body);
   }
 
+  /**
+   * POS Product Search - Tìm kiếm sản phẩm cho POS
+   * GET /products/pos-search?q=...&category_id=...
+   */
+  @Get('pos-search')
+  posSearch(
+    @Query() query: { q?: string, category_id?: string, brand_id?: string }
+  ) {
+    return this.productsService.posSearch(query);
+  }
+
   @Get()
   findAll(
     @Query() query: { search?: string, brand_id?: string, category_id?: string, series_id?: string, type_code?: string, min_price?: string, max_price?: string, sort?: string }

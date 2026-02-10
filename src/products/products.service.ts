@@ -249,6 +249,101 @@ export class ProductsService {
     });
   }
 
+  /**
+   * POS Product Search - Tìm kiếm sản phẩm cho POS
+   * Trả về variants với tồn kho, giá, hình ảnh
+   */
+  async posSearch(query: { q?: string, category_id?: string, brand_id?: string }) {
+    const { q, category_id, brand_id } = query;
+
+    // Build where clause cho products
+    const productWhere: Prisma.productsWhereInput = {
+      status_code: 'ACTIVE', // Chỉ lấy sản phẩm active
+      deleted_at: null,
+      AND: [
+        // Search by product name or SKU
+        q ? {
+          OR: [
+            { name: { contains: q, mode: 'insensitive' } },
+            { product_variants: { some: { sku: { contains: q, mode: 'insensitive' } } } }
+          ]
+        } : {},
+        // Filter by category
+        category_id ? { category_id: Number(category_id) } : {},
+        // Filter by brand
+        brand_id ? { brand_id: Number(brand_id) } : {},
+      ]
+    };
+
+    // Lấy products với variants
+    const products = await this.prisma.products.findMany({
+      where: productWhere,
+      include: {
+        product_variants: {
+          where: {
+            deleted_at: null,
+          }
+        },
+        categories: true,
+        brands: true,
+      },
+      orderBy: {
+        name: 'asc',
+      },
+    });
+
+    // Flatten variants và format response cho POS
+    const posItems = products.flatMap(product =>
+      product.product_variants.map(variant => {
+        // Lấy thumbnail từ media_urls của product hoặc media_assets của variant
+        let thumbnail = null;
+
+        // Ưu tiên lấy từ product.media_urls
+        if (product.media_urls && typeof product.media_urls === 'object') {
+          const mediaArray = Array.isArray(product.media_urls)
+            ? product.media_urls
+            : (product.media_urls as any).images || [];
+          thumbnail = mediaArray[0] || null;
+        }
+
+        // Nếu không có, lấy từ variant.media_assets
+        if (!thumbnail && variant.media_assets) {
+          try {
+            const assets = typeof variant.media_assets === 'string'
+              ? JSON.parse(variant.media_assets)
+              : variant.media_assets;
+            thumbnail = Array.isArray(assets) && assets[0] ? assets[0] : null;
+          } catch (e) {
+            thumbnail = null;
+          }
+        }
+
+        return {
+          variant_id: variant.variant_id,
+          sku: variant.sku,
+          product_name: product.name,
+          option_name: variant.option_name,
+          price: Number(variant.price),
+          current_stock: variant.stock_available || 0,
+          thumbnail: thumbnail,
+          category: product.categories?.name || 'Uncategorized',
+          brand: product.brands?.name || null,
+          product_type: product.type_code,
+        };
+      })
+    );
+
+    // Chỉ trả về items có stock > 0
+    const availableItems = posItems.filter(item => item.current_stock > 0);
+
+    return {
+      success: true,
+      count: availableItems.length,
+      data: availableItems,
+    };
+  }
+
+
   async findSimilar(id: number) {
     const product = await this.prisma.products.findUnique({
       where: { product_id: id },

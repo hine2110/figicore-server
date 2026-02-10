@@ -1,34 +1,45 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, UseGuards, Request } from '@nestjs/common';
 import { PosService } from './pos.service';
-import { CreatePoDto } from './dto/create-po.dto';
-import { UpdatePoDto } from './dto/update-po.dto';
+import { OpenSessionDto } from './dto/open-session.dto';
+import { CloseSessionDto } from './dto/close-session.dto';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
 @Controller('pos')
+@UseGuards(JwtAuthGuard)
 export class PosController {
   constructor(private readonly posService: PosService) { }
 
-  @Post()
-  create(@Body() createPoDto: CreatePoDto) {
-    return this.posService.create(createPoDto);
+  /**
+   * Mở ca làm việc mới
+   * POST /pos/sessions/open
+   */
+  @Post('sessions/open')
+  async openSession(@Request() req, @Body() dto: OpenSessionDto) {
+    const userId = req.user.userId;
+    return this.posService.openSession(userId, dto);
   }
 
-  @Get()
-  findAll() {
-    return this.posService.findAll();
+  /**
+   * Đóng ca làm việc
+   * POST /pos/sessions/:id/close
+   */
+  @Post('sessions/:id/close')
+  async closeSession(
+    @Request() req,
+    @Param('id') sessionId: string,
+    @Body() dto: CloseSessionDto,
+  ) {
+    const userId = req.user.userId;
+    return this.posService.closeSession(+sessionId, userId, dto);
   }
 
-  @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.posService.findOne(+id);
-  }
-
-  @Patch(':id')
-  update(@Param('id') id: string, @Body() updatePoDto: UpdatePoDto) {
-    return this.posService.update(+id, updatePoDto);
-  }
-
-  @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.posService.remove(+id);
+  /**
+   * Lấy ca làm việc hiện tại
+   * GET /pos/sessions/current
+   */
+  @Get('sessions/current')
+  async getCurrentSession(@Request() req) {
+    const userId = req.user.userId;
+    return this.posService.getCurrentSession(userId);
   }
 }
