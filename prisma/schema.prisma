@@ -98,6 +98,7 @@ model cart_items {
   cart_id          Int
   variant_id       Int
   quantity         Int?             @default(1)
+  payment_option   String           @default("DEPOSIT") @db.VarChar(20) // 'DEPOSIT' or 'FULL_PAYMENT'
   created_at       DateTime?        @default(now()) @db.Timestamp(6)
   updated_at       DateTime?        @default(now()) @db.Timestamp(6)
   deleted_at       DateTime?        @db.Timestamp(6)
@@ -289,38 +290,42 @@ model order_status_history {
 }
 
 model orders {
-  order_id              Int                    @id @default(autoincrement())
-  order_code            String                 @unique @db.VarChar(50)
-  user_id               Int?
-  session_id            Int?
-  created_by_staff_id   Int?
-  shipping_address_id   Int?
-  promotion_id          Int?
-  total_amount          Decimal                @db.Decimal(15, 2)
-  paid_amount           Decimal?               @default(0) @db.Decimal(15, 2)
-  discount_amount       Decimal?               @default(0) @db.Decimal(15, 2)
-  shipping_fee          Decimal?               @default(0) @db.Decimal(15, 2)
-  original_shipping_fee Decimal?               @default(0) @db.Decimal(15, 2)
-  payment_deadline      DateTime?              @db.Timestamp(6)
-  channel_code          String                 @db.VarChar(20)
-  payment_method_code   String?                @db.VarChar(20)
-  status_code           String?                @default("PENDING") @db.VarChar(50)
-  packing_video_urls    Json?
-  packed_at             DateTime?              @db.Timestamp(6)
-  note                  String?
-  created_at            DateTime?              @default(now()) @db.Timestamp(6)
-  updated_at            DateTime?              @default(now()) @db.Timestamp(6)
-  deleted_at            DateTime?              @db.Timestamp(6)
-  feedbacks             feedbacks[]
-  order_items           order_items[]
-  order_status_history  order_status_history[]
-  employees             employees?             @relation(fields: [created_by_staff_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
-  promotions            promotions?            @relation(fields: [promotion_id], references: [promotion_id], onDelete: NoAction, onUpdate: NoAction)
-  pos_sessions          pos_sessions?          @relation(fields: [session_id], references: [session_id], onDelete: NoAction, onUpdate: NoAction)
-  addresses             addresses?             @relation(fields: [shipping_address_id], references: [address_id], onDelete: NoAction, onUpdate: NoAction)
-  users                 users?                 @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
-  return_requests       return_requests[]
-  shipments             shipments?
+  order_id             Int                    @id @default(autoincrement())
+  order_code           String                 @unique @db.VarChar(50)
+  user_id              Int?
+  session_id           Int?
+  created_by_staff_id  Int?
+  shipping_address_id  Int?
+  promotion_id         Int?
+  total_amount         Decimal                @db.Decimal(15, 2)
+  paid_amount          Decimal?               @default(0) @db.Decimal(15, 2)
+  discount_amount      Decimal?               @default(0) @db.Decimal(15, 2)
+  shipping_fee         Decimal?               @default(0) @db.Decimal(15, 2)
+  original_shipping_fee Decimal?              @default(0) @db.Decimal(15, 2)
+  payment_deadline     DateTime?              @db.Timestamp(6)
+  channel_code         String                 @db.VarChar(20)
+  payment_method_code  String?                @db.VarChar(20)
+  payment_ref_code     String?                @db.VarChar(50) // NEW: Group Payment Reference
+  status_code          String?                @default("PENDING") @db.VarChar(50)
+  packing_video_urls   Json?
+  packed_at            DateTime?              @db.Timestamp(6)
+  note                 String?
+  created_at           DateTime?              @default(now()) @db.Timestamp(6)
+  updated_at           DateTime?              @default(now()) @db.Timestamp(6)
+  deleted_at           DateTime?              @db.Timestamp(6)
+  feedbacks            feedbacks[]
+  order_items          order_items[]
+  order_status_history order_status_history[]
+  employees            employees?             @relation(fields: [created_by_staff_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  promotions           promotions?            @relation(fields: [promotion_id], references: [promotion_id], onDelete: NoAction, onUpdate: NoAction)
+  pos_sessions         pos_sessions?          @relation(fields: [session_id], references: [session_id], onDelete: NoAction, onUpdate: NoAction)
+  addresses            addresses?             @relation(fields: [shipping_address_id], references: [address_id], onDelete: NoAction, onUpdate: NoAction)
+  users                users?                 @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  return_requests      return_requests[]
+  shipments            shipments?
+  // Inverse Relations
+  contract_deposit    preorder_contracts[] @relation("DepositOrderRel")
+  contract_final      preorder_contracts[] @relation("FinalOrderRel")
 
   @@index([order_code], map: "idx_orders_code")
 }
@@ -368,15 +373,55 @@ model product_blindboxes {
   products    products  @relation(fields: [product_id], references: [product_id], onDelete: Cascade, onUpdate: NoAction)
 }
 
-model product_preorders {
-  product_id   Int       @id
-  release_date DateTime? @db.Timestamp(6)
-  policy_note  String?   @db.Text
-  is_active    Boolean?  @default(true)
-  created_at   DateTime? @default(now()) @db.Timestamp(6)
-  updated_at   DateTime? @default(now()) @db.Timestamp(6)
-  deleted_at   DateTime? @db.Timestamp(6)
-  products     products  @relation(fields: [product_id], references: [product_id], onDelete: Cascade, onUpdate: NoAction)
+// 1. Unified Config Table (Replaces definitions & legacy preorders)
+model product_preorder_configs {
+  config_id       Int       @id @default(autoincrement())
+  variant_id      Int       @unique 
+  product_variants product_variants @relation(fields: [variant_id], references: [variant_id], onDelete: Cascade)
+
+  // Business Rules
+  deposit_amount  Decimal   @default(0) @db.Decimal(15, 2)
+  full_price      Decimal   @default(0) @db.Decimal(15, 2)
+  release_date    DateTime? @db.Timestamp(6)
+  
+  // Inventory & Slots
+  total_slots     Int       @default(0)
+  sold_slots      Int       @default(0)
+  max_qty_per_user Int      @default(1)
+  
+  // The "Virtual Warehouse" for arriving stock
+  stock_held      Int       @default(0) 
+
+  created_at      DateTime? @default(now())
+  updated_at      DateTime? @default(now())
+}
+
+// 2. Optimized Contract (Direct Links, No Payment Table)
+model preorder_contracts {
+  contract_id     Int       @id @default(autoincrement())
+  order_code      String    @unique @db.VarChar(50) // Generate: "PO-{OrderId}-{VariantId}"
+  
+  user_id         Int
+  variant_id      Int
+  quantity        Int       @default(1)
+  status_code     String    @default("WAITING_DEPOSIT") 
+
+  // Direct Order Links
+  deposit_order_id      Int?   
+  final_payment_order_id Int?  
+
+  // Financials
+  deposit_amount_paid   Decimal? @default(0)
+  remaining_amount      Decimal? @default(0)
+
+  // Relations
+  users            users            @relation(fields: [user_id], references: [user_id])
+  product_variants product_variants @relation(fields: [variant_id], references: [variant_id])
+  deposit_order    orders?          @relation("DepositOrderRel", fields: [deposit_order_id], references: [order_id])
+  final_order      orders?          @relation("FinalOrderRel", fields: [final_payment_order_id], references: [order_id])
+  
+  created_at      DateTime? @default(now())
+  updated_at      DateTime? @default(now())
 }
 
 model products {
@@ -397,7 +442,7 @@ model products {
   auctions           auctions[]
   feedbacks          feedbacks[]
   product_blindboxes product_blindboxes?
-  product_preorders  product_preorders?
+
   product_variants   product_variants[]
   brands             brands?             @relation(fields: [brand_id], references: [brand_id], onDelete: NoAction, onUpdate: NoAction)
   categories         categories?         @relation(fields: [category_id], references: [category_id], onDelete: NoAction, onUpdate: NoAction)
@@ -407,34 +452,56 @@ model products {
 }
 
 model product_variants {
-  variant_id          Int       @id @default(autoincrement())
-  product_id          Int
-  sku                 String    @unique @db.VarChar(50)
-  option_name         String    @db.VarChar(100)
-  price               Decimal   @default(0) @db.Decimal(15, 2)
-  deposit_amount      Decimal?  @db.Decimal(15, 2) // NEW: Variant-level deposit
-  preorder_slot_limit Int?      @default(0) // Virtual Stock limit for Pre-order
-  stock_available     Int       @default(0)
-  stock_defect        Int       @default(0)
-  weight_g            Int       @default(200) // Cân nặng (Gram). Default nhẹ nhất để tránh lỗi 0g
-  length_cm           Int       @default(10) // Chiều dài (cm)
-  width_cm            Int       @default(10) // Chiều rộng (cm)
-  height_cm           Int       @default(10) // Chiều cao (cm)
-  barcode             String?   @unique @db.VarChar(50)
-  description         String?   @db.Text
-  media_assets        Json?     @default("[]")
-  created_at          DateTime? @default(now()) @db.Timestamp(6)
-  updated_at          DateTime? @default(now()) @db.Timestamp(6)
-  deleted_at          DateTime? @db.Timestamp(6)
+  variant_id              Int                       @id @default(autoincrement())
+  product_id              Int
+  sku                     String                    @unique @db.VarChar(50)
+  option_name             String                    @db.VarChar(100)
+  
+  // RETAIL FIELDS
+  price                   Decimal                   @default(0) @db.Decimal(15, 2) // Retail Price
+  stock_available         Int                       @default(0) // Physical Stock
+  stock_defect            Int                       @default(0)
+  
+  // PHYSICAL SPECS
+  weight_g                Int                       @default(200)
+  length_cm               Int                       @default(10)
+  width_cm                Int                       @default(10)
+  height_cm               Int                       @default(10)
+  
+  // NEW SPECS
+  scale                   String?                   @db.VarChar(50)   // VD: 1/144, 1/100, Non-scale
+  material                String?                   @db.VarChar(100)  // PVC, ABS, Resin
+  included_items          Json?                     // ["Base", "Decal", "LED Unit"]
+  
+  // METADATA
+  barcode                 String?                   @unique @db.VarChar(50)
+  description             String?                   @db.Text
+  media_assets            Json?                     @default("[]")
+  
+  // TIMESTAMPS
+  created_at              DateTime?                 @default(now()) @db.Timestamp(6)
+  updated_at              DateTime?                 @default(now()) @db.Timestamp(6)
+  deleted_at              DateTime?                 @db.Timestamp(6)
 
+  // RELATIONS
   products                products                  @relation(fields: [product_id], references: [product_id], onDelete: Cascade, onUpdate: NoAction)
+  
+  // NEW: Extension Relation
+  product_preorder_configs product_preorder_configs? // Unified Pre-order Config
+  preorder_contracts       preorder_contracts[]      // Contracts linked to this variant
+  
+  // ... Keep existing relations (cart_items, order_items, etc.)
   cart_items              cart_items[]
   inventory_logs          inventory_logs[]
   inventory_receipt_items inventory_receipt_items[]
   order_items             order_items[]
 
+
   @@index([sku], map: "idx_variants_sku")
 }
+
+// NEW TABLE
+
 
 model profile_update_requests {
   request_id   Int       @id @default(autoincrement())
@@ -661,6 +728,7 @@ model users {
   return_requests         return_requests[]
   user_login_logs         user_login_logs[]
   user_vouchers           user_vouchers[]
+  preorder_contracts      preorder_contracts[]
   wallets                 wallets?
 }
 
