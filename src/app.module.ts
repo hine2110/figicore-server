@@ -32,7 +32,6 @@ import { WorkSchedulesStaffModule } from './work-schedules-forStaff/work-schedul
 import { WebhooksModule } from './webhooks/webhooks.module';
 import { EventsModule } from './events/events.module';
 import { CheckInModule } from './check-in/check-in.module';
-import { ProductPromotionsModule } from './product-promotions/product-promotions.module';
 
 
 import { ServeStaticModule } from '@nestjs/serve-static';
