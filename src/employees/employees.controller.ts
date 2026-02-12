@@ -8,7 +8,7 @@ import { Roles } from '../auth/decorators/roles.decorator';
 
 @Controller('employees')
 export class EmployeesController {
-  constructor(private readonly employeesService: EmployeesService) {}
+  constructor(private readonly employeesService: EmployeesService) { }
 
   @Post()
   @UseGuards(JwtAuthGuard, RolesGuard)
