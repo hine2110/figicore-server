@@ -196,7 +196,7 @@ export class ProductsService {
     });
   }
 
-  findAll(params: { search?: string, brand_id?: number, category_id?: number, series_id?: number, type_code?: any, min_price?: number, max_price?: number, sort?: string }) {
+  async findAll(params: { search?: string, brand_id?: number, category_id?: number, series_id?: number, type_code?: any, min_price?: number, max_price?: number, sort?: string }) {
     const { search, brand_id, category_id, series_id, type_code, min_price, max_price, sort } = params;
 
     const where: Prisma.productsWhereInput = {
@@ -239,7 +239,7 @@ export class ProductsService {
     }
     // Note: price_asc and price_desc are handled in the frontend
 
-    return this.prisma.products.findMany({
+    const products = await this.prisma.products.findMany({
       where,
       include: {
         brands: true,
@@ -247,10 +247,14 @@ export class ProductsService {
         series: true,
         product_variants: true,
         product_blindboxes: true,
-        product_preorders: true
+        product_preorders: true,
+        product_promotions: true,
       },
       orderBy
     });
+
+    // [NEW] Apply Dynamic Pricing Logic
+    return products.map(product => this.calculatePromotionalPrice(product));
   }
 
   async findSimilar(id: number) {
@@ -321,7 +325,8 @@ export class ProductsService {
           series: true,
           product_variants: true,
           product_blindboxes: true,
-          product_preorders: true
+          product_preorders: true,
+          product_promotions: true
         }
       });
       similarProducts = [...similarProducts, ...byCategory];
@@ -340,10 +345,52 @@ export class ProductsService {
         product_preorders: true,
         brands: true,
         categories: true,
-        series: true
+        series: true,
+        product_promotions: true,
       }
     });
     if (!product) throw new BadRequestException('Product not found');
+    
+    // [NEW] Apply Dynamic Pricing Logic
+    return this.calculatePromotionalPrice(product);
+  }
+
+  // [NEW] Helper: Dynamic Pricing Logic
+  private calculatePromotionalPrice(product: any) {
+    const promo = product.product_promotions;
+    const now = new Date();
+
+    // Check if promotion is valid
+    const isValidPromo = promo && 
+      promo.is_active && 
+      new Date(promo.start_date) <= now && 
+      new Date(promo.end_date) >= now;
+
+    // Apply to Variants
+    if (product.product_variants) {
+      product.product_variants = product.product_variants.map((variant: any) => {
+        let final_price = Number(variant.price);
+        let discount_amount = 0;
+
+        if (isValidPromo) {
+          if (promo.type_code === 'PERCENTAGE') {
+            discount_amount = final_price * (Number(promo.value) / 100);
+            final_price = final_price - discount_amount;
+          } else if (promo.type_code === 'FIXED_AMOUNT') {
+            discount_amount = Number(promo.value);
+            final_price = Math.max(0, final_price - discount_amount);
+          }
+        }
+
+        return {
+          ...variant,
+          final_price,
+          is_on_sale: isValidPromo,
+          discount_percentage: isValidPromo && promo.type_code === 'PERCENTAGE' ? Number(promo.value) : 0,
+        };
+      });
+    }
+
     return product;
   }
 

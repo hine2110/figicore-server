@@ -85,7 +85,7 @@ export class CartService {
             product_variants: {
               include: {
                 products: {
-                  include: { product_preorders: true, product_blindboxes: true }
+                  include: { product_preorders: true, product_blindboxes: true, product_promotions: true }
                 }
               }
             }
@@ -125,7 +125,8 @@ export class CartService {
         image: getFirstImage(product.media_urls),
         type_code: product.type_code,
         sku: variant.sku,
-        maxStock: variant.stock_available
+        maxStock: variant.stock_available,
+        promotion: (product as any).product_promotions
       };
     });
 
