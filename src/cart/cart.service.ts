@@ -152,7 +152,7 @@ export class CartService {
               include: {
                 product_preorder_configs: true, // Included for correct price calculation
                 products: {
-                  include: { product_blindboxes: true }
+                  include: { product_preorders: true, product_blindboxes: true, product_promotions: true }
                 }
               }
             }
@@ -212,11 +212,7 @@ export class CartService {
         payment_option: (item as any).payment_option,
         sku: variant.sku,
         maxStock: variant.stock_available,
-
-        // PRICING FIELDS (Critical for Frontend)
-        deposit_amount: Number(variant.product_preorder_configs?.deposit_amount || 0),
-        full_price: Number(variant.product_preorder_configs?.full_price || variant.price),
-        max_qty_per_user: Number(variant.product_preorder_configs?.max_qty_per_user || 0)
+        promotion: (product as any).product_promotions
       };
     });
 
