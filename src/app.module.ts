@@ -31,9 +31,8 @@ import { WorkSchedulesModule } from './work-schedules/work-schedules.module';
 import { WorkSchedulesStaffModule } from './work-schedules-forStaff/work-schedules-staff.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
 import { EventsModule } from './events/events.module';
-import { CheckInModule } from './check-in/check-in.module';
-
-
+import { WalletModule } from './wallet/wallet.module';
+import { BlindboxesModule } from './blindboxes/blindboxes.module';
 import { ServeStaticModule } from '@nestjs/serve-static';
 import { join } from 'path';
 
@@ -74,8 +73,8 @@ import { join } from 'path';
     WorkSchedulesStaffModule,
     WebhooksModule,
     EventsModule,
-    CheckInModule,
-    ProductPromotionsModule
+    WalletModule,
+    BlindboxesModule
   ],
 
   controllers: [AppController],
