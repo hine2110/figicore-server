@@ -210,7 +210,7 @@ export class ProductsService {
     });
   }
 
-  findAll(params: { search?: string, brand_id?: number, category_id?: number, series_id?: number, type_code?: any, min_price?: number, max_price?: number, sort?: string }) {
+  async findAll(params: { search?: string, brand_id?: number, category_id?: number, series_id?: number, type_code?: any, min_price?: number, max_price?: number, sort?: string }) {
     const { search, brand_id, category_id, series_id, type_code, min_price, max_price, sort } = params;
 
     const where: Prisma.productsWhereInput = {
@@ -254,21 +254,167 @@ export class ProductsService {
     }
     // Note: price_asc and price_desc are handled in the frontend
 
-    return this.prisma.products.findMany({
+    const products = await this.prisma.products.findMany({
       where,
       include: {
         brands: true,
         categories: true,
         series: true,
-        product_variants: {
-          where: { deleted_at: null },
-          include: { product_preorder_configs: true }
-        },
-        product_blindboxes: true
+        product_variants: true,
+        product_blindboxes: true,
+        product_preorders: true,
+        product_promotions: true,
       },
       orderBy
     });
+
+    // [NEW] Apply Dynamic Pricing Logic
+    return products.map(product => this.calculatePromotionalPrice(product));
   }
+
+  /**
+   * POS Product Search - Tìm kiếm sản phẩm cho POS
+   * Trả về variants với tồn kho, giá, hình ảnh
+   */
+  async posSearch(query: { q?: string, category_id?: string, brand_id?: string, min_price?: number, max_price?: number, sort?: string }) {
+    const { q, category_id, brand_id, min_price, max_price, sort } = query;
+
+    // Build where clause cho products
+    const productWhere: Prisma.productsWhereInput = {
+      status_code: 'ACTIVE', // Chỉ lấy sản phẩm active
+      deleted_at: null,
+      AND: [
+        // Search by product name or SKU
+        q ? {
+          OR: [
+            { name: { contains: q, mode: 'insensitive' } },
+            { product_variants: { some: { sku: { contains: q, mode: 'insensitive' } } } }
+          ]
+        } : {},
+        // Filter by category
+        category_id ? { category_id: Number(category_id) } : {},
+        // Filter by brand
+        brand_id ? { brand_id: Number(brand_id) } : {},
+        // Filter by Price Range (at least one variant matches)
+        (min_price !== undefined || max_price !== undefined) ? {
+          product_variants: {
+            some: {
+              price: {
+                gte: min_price || 0,
+                lte: max_price || 9999999999
+              }
+            }
+          }
+        } : {}
+      ]
+    };
+
+    // Sorting Logic
+    let orderBy: any = { name: 'asc' }; // Default POS sort
+    if (sort === 'newest') {
+      orderBy = { created_at: 'desc' };
+    } else if (sort === 'name_asc') {
+      orderBy = { name: 'asc' };
+    } else if (sort === 'name_desc') {
+      orderBy = { name: 'desc' };
+    }
+    // Note: price sorting for grouped products is complex via SQL, 
+    // we'll handle basic text/date sorting here. 
+    // If sort is price_asc/desc, we might need a different approach or client-side sort for the grouped result.
+    // Let's stick to these for now.
+
+    // Lấy products với variants
+    const products = await this.prisma.products.findMany({
+      where: productWhere,
+      include: {
+        product_variants: {
+          where: {
+            deleted_at: null,
+          }
+        },
+        categories: true,
+        brands: true,
+      },
+      orderBy: orderBy,
+    });
+
+    // Group by product and return with variants array
+    const groupedProducts = products.map(product => {
+      // Get all active variants with stock > 0
+      const activeVariants = product.product_variants
+        .filter(v => (v.stock_available || 0) > 0)
+        .map(variant => {
+          // Get thumbnail from media_urls or media_assets
+          let thumbnail = null;
+
+          // Try product.media_urls first
+          if (product.media_urls && typeof product.media_urls === 'object') {
+            const mediaArray = Array.isArray(product.media_urls)
+              ? product.media_urls
+              : (product.media_urls as any).images || [];
+            thumbnail = mediaArray[0] || null;
+          }
+
+          // Fallback to variant.media_assets
+          if (!thumbnail && variant.media_assets) {
+            try {
+              const assets = typeof variant.media_assets === 'string'
+                ? JSON.parse(variant.media_assets)
+                : variant.media_assets;
+              thumbnail = Array.isArray(assets) && assets[0] ? assets[0] : null;
+            } catch (e) {
+              thumbnail = null;
+            }
+          }
+
+          return {
+            variant_id: variant.variant_id,
+            sku: variant.sku,
+            option_name: variant.option_name,
+            price: Number(variant.price),
+            current_stock: variant.stock_available || 0,
+            thumbnail: thumbnail,
+          };
+        });
+
+      // Only return products that have at least one available variant
+      if (activeVariants.length === 0) return null;
+
+      // Use first variant's thumbnail for product thumbnail
+      const productThumbnail = activeVariants[0]?.thumbnail || null;
+
+      return {
+        product_id: product.product_id,
+        product_name: product.name,
+        thumbnail: productThumbnail,
+        category: product.categories?.name || 'Uncategorized',
+        brand: product.brands?.name || null,
+        product_type: product.type_code,
+        variants: activeVariants,
+      };
+    }).filter((p): p is NonNullable<typeof p> => p !== null); // Remove null entries and narrow type
+
+    // Sorting grouped products
+    const sortedProducts = groupedProducts.sort((a, b) => {
+      if (sort === 'price_asc') {
+        const minA = Math.min(...a.variants.map((v: any) => v.price));
+        const minB = Math.min(...b.variants.map((v: any) => v.price));
+        return minA - minB;
+      } else if (sort === 'price_desc') {
+        const maxA = Math.max(...a.variants.map((v: any) => v.price));
+        const maxB = Math.max(...b.variants.map((v: any) => v.price));
+        return maxB - maxA;
+      }
+      return 0; // Already sorted by name/date via SQL if sort is name_* or newest
+    });
+
+    return {
+      success: true,
+      count: sortedProducts.length,
+      data: sortedProducts,
+    };
+  }
+
 
   async findSimilar(id: number) {
     const product = await this.prisma.products.findUnique({
@@ -334,8 +480,10 @@ export class ProductsService {
           brands: true,
           categories: true,
           series: true,
-          product_variants: { include: { product_preorder_configs: true } },
-          product_blindboxes: true
+          product_variants: true,
+          product_blindboxes: true,
+          product_preorders: true,
+          product_promotions: true
         }
       });
       similarProducts = [...similarProducts, ...byCategory];
@@ -356,10 +504,52 @@ export class ProductsService {
         product_blindboxes: true,
         brands: true,
         categories: true,
-        series: true
+        series: true,
+        product_promotions: true,
       }
     });
     if (!product) throw new BadRequestException('Product not found');
+    
+    // [NEW] Apply Dynamic Pricing Logic
+    return this.calculatePromotionalPrice(product);
+  }
+
+  // [NEW] Helper: Dynamic Pricing Logic
+  private calculatePromotionalPrice(product: any) {
+    const promo = product.product_promotions;
+    const now = new Date();
+
+    // Check if promotion is valid
+    const isValidPromo = promo && 
+      promo.is_active && 
+      new Date(promo.start_date) <= now && 
+      new Date(promo.end_date) >= now;
+
+    // Apply to Variants
+    if (product.product_variants) {
+      product.product_variants = product.product_variants.map((variant: any) => {
+        let final_price = Number(variant.price);
+        let discount_amount = 0;
+
+        if (isValidPromo) {
+          if (promo.type_code === 'PERCENTAGE') {
+            discount_amount = final_price * (Number(promo.value) / 100);
+            final_price = final_price - discount_amount;
+          } else if (promo.type_code === 'FIXED_AMOUNT') {
+            discount_amount = Number(promo.value);
+            final_price = Math.max(0, final_price - discount_amount);
+          }
+        }
+
+        return {
+          ...variant,
+          final_price,
+          is_on_sale: isValidPromo,
+          discount_percentage: isValidPromo && promo.type_code === 'PERCENTAGE' ? Number(promo.value) : 0,
+        };
+      });
+    }
+
     return product;
   }
 
