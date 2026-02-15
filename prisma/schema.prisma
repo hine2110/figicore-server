@@ -267,14 +267,17 @@ model order_items {
   order_id             Int
   variant_id           Int
   allocated_product_id Int?
+  is_opened            Boolean?         @default(false)
   quantity             Int
   unit_price           Decimal          @db.Decimal(15, 2)
   total_price          Decimal          @db.Decimal(15, 2)
+  metadata             Json?
   created_at           DateTime?        @default(now()) @db.Timestamp(6)
   updated_at           DateTime?        @default(now()) @db.Timestamp(6)
   deleted_at           DateTime?        @db.Timestamp(6)
   orders               orders           @relation(fields: [order_id], references: [order_id], onDelete: Cascade, onUpdate: NoAction)
   product_variants     product_variants @relation(fields: [variant_id], references: [variant_id], onDelete: NoAction, onUpdate: NoAction)
+  allocated_variant    product_variants? @relation("AllocatedVariantRel", fields: [allocated_product_id], references: [variant_id], onDelete: NoAction, onUpdate: NoAction)
   return_items         return_items[]
 }
 
@@ -367,6 +370,8 @@ model product_blindboxes {
   min_value   Decimal?  @db.Decimal(15, 2)
   max_value   Decimal?  @db.Decimal(15, 2)
   tier_config Json?
+  start_time  DateTime? @db.Timestamp(6)
+  end_time    DateTime? @db.Timestamp(6)
   created_at  DateTime? @default(now()) @db.Timestamp(6)
   updated_at  DateTime? @default(now()) @db.Timestamp(6)
   deleted_at  DateTime? @db.Timestamp(6)
@@ -495,6 +500,7 @@ model product_variants {
   inventory_logs          inventory_logs[]
   inventory_receipt_items inventory_receipt_items[]
   order_items             order_items[]
+  allocated_in_order_items order_items[]      @relation("AllocatedVariantRel")
 
 
   @@index([sku], map: "idx_variants_sku")
