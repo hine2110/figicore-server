@@ -20,6 +20,28 @@ export class ProductsController {
     return this.productsService.quickCreate(body);
   }
 
+  /**
+   * POS Product Search - Tìm kiếm sản phẩm cho POS
+   * GET /products/pos-search?q=...&category_id=...
+   */
+  @Get('pos-search')
+  posSearch(
+    @Query() query: {
+      q?: string,
+      category_id?: string,
+      brand_id?: string,
+      min_price?: string,
+      max_price?: string,
+      sort?: string
+    }
+  ) {
+    return this.productsService.posSearch({
+      ...query,
+      min_price: query.min_price ? Number(query.min_price) : undefined,
+      max_price: query.max_price ? Number(query.max_price) : undefined
+    });
+  }
+
   @Get()
   findAll(
     @Query() query: { search?: string, brand_id?: string, category_id?: string, series_id?: string, type_code?: string, min_price?: string, max_price?: string, sort?: string }
