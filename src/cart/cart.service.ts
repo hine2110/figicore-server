@@ -152,7 +152,7 @@ export class CartService {
               include: {
                 product_preorder_configs: true, // Included for correct price calculation
                 products: {
-                  include: { product_preorders: true, product_blindboxes: true, product_promotions: true }
+                  include: { product_blindboxes: true, product_promotions: true }
                 }
               }
             }
