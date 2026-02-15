@@ -267,9 +267,11 @@ CREATE TABLE "order_items" (
     "order_id" INTEGER NOT NULL,
     "variant_id" INTEGER NOT NULL,
     "allocated_product_id" INTEGER,
+    "is_opened" BOOLEAN DEFAULT false,
     "quantity" INTEGER NOT NULL,
     "unit_price" DECIMAL(15,2) NOT NULL,
     "total_price" DECIMAL(15,2) NOT NULL,
+    "metadata" JSONB,
     "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "deleted_at" TIMESTAMP(6),
@@ -359,6 +361,8 @@ CREATE TABLE "product_blindboxes" (
     "min_value" DECIMAL(15,2),
     "max_value" DECIMAL(15,2),
     "tier_config" JSONB,
+    "start_time" TIMESTAMP(6),
+    "end_time" TIMESTAMP(6),
     "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "deleted_at" TIMESTAMP(6),
@@ -417,6 +421,7 @@ CREATE TABLE "products" (
     "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "deleted_at" TIMESTAMP(6),
+    "product_promotion_id" INTEGER,
 
     CONSTRAINT "products_pkey" PRIMARY KEY ("product_id")
 );
@@ -459,6 +464,24 @@ CREATE TABLE "profile_update_requests" (
     "deleted_at" TIMESTAMP(6),
 
     CONSTRAINT "profile_update_requests_pkey" PRIMARY KEY ("request_id")
+);
+
+-- CreateTable
+CREATE TABLE "product_promotions" (
+    "promotion_id" SERIAL NOT NULL,
+    "name" VARCHAR(255) NOT NULL,
+    "type_code" VARCHAR(50) NOT NULL,
+    "value" DECIMAL(15,2) NOT NULL,
+    "start_date" TIMESTAMP(6) NOT NULL,
+    "end_date" TIMESTAMP(6) NOT NULL,
+    "is_active" BOOLEAN DEFAULT true,
+    "min_apply_price" DECIMAL(15,2),
+    "max_apply_price" DECIMAL(15,2),
+    "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
+    "deleted_at" TIMESTAMP(6),
+
+    CONSTRAINT "product_promotions_pkey" PRIMARY KEY ("promotion_id")
 );
 
 -- CreateTable
@@ -857,6 +880,9 @@ ALTER TABLE "order_items" ADD CONSTRAINT "order_items_order_id_fkey" FOREIGN KEY
 ALTER TABLE "order_items" ADD CONSTRAINT "order_items_variant_id_fkey" FOREIGN KEY ("variant_id") REFERENCES "product_variants"("variant_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
 
 -- AddForeignKey
+ALTER TABLE "order_items" ADD CONSTRAINT "order_items_allocated_product_id_fkey" FOREIGN KEY ("allocated_product_id") REFERENCES "product_variants"("variant_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
+
+-- AddForeignKey
 ALTER TABLE "order_status_history" ADD CONSTRAINT "order_status_history_order_id_fkey" FOREIGN KEY ("order_id") REFERENCES "orders"("order_id") ON DELETE CASCADE ON UPDATE NO ACTION;
 
 -- AddForeignKey
@@ -906,6 +932,9 @@ ALTER TABLE "products" ADD CONSTRAINT "products_category_id_fkey" FOREIGN KEY ("
 
 -- AddForeignKey
 ALTER TABLE "products" ADD CONSTRAINT "products_series_id_fkey" FOREIGN KEY ("series_id") REFERENCES "series"("series_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
+
+-- AddForeignKey
+ALTER TABLE "products" ADD CONSTRAINT "products_product_promotion_id_fkey" FOREIGN KEY ("product_promotion_id") REFERENCES "product_promotions"("promotion_id") ON DELETE SET NULL ON UPDATE NO ACTION;
 
 -- AddForeignKey
 ALTER TABLE "product_variants" ADD CONSTRAINT "product_variants_product_id_fkey" FOREIGN KEY ("product_id") REFERENCES "products"("product_id") ON DELETE CASCADE ON UPDATE NO ACTION;
