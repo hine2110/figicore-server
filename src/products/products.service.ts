@@ -10,12 +10,19 @@ export class ProductsService {
   constructor(private prisma: PrismaService) { }
 
   async create(createProductDto: CreateProductDto) {
-    const {
+    let {
       variants,
       blindbox,
       preorder,
       ...productData
     } = createProductDto;
+
+    // --- FIX: FORCE CLEAR VARIANTS FOR BLINDBOX ---
+    // This prevents the Retail loop from creating a "Ghost Variant" with 0 stock.
+    if (productData.type_code === 'BLINDBOX') {
+      variants = [];
+    }
+    // ----------------------------------------------
 
     // Helper: Generate SKU/Barcode
     const genCode = (prefix: string) => `${prefix}-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
@@ -91,13 +98,27 @@ export class ProductsService {
       // Handle Blindbox extension (Legacy Logic preserved for completeness if needed, 
       // but strictly following the request which focused on Pre-order structure)
       if (productData.type_code === 'BLINDBOX' && blindbox) {
-        // ... Blindbox logic is separate, but making sure we don't break it.
-        // Since the user focused on the 'Logic Flow' for Pre-order, I will retain the blindbox block 
-        // BUT move it after the loop or handle it if it was part of variants.
-        // Blindbox creates its own special single variant usually.
-
-        // Re-implementing Blindbox logic briefly to ensure it works
+        // Defines price for calculations
         const price = Number(blindbox.price);
+
+        // FIX: Create a Dummy Variant with INFINITE STOCK so users can add to cart
+        // Logic: When type_code='BLINDBOX', we create a placeholder variant.
+        // Real stock is managed by the underlying pool.
+        await tx.product_variants.create({
+          data: {
+            product_id: product.product_id,
+            sku: genCode('BBOX'),
+            barcode: genCode('BAR'),
+            option_name: 'Blindbox Ticket',
+            price: price,
+            media_assets: JSON.stringify([]),
+            stock_available: 999999, // <--- ALLOW UNLIMITED PURCHASES
+            stock_defect: 0,
+
+            // Blindboxes are technically retail items but managed differently
+            weight_g: 200, length_cm: 10, width_cm: 10, height_cm: 10
+          }
+        });
         const minVal = Number(blindbox.min_value_allow);
         const maxVal = Number(blindbox.max_value_allow);
         const tier2Max = price + (maxVal - price) * 0.7;
@@ -700,5 +721,38 @@ export class ProductsService {
       Logger.error("AI Gen Failed (All Models)", finalError);
       throw new ServiceUnavailableException("AI service is currently unavailable. Please try again later.");
     }
+  }
+
+  // --- BLINDBOX TIER ALGORITHM ---
+  generateBlindboxTiers(price: number, min: number, max: number) {
+    // 1. Tier 1 (Common - 75%)
+    // Range: [Min, Price]
+    const tier1 = {
+      name: 'Common',
+      probability: 75,
+      value_min: min,
+      value_max: price
+    };
+
+    // 2. Tier 2 (Rare - 20%)
+    // Range: [Price + 1, Price + (Max - Price) * 0.4]
+    const tier2Max = Math.floor(price + (max - price) * 0.4);
+    const tier2 = {
+      name: 'Rare',
+      probability: 20,
+      value_min: price + 1,
+      value_max: tier2Max
+    };
+
+    // 3. Tier 3 (Legendary - 5%)
+    // Range: [End of Tier 2 + 1, Max]
+    const tier3 = {
+      name: 'Legendary',
+      probability: 5,
+      value_min: tier2Max + 1,
+      value_max: max
+    };
+
+    return [tier1, tier2, tier3];
   }
 }
