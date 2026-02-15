@@ -262,7 +262,6 @@ export class ProductsService {
         series: true,
         product_variants: true,
         product_blindboxes: true,
-        product_preorders: true,
         product_promotions: true,
       },
       orderBy
@@ -482,7 +481,6 @@ export class ProductsService {
           series: true,
           product_variants: true,
           product_blindboxes: true,
-          product_preorders: true,
           product_promotions: true
         }
       });
@@ -509,7 +507,7 @@ export class ProductsService {
       }
     });
     if (!product) throw new BadRequestException('Product not found');
-    
+
     // [NEW] Apply Dynamic Pricing Logic
     return this.calculatePromotionalPrice(product);
   }
@@ -520,9 +518,9 @@ export class ProductsService {
     const now = new Date();
 
     // Check if promotion is valid
-    const isValidPromo = promo && 
-      promo.is_active && 
-      new Date(promo.start_date) <= now && 
+    const isValidPromo = promo &&
+      promo.is_active &&
+      new Date(promo.start_date) <= now &&
       new Date(promo.end_date) >= now;
 
     // Apply to Variants
