@@ -26,6 +26,15 @@ export class AuthService {
       throw new BadRequestException('Email already registered');
     }
 
+    const userByPhone = await this.usersService.findByPhone(registerDto.phone);
+    if (userByPhone) {
+      // If it's the SAME user (email match), we proceed (it will fall into the update block)
+      // BUT findByPhone returns a user object. We need to check if it's a DIFFERENT user.
+      if (!user || userByPhone.user_id !== user.user_id) {
+        throw new BadRequestException('Phone number already registered');
+      }
+    }
+
     const saltOrRounds = 10;
     const items = [1, 2, 3, 4, 5, 6];
     const hash = await bcrypt.hash(registerDto.password, saltOrRounds);

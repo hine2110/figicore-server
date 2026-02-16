@@ -15,26 +15,26 @@ import * as crypto from 'crypto';
 @Injectable()
 export class UsersService {
   constructor(
-      private prisma: PrismaService,
-      private uploadService: UploadService,
-      private jwtService: JwtService,
-      private mailService: MailService
+    private prisma: PrismaService,
+    private uploadService: UploadService,
+    private jwtService: JwtService,
+    private mailService: MailService
   ) { }
 
   async updateAvatar(userId: number, file: Express.Multer.File) {
-      const user = await this.findOne(userId);
-      if (!user) throw new NotFoundException('User not found');
+    const user = await this.findOne(userId);
+    if (!user) throw new NotFoundException('User not found');
 
-      if (user.avatar_url) {
-          throw new ForbiddenException("Bạn chỉ được phép cập nhật ảnh đại diện một lần duy nhất.");
-      }
+    if (user.avatar_url) {
+      throw new ForbiddenException("Bạn chỉ được phép cập nhật ảnh đại diện một lần duy nhất.");
+    }
 
-      const uploadResult = await this.uploadService.uploadFile(file, 'figicore_avatars');
-      
-      return this.prisma.users.update({
-          where: { user_id: userId },
-          data: { avatar_url: uploadResult.url }
-      });
+    const uploadResult = await this.uploadService.uploadFile(file, 'figicore_avatars');
+
+    return this.prisma.users.update({
+      where: { user_id: userId },
+      data: { avatar_url: uploadResult.url }
+    });
   }
 
 
@@ -48,6 +48,12 @@ export class UsersService {
     return this.prisma.users.findUnique({
       where: { email },
       include: { customers: true },
+    });
+  }
+
+  async findByPhone(phone: string) {
+    return this.prisma.users.findUnique({
+      where: { phone },
     });
   }
 
@@ -95,7 +101,7 @@ export class UsersService {
     }
 
     const pendingRequest = await this.prisma.profile_update_requests.findFirst({
-        where: { user_id: userId, status_code: 'PENDING' }
+      where: { user_id: userId, status_code: 'PENDING' }
     });
 
     // Flatten Response
@@ -157,14 +163,14 @@ export class UsersService {
 
     // If Banning, require reason (optional but good practice)
     if (status === 'BANNED' && !reason) {
-        throw new BadRequestException('Reason is required when banning a user');
+      throw new BadRequestException('Reason is required when banning a user');
     }
 
     return this.prisma.users.update({
       where: { user_id: id },
-      data: { 
-          status_code: status,
-          ban_reason: status === 'BANNED' ? reason : null // Clear reason if unbanning
+      data: {
+        status_code: status,
+        ban_reason: status === 'BANNED' ? reason : null // Clear reason if unbanning
       },
     });
   }
@@ -177,7 +183,7 @@ export class UsersService {
     };
 
     const prefix = prefixMap[role] || 'user';
-    
+
     // Count existing users with this role to generate sequential number
     const count = await this.prisma.users.count({
       where: { role_code: role }
@@ -217,12 +223,12 @@ export class UsersService {
     const match = lastEmployee.employee_code.match(regex);
 
     if (!match || !match[1]) {
-        return { code: `${prefix}-001` };
+      return { code: `${prefix}-001` };
     }
 
     const nextNum = parseInt(match[1], 10) + 1;
     const nextCode = `${prefix}-${nextNum.toString().padStart(3, '0')}`;
-    
+
     return { code: nextCode };
   }
 
@@ -232,73 +238,73 @@ export class UsersService {
       const nextNumberCache: Record<string, number> = {};
 
       for (const userDto of dto.users) {
-          // 1. Determine Prefix
-          let prefix = 'EMP';
-          if (userDto.role_code === 'MANAGER') prefix = 'MGR';
-          else if (userDto.role_code === 'STAFF_POS') prefix = 'POS';
-          else if (userDto.role_code === 'STAFF_INVENTORY') prefix = 'INV';
+        // 1. Determine Prefix
+        let prefix = 'EMP';
+        if (userDto.role_code === 'MANAGER') prefix = 'MGR';
+        else if (userDto.role_code === 'STAFF_POS') prefix = 'POS';
+        else if (userDto.role_code === 'STAFF_INVENTORY') prefix = 'INV';
 
-          // 2. Calculate Next Number
-          if (nextNumberCache[prefix] === undefined) {
-              const allCodes = await tx.employees.findMany({
-                  where: { employee_code: { startsWith: prefix } },
-                  select: { employee_code: true }
-              });
-              const existingNumbers = allCodes
-                  .map(e => {
-                      const parts = e.employee_code.split('-');
-                      return parts.length > 1 ? parseInt(parts[1], 10) : 0;
-                  })
-                  .filter(n => !isNaN(n))
-                  .sort((a, b) => a - b);
-              const maxNum = existingNumbers.length > 0 ? existingNumbers[existingNumbers.length - 1] : 0;
-              nextNumberCache[prefix] = maxNum + 1;
-          } else {
-              nextNumberCache[prefix]++;
-          }
-          const currentNum = nextNumberCache[prefix];
-          const employeeCode = `${prefix}-${String(currentNum).padStart(3, '0')}`;
-          const email = `${prefix.toLowerCase()}${currentNum}@figicore.com`;
-
-          // 3. Generate Auth Data
-          const tempPassword = crypto.randomBytes(4).toString('hex');
-          const passwordHash = await bcrypt.hash(tempPassword, 10);
-
-          // 4. Create Records
-          const newUser = await tx.users.create({
-              data: {
-                  full_name: userDto.full_name,
-                  email: email,
-                  password_hash: passwordHash, 
-                  role_code: userDto.role_code,
-                  phone: userDto.phone,
-                  status_code: 'PENDING',
-                  is_verified: false,
-              }
+        // 2. Calculate Next Number
+        if (nextNumberCache[prefix] === undefined) {
+          const allCodes = await tx.employees.findMany({
+            where: { employee_code: { startsWith: prefix } },
+            select: { employee_code: true }
           });
+          const existingNumbers = allCodes
+            .map(e => {
+              const parts = e.employee_code.split('-');
+              return parts.length > 1 ? parseInt(parts[1], 10) : 0;
+            })
+            .filter(n => !isNaN(n))
+            .sort((a, b) => a - b);
+          const maxNum = existingNumbers.length > 0 ? existingNumbers[existingNumbers.length - 1] : 0;
+          nextNumberCache[prefix] = maxNum + 1;
+        } else {
+          nextNumberCache[prefix]++;
+        }
+        const currentNum = nextNumberCache[prefix];
+        const employeeCode = `${prefix}-${String(currentNum).padStart(3, '0')}`;
+        const email = `${prefix.toLowerCase()}${currentNum}@figicore.com`;
 
-          const newEmployee = await tx.employees.create({
-              data: {
-                  user_id: newUser.user_id,
-                  employee_code: employeeCode,
-                  base_salary: Number(userDto.base_salary),
-                  job_title_code: userDto.job_title_code || userDto.role_code,
-                  start_date: userDto.start_date ? new Date(userDto.start_date) : new Date(),
-              }
-          });
+        // 3. Generate Auth Data
+        const tempPassword = crypto.randomBytes(4).toString('hex');
+        const passwordHash = await bcrypt.hash(tempPassword, 10);
 
-          // 5. Send Activation Email
-          const payload = { 
-              sub: newUser.user_id, 
-              email: newUser.email,
-              role_code: newUser.role_code 
-          };
-          const token = this.jwtService.sign(payload);
-          if (newUser.email) {
-            await this.mailService.sendEmployeeActivation(newUser.email, tempPassword, token, newUser.full_name);
+        // 4. Create Records
+        const newUser = await tx.users.create({
+          data: {
+            full_name: userDto.full_name,
+            email: email,
+            password_hash: passwordHash,
+            role_code: userDto.role_code,
+            phone: userDto.phone,
+            status_code: 'PENDING',
+            is_verified: false,
           }
-          
-          createdEmployees.push({ ...newUser, employee_details: newEmployee });
+        });
+
+        const newEmployee = await tx.employees.create({
+          data: {
+            user_id: newUser.user_id,
+            employee_code: employeeCode,
+            base_salary: Number(userDto.base_salary),
+            job_title_code: userDto.job_title_code || userDto.role_code,
+            start_date: userDto.start_date ? new Date(userDto.start_date) : new Date(),
+          }
+        });
+
+        // 5. Send Activation Email
+        const payload = {
+          sub: newUser.user_id,
+          email: newUser.email,
+          role_code: newUser.role_code
+        };
+        const token = this.jwtService.sign(payload);
+        if (newUser.email) {
+          await this.mailService.sendEmployeeActivation(newUser.email, tempPassword, token, newUser.full_name);
+        }
+
+        createdEmployees.push({ ...newUser, employee_details: newEmployee });
       }
 
       return createdEmployees;
@@ -308,25 +314,25 @@ export class UsersService {
   async createProfileUpdateRequest(userId: number, changes: any) {
     // Check for existing pending request
     const existing = await this.prisma.profile_update_requests.findFirst({
-        where: { user_id: userId, status_code: 'PENDING' }
+      where: { user_id: userId, status_code: 'PENDING' }
     });
 
     if (existing) {
-        // Option A: Update existing request
-        // return this.prisma.profile_update_requests.update({
-        //     where: { request_id: existing.request_id },
-        //     data: { changed_data: changes, updated_at: new Date() }
-        // });
-        // Option B: Throw error
-        throw new BadRequestException('You verify have a pending profile update request.');
+      // Option A: Update existing request
+      // return this.prisma.profile_update_requests.update({
+      //     where: { request_id: existing.request_id },
+      //     data: { changed_data: changes, updated_at: new Date() }
+      // });
+      // Option B: Throw error
+      throw new BadRequestException('You verify have a pending profile update request.');
     }
 
     return this.prisma.profile_update_requests.create({
-        data: {
-            user_id: userId,
-            changed_data: changes,
-            status_code: 'PENDING'
-        }
+      data: {
+        user_id: userId,
+        changed_data: changes,
+        status_code: 'PENDING'
+      }
     });
   }
 
@@ -342,7 +348,7 @@ export class UsersService {
             avatar_url: true,
             role_code: true,
             employees: {
-                select: { employee_code: true }
+              select: { employee_code: true }
             }
           }
         }
@@ -353,71 +359,71 @@ export class UsersService {
 
   async resolveRequest(requestId: number, status: 'APPROVED' | 'REJECTED') {
     const request = await this.prisma.profile_update_requests.findUnique({
-        where: { request_id: requestId },
-        include: { users: true }
+      where: { request_id: requestId },
+      include: { users: true }
     });
 
     if (!request) throw new NotFoundException('Request not found');
     if (request.status_code !== 'PENDING') throw new BadRequestException('Request already resolved');
 
     return this.prisma.$transaction(async (tx) => {
-        // 1. Update Request Status
-        const updatedRequest = await tx.profile_update_requests.update({
-            where: { request_id: requestId },
-            data: { status_code: status, updated_at: new Date() }
-        });
+      // 1. Update Request Status
+      const updatedRequest = await tx.profile_update_requests.update({
+        where: { request_id: requestId },
+        data: { status_code: status, updated_at: new Date() }
+      });
 
-        // 2. If Approved, Update User Profile
-        if (status === 'APPROVED') {
-            const changedData = request.changed_data as Prisma.JsonObject;
-            const updateData: any = {};
-            if (changedData['full_name']) updateData.full_name = changedData['full_name'];
-            if (changedData['phone']) updateData.phone = changedData['phone'];
-            if (changedData['avatar_url']) updateData.avatar_url = changedData['avatar_url'];
-            
-            if (Object.keys(updateData).length > 0) {
-                await tx.users.update({
-                    where: { user_id: request.user_id },
-                    data: updateData
-                });
-            }
+      // 2. If Approved, Update User Profile
+      if (status === 'APPROVED') {
+        const changedData = request.changed_data as Prisma.JsonObject;
+        const updateData: any = {};
+        if (changedData['full_name']) updateData.full_name = changedData['full_name'];
+        if (changedData['phone']) updateData.phone = changedData['phone'];
+        if (changedData['avatar_url']) updateData.avatar_url = changedData['avatar_url'];
 
-            // Handle Address Update (separate table)
-            // Check both potential keys (frontend might send 'address' or 'default_address')
-            const newAddress = (changedData['address'] || changedData['default_address']) as string;
-            
-            if (newAddress) {
-                // Find default address to update
-                const defaultAddress = await tx.addresses.findFirst({
-                    where: { user_id: request.user_id, is_default: true }
-                });
-
-                if (defaultAddress) {
-                    await tx.addresses.update({
-                        where: { address_id: defaultAddress.address_id },
-                        data: { detail_address: newAddress }
-                    });
-                } else {
-                    // Create new address with fallback values for required fields
-                    await tx.addresses.create({
-                        data: {
-                            user_id: request.user_id,
-                            // Prefer new/updated info, fallback to existing profile info
-                            recipient_name: updateData.full_name || request.users.full_name,
-                            recipient_phone: updateData.phone || request.users.phone || 'N/A', 
-                            detail_address: newAddress,
-                            // Dummy values to satisfy constraints
-                            province_id: 0, 
-                            district_id: 0,
-                            ward_code: 'UNMAPPED',
-                            is_default: true
-                        }
-                    });
-                }
-            }
+        if (Object.keys(updateData).length > 0) {
+          await tx.users.update({
+            where: { user_id: request.user_id },
+            data: updateData
+          });
         }
 
-        return updatedRequest;
+        // Handle Address Update (separate table)
+        // Check both potential keys (frontend might send 'address' or 'default_address')
+        const newAddress = (changedData['address'] || changedData['default_address']) as string;
+
+        if (newAddress) {
+          // Find default address to update
+          const defaultAddress = await tx.addresses.findFirst({
+            where: { user_id: request.user_id, is_default: true }
+          });
+
+          if (defaultAddress) {
+            await tx.addresses.update({
+              where: { address_id: defaultAddress.address_id },
+              data: { detail_address: newAddress }
+            });
+          } else {
+            // Create new address with fallback values for required fields
+            await tx.addresses.create({
+              data: {
+                user_id: request.user_id,
+                // Prefer new/updated info, fallback to existing profile info
+                recipient_name: updateData.full_name || request.users.full_name,
+                recipient_phone: updateData.phone || request.users.phone || 'N/A',
+                detail_address: newAddress,
+                // Dummy values to satisfy constraints
+                province_id: 0,
+                district_id: 0,
+                ward_code: 'UNMAPPED',
+                is_default: true
+              }
+            });
+          }
+        }
+      }
+
+      return updatedRequest;
     });
   }
 
@@ -436,11 +442,11 @@ export class UsersService {
     }
 
     const zipEntries = zip.getEntries();
-    
+
     // 1. Find Excel File
-    const excelEntry = zipEntries.find(entry => 
-      !entry.isDirectory && 
-      !entry.entryName.includes('__MACOSX') && 
+    const excelEntry = zipEntries.find(entry =>
+      !entry.isDirectory &&
+      !entry.entryName.includes('__MACOSX') &&
       (entry.entryName.endsWith('.xlsx') || entry.entryName.endsWith('.xls'))
     );
 
@@ -484,13 +490,13 @@ export class UsersService {
 
         // Check Duplication
         const existing = await this.prisma.users.findFirst({
-            where: { OR: [{ email: email.toString() }, { phone: phone.toString() }] }
+          where: { OR: [{ email: email.toString() }, { phone: phone.toString() }] }
         });
 
         if (existing) {
-            results.failed++;
-            results.errors.push({ row: rowNum, message: `Email (${email}) or Phone (${phone}) already exists` });
-            continue;
+          results.failed++;
+          results.errors.push({ row: rowNum, message: `Email (${email}) or Phone (${phone}) already exists` });
+          continue;
         }
 
         // 4. Handle Avatar
@@ -498,47 +504,47 @@ export class UsersService {
         if (avatarFilename) {
           const targetName = avatarFilename.toString().toLowerCase().trim();
           const imageEntry = zipEntries.find(entry => {
-             const entryName = entry.entryName.toLowerCase();
-             // Check strict equality OR if it's inside a folder (ends with /filename)
-             return entryName === targetName || entryName.endsWith('/' + targetName);
+            const entryName = entry.entryName.toLowerCase();
+            // Check strict equality OR if it's inside a folder (ends with /filename)
+            return entryName === targetName || entryName.endsWith('/' + targetName);
           });
 
           if (imageEntry) {
-             try {
-                const imageBuffer = imageEntry.getData();
-                const mockFile: any = {
-                    buffer: imageBuffer,
-                    mimetype: 'image/jpeg', 
-                    originalname: avatarFilename
-                };
-                
-                const uploadRes = await this.uploadService.uploadFile(mockFile, 'figicore_avatars');
-                avatarUrl = uploadRes.url;
-             } catch (err) {
-                console.error(`Failed to upload avatar for ${email}`, err);
-                results.errors.push({ row: rowNum, message: `Warning: Avatar upload failed - ${err.message}` });
-             }
+            try {
+              const imageBuffer = imageEntry.getData();
+              const mockFile: any = {
+                buffer: imageBuffer,
+                mimetype: 'image/jpeg',
+                originalname: avatarFilename
+              };
+
+              const uploadRes = await this.uploadService.uploadFile(mockFile, 'figicore_avatars');
+              avatarUrl = uploadRes.url;
+            } catch (err) {
+              console.error(`Failed to upload avatar for ${email}`, err);
+              results.errors.push({ row: rowNum, message: `Warning: Avatar upload failed - ${err.message}` });
+            }
           } else {
-             results.errors.push({ row: rowNum, message: `Warning: Avatar file '${avatarFilename}' not found in ZIP` });
+            results.errors.push({ row: rowNum, message: `Warning: Avatar file '${avatarFilename}' not found in ZIP` });
           }
         }
 
         // 5. Create User Transaction
         await this.createSingleEmployee({
-            full_name: fullName,
-            phone: phone.toString(),
-            email: email.toString(),
-            role_code: roleCode,
-            base_salary: salary,
-            avatar_url: avatarUrl
+          full_name: fullName,
+          phone: phone.toString(),
+          email: email.toString(),
+          role_code: roleCode,
+          base_salary: salary,
+          avatar_url: avatarUrl
         });
 
         results.success++;
 
       } catch (error) {
-         console.error(error);
-         results.failed++;
-         results.errors.push({ row: rowNum, message: error.message });
+        console.error(error);
+        results.failed++;
+        results.errors.push({ row: rowNum, message: error.message });
       }
     }
 
@@ -546,74 +552,74 @@ export class UsersService {
   }
 
   private async createSingleEmployee(data: { full_name: string, phone: string, email: string, role_code: string, base_salary: number, avatar_url: string | null }) {
-      // 1. Generate Temp Password (8 chars)
-      const tempPassword = crypto.randomBytes(4).toString('hex');
-      const passwordHash = await bcrypt.hash(tempPassword, 10);
-      
-      let prefix = 'EMP';
-      if (data.role_code === 'MANAGER') prefix = 'MGR';
-      if (data.role_code === 'STAFF_POS') prefix = 'POS';
-      if (data.role_code === 'STAFF_INVENTORY') prefix = 'INV';
+    // 1. Generate Temp Password (8 chars)
+    const tempPassword = crypto.randomBytes(4).toString('hex');
+    const passwordHash = await bcrypt.hash(tempPassword, 10);
 
-      const last = await this.prisma.employees.findFirst({
-          where: { employee_code: { startsWith: prefix } },
-          orderBy: { created_at: 'desc' },
-          take: 1
-      });
-      
-      let nextNum = 1;
-      if (last?.employee_code) {
-          const parts = last.employee_code.split('-');
-          if (parts.length > 1) {
-              const num = parseInt(parts[1], 10);
-              if (!isNaN(num)) nextNum = num + 1;
-          }
+    let prefix = 'EMP';
+    if (data.role_code === 'MANAGER') prefix = 'MGR';
+    if (data.role_code === 'STAFF_POS') prefix = 'POS';
+    if (data.role_code === 'STAFF_INVENTORY') prefix = 'INV';
+
+    const last = await this.prisma.employees.findFirst({
+      where: { employee_code: { startsWith: prefix } },
+      orderBy: { created_at: 'desc' },
+      take: 1
+    });
+
+    let nextNum = 1;
+    if (last?.employee_code) {
+      const parts = last.employee_code.split('-');
+      if (parts.length > 1) {
+        const num = parseInt(parts[1], 10);
+        if (!isNaN(num)) nextNum = num + 1;
       }
-      const employeeCode = `${prefix}-${String(nextNum).padStart(3, '0')}`;
-      
-      return this.prisma.$transaction(async (tx) => {
-          // 2. Create User as PENDING
-          const newUser = await tx.users.create({
-              data: {
-                  full_name: data.full_name,
-                  email: data.email,
-                  phone: data.phone,
-                  password_hash: passwordHash,
-                  role_code: data.role_code,
-                  status_code: 'PENDING', // Start as PENDING
-                  is_verified: false,
-                  avatar_url: data.avatar_url
-              }
-          });
+    }
+    const employeeCode = `${prefix}-${String(nextNum).padStart(3, '0')}`;
 
-          await tx.employees.create({
-              data: {
-                  user_id: newUser.user_id,
-                  employee_code: employeeCode,
-                  base_salary: Number(data.base_salary),
-                  job_title_code: data.role_code,
-                  start_date: new Date()
-              }
-          });
-
-          // 3. Generate Activation Token
-          const payload = { 
-              sub: newUser.user_id, 
-              email: newUser.email,
-              role_code: newUser.role_code 
-          };
-          const token = this.jwtService.sign(payload);
-
-          // 4. Send Activation Email
-          // Note: using this.mailService here. Since we are inside a transaction, if email fails, 
-          // we might want to catch it to avoid rolling back the user creation? 
-          // Ideally: Email failure shouldn't block creation, but for "Activation Flow", it's critical.
-          // Let's allow it to fail the transaction so we don't have "orphan pending users".
-          if (newUser.email) {
-             await this.mailService.sendEmployeeActivation(newUser.email, tempPassword, token, newUser.full_name);
-          }
-
-          return newUser;
+    return this.prisma.$transaction(async (tx) => {
+      // 2. Create User as PENDING
+      const newUser = await tx.users.create({
+        data: {
+          full_name: data.full_name,
+          email: data.email,
+          phone: data.phone,
+          password_hash: passwordHash,
+          role_code: data.role_code,
+          status_code: 'PENDING', // Start as PENDING
+          is_verified: false,
+          avatar_url: data.avatar_url
+        }
       });
+
+      await tx.employees.create({
+        data: {
+          user_id: newUser.user_id,
+          employee_code: employeeCode,
+          base_salary: Number(data.base_salary),
+          job_title_code: data.role_code,
+          start_date: new Date()
+        }
+      });
+
+      // 3. Generate Activation Token
+      const payload = {
+        sub: newUser.user_id,
+        email: newUser.email,
+        role_code: newUser.role_code
+      };
+      const token = this.jwtService.sign(payload);
+
+      // 4. Send Activation Email
+      // Note: using this.mailService here. Since we are inside a transaction, if email fails, 
+      // we might want to catch it to avoid rolling back the user creation? 
+      // Ideally: Email failure shouldn't block creation, but for "Activation Flow", it's critical.
+      // Let's allow it to fail the transaction so we don't have "orphan pending users".
+      if (newUser.email) {
+        await this.mailService.sendEmployeeActivation(newUser.email, tempPassword, token, newUser.full_name);
+      }
+
+      return newUser;
+    });
   }
 }
