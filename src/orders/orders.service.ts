@@ -8,6 +8,7 @@ import { GhnService } from '../address/ghn.service';
 import { MailService } from '../mail/mail.service';
 import { EventsGateway } from '../events/events.gateway';
 import { WalletService } from '../wallet/wallet.service';
+import { BlindboxesService } from '../blindboxes/blindboxes.service';
 
 @Injectable()
 export class OrdersService {
@@ -18,7 +19,8 @@ export class OrdersService {
     private customersService: CustomersService,
     private mailService: MailService,
     private eventsGateway: EventsGateway,
-    private walletService: WalletService
+    private walletService: WalletService,
+    private blindboxesService: BlindboxesService
   ) { }
 
   // NEW: Anti-scalping Helper
@@ -90,6 +92,7 @@ export class OrdersService {
         // A. Separation Phase
         const retailItems: any[] = [];
         const preOrderItems: any[] = [];
+        const blindboxItems: any[] = []; // NEW
 
         // Pre-fetch variants to classify
         for (const item of items) {
@@ -107,15 +110,57 @@ export class OrdersService {
 
           // Use existence of definition or explicit product type
           const isPreorder = variant.products.type_code === 'PREORDER' || !!variant.product_preorder_configs;
+          const isBlindbox = variant.products.type_code === 'BLINDBOX';
 
           if (isPreorder) {
             preOrderItems.push(enrichedItem);
+          } else if (isBlindbox) {
+            blindboxItems.push(enrichedItem);
           } else {
             retailItems.push(enrichedItem);
           }
         }
 
         const ordersResults: any[] = [];
+
+        // A.1 PROCESS BLINDBOX ITEMS
+        // Logic: Reveal items NOW (Instant Gacha) but keep them hidden in DB (is_opened=false)
+        if (blindboxItems.length > 0) {
+          // We need to inject these into "retailItems" or "preOrderItems"? 
+          // The prompt says: "create method: Separate Blindbox items, run logic, and save hidden results."
+          // And: "Merge with Normal Items & Create Order"
+          // Since Blindboxes are usually Retail-like (shipped immediately), we should treat them as RETAIL ORDERS.
+          // BUT they need the "allocated_product_id" field in `order_items`.
+
+          for (const bItem of blindboxItems) {
+            const bbConfig = await tx.product_blindboxes.findUnique({
+              where: { product_id: bItem.variant.product_id }
+            });
+
+            if (!bbConfig) throw new BadRequestException("Blindbox config missing");
+
+            // CALL SERVICE: Pick N Unique Items
+            const wonVariants = await this.blindboxesService.pickUniqueItems(tx, bbConfig, bItem.quantity);
+
+            for (const won of wonVariants) {
+              // We create individual order line items for opacity? 
+              // Or one line item with quantity?
+              // Valid Point: If we have 2 quantities, and 2 DIFFERENT won items, we CANNOT use one line item with quantity 2 and allocated_product_id X.
+              // We MUST split them into individual line items! 
+              // The prompt logic: "bbOrderItemsData.push({ ... allocated_product_id: won.id ... })" implies splitting.
+
+              retailItems.push({
+                ...bItem,
+                quantity: 1, // Split into single units
+                // We need to attach the WON result to this item object so we can use it later when creating order_items
+                _allocated_product_id: won.variant_id,
+                _is_opened: false,
+                // CAPTURE SOURCE FOR METADATA
+                _metadata: { source: (won as any)._source_stock || 'AVAILABLE' }
+              });
+            }
+          }
+        }
 
         // B. Process Pre-orders (Contracts & Deposit Orders -> ONE ORDER PER ITEM)
         if (preOrderItems.length > 0) {
@@ -245,7 +290,7 @@ export class OrdersService {
           const rtOrderItemsData: any[] = [];
 
           for (const rItem of retailItems) {
-            const { variant, quantity, price } = rItem;
+            const { variant, quantity, price, _allocated_product_id, _is_opened, _metadata } = rItem;
 
             if (variant.stock_available < quantity) {
               throw new BadRequestException(`Out of stock: ${variant.sku}`);
@@ -264,7 +309,10 @@ export class OrdersService {
               variant_id: variant.variant_id,
               quantity: quantity,
               unit_price: price,
-              total_price: Number(price) * quantity
+              total_price: Number(price) * quantity,
+              allocated_product_id: _allocated_product_id || null,
+              is_opened: _is_opened ?? false,
+              metadata: _metadata || undefined // Save Source Metadata
             });
           }
 
@@ -487,10 +535,22 @@ export class OrdersService {
 
       // 1. Revert Stock
       for (const item of order.order_items) {
-        await tx.product_variants.update({
-          where: { variant_id: item.variant_id },
-          data: { stock_available: { increment: item.quantity } }
-        });
+        // --- CRITICAL FIX START ---
+        const targetVariantId = item.allocated_product_id ?? item.variant_id;
+        const metadata = (item.metadata as any) || {};
+
+        if (metadata.source === 'DEFECT') {
+          await tx.product_variants.update({
+            where: { variant_id: targetVariantId },
+            data: { stock_defect: { increment: item.quantity } }
+          });
+        } else {
+          await tx.product_variants.update({
+            where: { variant_id: targetVariantId },
+            data: { stock_available: { increment: item.quantity } }
+          });
+        }
+        // --- CRITICAL FIX END ---
       }
 
       // 2. Restore Items to Cart (NEW LOGIC)
@@ -570,6 +630,9 @@ export class OrdersService {
           include: {
             product_variants: {
               include: { products: true }
+            },
+            allocated_variant: {
+              include: { products: true }
             }
           }
         },
@@ -627,6 +690,28 @@ export class OrdersService {
     if (!order) {
       throw new BadRequestException(`Order #${id} not found`);
     }
+
+    // CHECK: Any unopened blindbox?
+    const hasUnopened = order.order_items.some((i: any) =>
+      i.product_variants.products.type_code === 'BLINDBOX' && !i.is_opened
+    );
+
+    if (hasUnopened) {
+      // CENSOR THE VIDEO
+      order.packing_video_urls = null; // or empty array if type requires []
+
+      // CENSOR THE ITEMS
+      order.order_items = order.order_items.map((item: any) => {
+        if (item.product_variants.products.type_code === 'BLINDBOX' && !item.is_opened) {
+          return {
+            ...item,
+            allocated_product_id: null, // Hide the real item ID
+          };
+        }
+        return item;
+      });
+    }
+
     return order;
   }
 
@@ -812,11 +897,26 @@ export class OrdersService {
             data: { sold_slots: { decrement: item.quantity } }
           });
         } else {
-          // Revert Retail Stock
-          await tx.product_variants.update({
-            where: { variant_id: item.variant_id },
-            data: { stock_available: { increment: item.quantity } }
-          });
+          // --- CRITICAL FIX START ---
+          // Identify the real inventory item (Blindbox Content vs Retail Item)
+          const targetVariantId = item.allocated_product_id ?? item.variant_id;
+
+          // Check metadata to return to correct stock pile (Defect vs Available)
+          const metadata = (item.metadata as any) || {};
+
+          if (metadata.source === 'DEFECT') {
+            await tx.product_variants.update({
+              where: { variant_id: targetVariantId },
+              data: { stock_defect: { increment: item.quantity } }
+            });
+          } else {
+            // Default / Available / Safe Fallback
+            await tx.product_variants.update({
+              where: { variant_id: targetVariantId },
+              data: { stock_available: { increment: item.quantity } }
+            });
+          }
+          // --- CRITICAL FIX END ---
         }
       }
 
