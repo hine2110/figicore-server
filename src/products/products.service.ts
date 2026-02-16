@@ -10,12 +10,19 @@ export class ProductsService {
   constructor(private prisma: PrismaService) { }
 
   async create(createProductDto: CreateProductDto) {
-    const {
+    let {
       variants,
       blindbox,
       preorder,
       ...productData
     } = createProductDto;
+
+    // --- FIX: FORCE CLEAR VARIANTS FOR BLINDBOX ---
+    // This prevents the Retail loop from creating a "Ghost Variant" with 0 stock.
+    if (productData.type_code === 'BLINDBOX') {
+      variants = [];
+    }
+    // ----------------------------------------------
 
     // Helper: Generate SKU/Barcode
     const genCode = (prefix: string) => `${prefix}-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
@@ -91,13 +98,27 @@ export class ProductsService {
       // Handle Blindbox extension (Legacy Logic preserved for completeness if needed, 
       // but strictly following the request which focused on Pre-order structure)
       if (productData.type_code === 'BLINDBOX' && blindbox) {
-        // ... Blindbox logic is separate, but making sure we don't break it.
-        // Since the user focused on the 'Logic Flow' for Pre-order, I will retain the blindbox block 
-        // BUT move it after the loop or handle it if it was part of variants.
-        // Blindbox creates its own special single variant usually.
-
-        // Re-implementing Blindbox logic briefly to ensure it works
+        // Defines price for calculations
         const price = Number(blindbox.price);
+
+        // FIX: Create a Dummy Variant with INFINITE STOCK so users can add to cart
+        // Logic: When type_code='BLINDBOX', we create a placeholder variant.
+        // Real stock is managed by the underlying pool.
+        await tx.product_variants.create({
+          data: {
+            product_id: product.product_id,
+            sku: genCode('BBOX'),
+            barcode: genCode('BAR'),
+            option_name: 'Blindbox Ticket',
+            price: price,
+            media_assets: JSON.stringify([]),
+            stock_available: 999999, // <--- ALLOW UNLIMITED PURCHASES
+            stock_defect: 0,
+
+            // Blindboxes are technically retail items but managed differently
+            weight_g: 200, length_cm: 10, width_cm: 10, height_cm: 10
+          }
+        });
         const minVal = Number(blindbox.min_value_allow);
         const maxVal = Number(blindbox.max_value_allow);
         const tier2Max = price + (maxVal - price) * 0.7;
@@ -189,7 +210,7 @@ export class ProductsService {
     });
   }
 
-  findAll(params: { search?: string, brand_id?: number, category_id?: number, series_id?: number, type_code?: any, min_price?: number, max_price?: number, sort?: string }) {
+  async findAll(params: { search?: string, brand_id?: number, category_id?: number, series_id?: number, type_code?: any, min_price?: number, max_price?: number, sort?: string }) {
     const { search, brand_id, category_id, series_id, type_code, min_price, max_price, sort } = params;
 
     const where: Prisma.productsWhereInput = {
@@ -233,20 +254,21 @@ export class ProductsService {
     }
     // Note: price_asc and price_desc are handled in the frontend
 
-    return this.prisma.products.findMany({
+    const products = await this.prisma.products.findMany({
       where,
       include: {
         brands: true,
         categories: true,
         series: true,
-        product_variants: {
-          where: { deleted_at: null },
-          include: { product_preorder_configs: true }
-        },
-        product_blindboxes: true
+        product_variants: true,
+        product_blindboxes: true,
+        product_promotions: true,
       },
       orderBy
     });
+
+    // [NEW] Apply Dynamic Pricing Logic
+    return products.map(product => this.calculatePromotionalPrice(product));
   }
 
   /**
@@ -457,8 +479,9 @@ export class ProductsService {
           brands: true,
           categories: true,
           series: true,
-          product_variants: { include: { product_preorder_configs: true } },
-          product_blindboxes: true
+          product_variants: true,
+          product_blindboxes: true,
+          product_promotions: true
         }
       });
       similarProducts = [...similarProducts, ...byCategory];
@@ -479,10 +502,52 @@ export class ProductsService {
         product_blindboxes: true,
         brands: true,
         categories: true,
-        series: true
+        series: true,
+        product_promotions: true,
       }
     });
     if (!product) throw new BadRequestException('Product not found');
+
+    // [NEW] Apply Dynamic Pricing Logic
+    return this.calculatePromotionalPrice(product);
+  }
+
+  // [NEW] Helper: Dynamic Pricing Logic
+  private calculatePromotionalPrice(product: any) {
+    const promo = product.product_promotions;
+    const now = new Date();
+
+    // Check if promotion is valid
+    const isValidPromo = promo &&
+      promo.is_active &&
+      new Date(promo.start_date) <= now &&
+      new Date(promo.end_date) >= now;
+
+    // Apply to Variants
+    if (product.product_variants) {
+      product.product_variants = product.product_variants.map((variant: any) => {
+        let final_price = Number(variant.price);
+        let discount_amount = 0;
+
+        if (isValidPromo) {
+          if (promo.type_code === 'PERCENTAGE') {
+            discount_amount = final_price * (Number(promo.value) / 100);
+            final_price = final_price - discount_amount;
+          } else if (promo.type_code === 'FIXED_AMOUNT') {
+            discount_amount = Number(promo.value);
+            final_price = Math.max(0, final_price - discount_amount);
+          }
+        }
+
+        return {
+          ...variant,
+          final_price,
+          is_on_sale: isValidPromo,
+          discount_percentage: isValidPromo && promo.type_code === 'PERCENTAGE' ? Number(promo.value) : 0,
+        };
+      });
+    }
+
     return product;
   }
 
@@ -844,5 +909,38 @@ export class ProductsService {
       Logger.error("AI Gen Failed (All Models)", finalError);
       throw new ServiceUnavailableException("AI service is currently unavailable. Please try again later.");
     }
+  }
+
+  // --- BLINDBOX TIER ALGORITHM ---
+  generateBlindboxTiers(price: number, min: number, max: number) {
+    // 1. Tier 1 (Common - 75%)
+    // Range: [Min, Price]
+    const tier1 = {
+      name: 'Common',
+      probability: 75,
+      value_min: min,
+      value_max: price
+    };
+
+    // 2. Tier 2 (Rare - 20%)
+    // Range: [Price + 1, Price + (Max - Price) * 0.4]
+    const tier2Max = Math.floor(price + (max - price) * 0.4);
+    const tier2 = {
+      name: 'Rare',
+      probability: 20,
+      value_min: price + 1,
+      value_max: tier2Max
+    };
+
+    // 3. Tier 3 (Legendary - 5%)
+    // Range: [End of Tier 2 + 1, Max]
+    const tier3 = {
+      name: 'Legendary',
+      probability: 5,
+      value_min: tier2Max + 1,
+      value_max: max
+    };
+
+    return [tier1, tier2, tier3];
   }
 }

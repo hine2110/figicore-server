@@ -1,4 +1,17 @@
 -- CreateTable
+CREATE TABLE "access_controls" (
+    "control_id" SERIAL NOT NULL,
+    "role_code" VARCHAR(50) NOT NULL,
+    "ip_address" VARCHAR(45) NOT NULL,
+    "description" VARCHAR(255),
+    "is_active" BOOLEAN DEFAULT true,
+    "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "access_controls_pkey" PRIMARY KEY ("control_id")
+);
+
+-- CreateTable
 CREATE TABLE "addresses" (
     "address_id" SERIAL NOT NULL,
     "user_id" INTEGER NOT NULL,
@@ -80,6 +93,7 @@ CREATE TABLE "cart_items" (
     "cart_id" INTEGER NOT NULL,
     "variant_id" INTEGER NOT NULL,
     "quantity" INTEGER DEFAULT 1,
+    "payment_option" VARCHAR(20) NOT NULL DEFAULT 'DEPOSIT',
     "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "deleted_at" TIMESTAMP(6),
@@ -253,9 +267,11 @@ CREATE TABLE "order_items" (
     "order_id" INTEGER NOT NULL,
     "variant_id" INTEGER NOT NULL,
     "allocated_product_id" INTEGER,
+    "is_opened" BOOLEAN DEFAULT false,
     "quantity" INTEGER NOT NULL,
     "unit_price" DECIMAL(15,2) NOT NULL,
     "total_price" DECIMAL(15,2) NOT NULL,
+    "metadata" JSONB,
     "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "deleted_at" TIMESTAMP(6),
@@ -293,6 +309,7 @@ CREATE TABLE "orders" (
     "payment_deadline" TIMESTAMP(6),
     "channel_code" VARCHAR(20) NOT NULL,
     "payment_method_code" VARCHAR(20),
+    "payment_ref_code" VARCHAR(50),
     "status_code" VARCHAR(50) DEFAULT 'PENDING',
     "packing_video_urls" JSONB,
     "packed_at" TIMESTAMP(6),
@@ -344,6 +361,8 @@ CREATE TABLE "product_blindboxes" (
     "min_value" DECIMAL(15,2),
     "max_value" DECIMAL(15,2),
     "tier_config" JSONB,
+    "start_time" TIMESTAMP(6),
+    "end_time" TIMESTAMP(6),
     "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "deleted_at" TIMESTAMP(6),
@@ -352,17 +371,38 @@ CREATE TABLE "product_blindboxes" (
 );
 
 -- CreateTable
-CREATE TABLE "product_preorders" (
-    "product_id" INTEGER NOT NULL,
-    "deposit_amount" DECIMAL(15,2),
-    "full_price" DECIMAL(15,2) DEFAULT 0,
+CREATE TABLE "product_preorder_configs" (
+    "config_id" SERIAL NOT NULL,
+    "variant_id" INTEGER NOT NULL,
+    "deposit_amount" DECIMAL(15,2) NOT NULL DEFAULT 0,
+    "full_price" DECIMAL(15,2) NOT NULL DEFAULT 0,
     "release_date" TIMESTAMP(6),
-    "max_slots" INTEGER,
-    "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
-    "deleted_at" TIMESTAMP(6),
+    "total_slots" INTEGER NOT NULL DEFAULT 0,
+    "sold_slots" INTEGER NOT NULL DEFAULT 0,
+    "max_qty_per_user" INTEGER NOT NULL DEFAULT 1,
+    "stock_held" INTEGER NOT NULL DEFAULT 0,
+    "created_at" TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP,
 
-    CONSTRAINT "product_preorders_pkey" PRIMARY KEY ("product_id")
+    CONSTRAINT "product_preorder_configs_pkey" PRIMARY KEY ("config_id")
+);
+
+-- CreateTable
+CREATE TABLE "preorder_contracts" (
+    "contract_id" SERIAL NOT NULL,
+    "order_code" VARCHAR(50) NOT NULL,
+    "user_id" INTEGER NOT NULL,
+    "variant_id" INTEGER NOT NULL,
+    "quantity" INTEGER NOT NULL DEFAULT 1,
+    "status_code" TEXT NOT NULL DEFAULT 'WAITING_DEPOSIT',
+    "deposit_order_id" INTEGER,
+    "final_payment_order_id" INTEGER,
+    "deposit_amount_paid" DECIMAL(65,30) DEFAULT 0,
+    "remaining_amount" DECIMAL(65,30) DEFAULT 0,
+    "created_at" TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "preorder_contracts_pkey" PRIMARY KEY ("contract_id")
 );
 
 -- CreateTable
@@ -381,6 +421,7 @@ CREATE TABLE "products" (
     "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "deleted_at" TIMESTAMP(6),
+    "product_promotion_id" INTEGER,
 
     CONSTRAINT "products_pkey" PRIMARY KEY ("product_id")
 );
@@ -394,6 +435,13 @@ CREATE TABLE "product_variants" (
     "price" DECIMAL(15,2) NOT NULL DEFAULT 0,
     "stock_available" INTEGER NOT NULL DEFAULT 0,
     "stock_defect" INTEGER NOT NULL DEFAULT 0,
+    "weight_g" INTEGER NOT NULL DEFAULT 200,
+    "length_cm" INTEGER NOT NULL DEFAULT 10,
+    "width_cm" INTEGER NOT NULL DEFAULT 10,
+    "height_cm" INTEGER NOT NULL DEFAULT 10,
+    "scale" VARCHAR(50),
+    "material" VARCHAR(100),
+    "included_items" JSONB,
     "barcode" VARCHAR(50),
     "description" TEXT,
     "media_assets" JSONB DEFAULT '[]',
@@ -416,6 +464,24 @@ CREATE TABLE "profile_update_requests" (
     "deleted_at" TIMESTAMP(6),
 
     CONSTRAINT "profile_update_requests_pkey" PRIMARY KEY ("request_id")
+);
+
+-- CreateTable
+CREATE TABLE "product_promotions" (
+    "promotion_id" SERIAL NOT NULL,
+    "name" VARCHAR(255) NOT NULL,
+    "type_code" VARCHAR(50) NOT NULL,
+    "value" DECIMAL(15,2) NOT NULL,
+    "start_date" TIMESTAMP(6) NOT NULL,
+    "end_date" TIMESTAMP(6) NOT NULL,
+    "is_active" BOOLEAN DEFAULT true,
+    "min_apply_price" DECIMAL(15,2),
+    "max_apply_price" DECIMAL(15,2),
+    "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
+    "deleted_at" TIMESTAMP(6),
+
+    CONSTRAINT "product_promotions_pkey" PRIMARY KEY ("promotion_id")
 );
 
 -- CreateTable
@@ -664,6 +730,9 @@ CREATE TABLE "work_schedules" (
 );
 
 -- CreateIndex
+CREATE INDEX "idx_access_control_lookup" ON "access_controls"("role_code", "ip_address", "is_active");
+
+-- CreateIndex
 CREATE UNIQUE INDEX "uq_auction_bid_amount" ON "auction_bids"("auction_id", "bid_amount");
 
 -- CreateIndex
@@ -683,6 +752,12 @@ CREATE UNIQUE INDEX "orders_order_code_key" ON "orders"("order_code");
 
 -- CreateIndex
 CREATE INDEX "idx_orders_code" ON "orders"("order_code");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "product_preorder_configs_variant_id_key" ON "product_preorder_configs"("variant_id");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "preorder_contracts_order_code_key" ON "preorder_contracts"("order_code");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "product_variants_sku_key" ON "product_variants"("sku");
@@ -805,6 +880,9 @@ ALTER TABLE "order_items" ADD CONSTRAINT "order_items_order_id_fkey" FOREIGN KEY
 ALTER TABLE "order_items" ADD CONSTRAINT "order_items_variant_id_fkey" FOREIGN KEY ("variant_id") REFERENCES "product_variants"("variant_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
 
 -- AddForeignKey
+ALTER TABLE "order_items" ADD CONSTRAINT "order_items_allocated_product_id_fkey" FOREIGN KEY ("allocated_product_id") REFERENCES "product_variants"("variant_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
+
+-- AddForeignKey
 ALTER TABLE "order_status_history" ADD CONSTRAINT "order_status_history_order_id_fkey" FOREIGN KEY ("order_id") REFERENCES "orders"("order_id") ON DELETE CASCADE ON UPDATE NO ACTION;
 
 -- AddForeignKey
@@ -832,7 +910,19 @@ ALTER TABLE "pos_sessions" ADD CONSTRAINT "pos_sessions_user_id_fkey" FOREIGN KE
 ALTER TABLE "product_blindboxes" ADD CONSTRAINT "product_blindboxes_product_id_fkey" FOREIGN KEY ("product_id") REFERENCES "products"("product_id") ON DELETE CASCADE ON UPDATE NO ACTION;
 
 -- AddForeignKey
-ALTER TABLE "product_preorders" ADD CONSTRAINT "product_preorders_product_id_fkey" FOREIGN KEY ("product_id") REFERENCES "products"("product_id") ON DELETE CASCADE ON UPDATE NO ACTION;
+ALTER TABLE "product_preorder_configs" ADD CONSTRAINT "product_preorder_configs_variant_id_fkey" FOREIGN KEY ("variant_id") REFERENCES "product_variants"("variant_id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "preorder_contracts" ADD CONSTRAINT "preorder_contracts_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("user_id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "preorder_contracts" ADD CONSTRAINT "preorder_contracts_variant_id_fkey" FOREIGN KEY ("variant_id") REFERENCES "product_variants"("variant_id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "preorder_contracts" ADD CONSTRAINT "preorder_contracts_deposit_order_id_fkey" FOREIGN KEY ("deposit_order_id") REFERENCES "orders"("order_id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "preorder_contracts" ADD CONSTRAINT "preorder_contracts_final_payment_order_id_fkey" FOREIGN KEY ("final_payment_order_id") REFERENCES "orders"("order_id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "products" ADD CONSTRAINT "products_brand_id_fkey" FOREIGN KEY ("brand_id") REFERENCES "brands"("brand_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
@@ -842,6 +932,9 @@ ALTER TABLE "products" ADD CONSTRAINT "products_category_id_fkey" FOREIGN KEY ("
 
 -- AddForeignKey
 ALTER TABLE "products" ADD CONSTRAINT "products_series_id_fkey" FOREIGN KEY ("series_id") REFERENCES "series"("series_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
+
+-- AddForeignKey
+ALTER TABLE "products" ADD CONSTRAINT "products_product_promotion_id_fkey" FOREIGN KEY ("product_promotion_id") REFERENCES "product_promotions"("promotion_id") ON DELETE SET NULL ON UPDATE NO ACTION;
 
 -- AddForeignKey
 ALTER TABLE "product_variants" ADD CONSTRAINT "product_variants_product_id_fkey" FOREIGN KEY ("product_id") REFERENCES "products"("product_id") ON DELETE CASCADE ON UPDATE NO ACTION;
