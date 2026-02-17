@@ -13,6 +13,10 @@ class CreateOrderItemDto {
     @IsNumber()
     @Min(0)
     price: number;
+
+    @IsString()
+    @IsOptional()
+    paymentOption?: string;
 }
 
 export class CreateOrderDto {
@@ -30,6 +34,10 @@ export class CreateOrderDto {
     @IsOptional()
     @IsNumber()
     original_shipping_fee?: number;
+
+    @IsOptional()
+    @IsString()
+    voucherCode?: string;
 
     @IsArray()
     @ValidateNested({ each: true })

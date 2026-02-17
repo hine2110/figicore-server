@@ -1,9 +1,10 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { PrismaService } from 'src/prisma/prisma.service';
+import { MailService } from 'src/mail/mail.service';
 
 @Injectable()
 export class InventoryService {
-  constructor(private prisma: PrismaService) { }
+  constructor(private prisma: PrismaService, private mailService: MailService) { }
 
   async createReceipt(userId: number, data: { note?: string, items: { variant_id: number, quantity_good: number, quantity_defect: number }[] }) {
     const { note, items } = data;
@@ -43,25 +44,43 @@ export class InventoryService {
           }
         });
 
-        // 2b. Update Variant Stock
         // 2b. Check Product Type & Update Vendor Stock
         const variant = await tx.product_variants.findUnique({
           where: { variant_id: item.variant_id },
-          include: { products: true }
+          include: { products: true, product_preorder_configs: true }
         });
 
         if (!variant) throw new BadRequestException(`Variant ${item.variant_id} not found.`);
 
-        if (variant.products.type_code === 'PREORDER') {
-          // SYNC LOGIC: Preorder variants share the same physical stock.
-          // Updating one means updating all variants for this product.
-          await tx.product_variants.updateMany({
-            where: { product_id: variant.product_id },
-            data: {
-              stock_available: { increment: item.quantity_good },
-              stock_defect: { increment: item.quantity_defect }
+        const isPreorder = variant.products.type_code === 'PREORDER' || !!variant.product_preorder_configs;
+
+        if (isPreorder) {
+          // INTERCEPTION: Add to Virtual Holding Stock (stock_held) on Config
+          // Do NOT add to Retail Stock (stock_available)
+
+          if (variant.product_preorder_configs) {
+            await tx.product_preorder_configs.update({
+              where: { config_id: variant.product_preorder_configs.config_id },
+              data: {
+                stock_held: { increment: item.quantity_good }
+              }
+            });
+
+            // TRIGGER: FIFO Allocation
+            if (item.quantity_good > 0) {
+              await this.allocatePreorders(tx, item.variant_id, item.quantity_good);
             }
-          });
+          }
+
+          // Defect stock might still go to variant or separate field? 
+          // Assuming standard defect handling for now or just log it.
+          if (item.quantity_defect > 0) {
+            await tx.product_variants.update({
+              where: { variant_id: item.variant_id },
+              data: { stock_defect: { increment: item.quantity_defect } }
+            });
+          }
+
         } else {
           // STANDARD LOGIC: Update only this specific variant
           await tx.product_variants.update({
@@ -81,7 +100,7 @@ export class InventoryService {
               change_amount: item.quantity_good,
               change_type_code: 'PURCHASE_ORDER',
               reference_id: receipt.receipt_id,
-              note: 'Good Stock Inbound'
+              note: isPreorder ? 'Pre-order Stock Inbound (Held)' : 'Good Stock Inbound'
             }
           });
         }
@@ -104,6 +123,82 @@ export class InventoryService {
     });
   }
 
+  // FIFO Allocation Logic
+  private async allocatePreorders(tx: any, variantId: number, quantityAvailable: number) {
+    console.log(`[Allocation] Starting FIFO allocation for Variant ${variantId}. Stock: ${quantityAvailable}`);
+
+    // Step A: Fetch Queue (FIFO)
+    const queue = await tx.preorder_contracts.findMany({
+      where: {
+        variant_id: variantId,
+        status_code: 'DEPOSITED'
+      },
+      orderBy: { created_at: 'asc' }, // FIFO: Oldest first
+      take: quantityAvailable,
+      include: {
+        users: true,
+        product_variants: { include: { products: true } }
+      }
+    });
+
+    let remainingStock = quantityAvailable;
+
+    for (const contract of queue) {
+      if (remainingStock <= 0) break;
+
+      // Check if we can fill this contract
+      if (remainingStock >= contract.quantity) {
+        // Allocate
+        remainingStock -= contract.quantity;
+
+        // Update Contract
+        await tx.preorder_contracts.update({
+          where: { contract_id: contract.contract_id },
+          data: {
+            status_code: 'READY_FOR_PAYMENT',
+            updated_at: new Date()
+          }
+        });
+
+        // Decrement Stock Held
+        await tx.product_preorder_configs.update({
+          where: { variant_id: variantId },
+          data: {
+            stock_held: { decrement: contract.quantity }
+          }
+        });
+
+        // Notification (Real Email)
+        const user = contract.users;
+        const variant = contract.product_variants;
+        const productName = variant?.products?.name
+          ? `${variant.products.name} - ${variant.sku}`
+          : `Product Variant #${variantId}`;
+
+        console.log(`[Notification] Sending email to User ${contract.user_id} (${user?.email})`);
+
+        if (user && user.email) {
+          const paymentLink = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/customer/preorders/${contract.contract_id}/pay`;
+
+          // Run async without awaiting to not block transaction (or await if critical)
+          // Ideally outside transaction, but here we are deep in logic. 
+          // MailService handles errors gracefully.
+          this.mailService.sendPreorderArrivalEmail(
+            user.email,
+            {
+              customerName: user.full_name,
+              productName: productName,
+              paymentLink: paymentLink,
+              remainingAmount: Number(contract.remaining_amount)
+            }
+          );
+        }
+      }
+    }
+
+    console.log(`[Allocation] Finished. Remaining Unallocated Stock: ${remainingStock}`);
+  }
+
   private async ensureEmployeeExists(tx: any, userId: number) {
     const employee = await tx.employees.findUnique({ where: { user_id: userId } });
     if (!employee) {
@@ -118,6 +213,61 @@ export class InventoryService {
         }
       });
     }
+  }
+
+
+  async getHistory(query: any) {
+    const page = Number(query.page) || 1;
+    const limit = Number(query.limit) || 20;
+    const skip = (page - 1) * limit;
+    const { search, startDate, endDate } = query;
+
+    const where: any = {};
+
+    if (search) {
+      where.OR = [
+        { note: { contains: search, mode: 'insensitive' } },
+        { employees: { users: { full_name: { contains: search, mode: 'insensitive' } } } }
+      ];
+    }
+
+    if (startDate || endDate) {
+      where.created_at = {};
+      if (startDate) where.created_at.gte = new Date(startDate);
+      if (endDate) where.created_at.lte = new Date(endDate);
+    }
+
+    const [data, total] = await Promise.all([
+      this.prisma.inventory_receipts.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { created_at: 'desc' },
+        include: {
+          employees: {
+            include: { users: { select: { full_name: true } } }
+          },
+          inventory_receipt_items: {
+            include: {
+              product_variants: {
+                include: { products: { select: { name: true, media_urls: true } } }
+              }
+            }
+          }
+        }
+      }),
+      this.prisma.inventory_receipts.count({ where })
+    ]);
+
+    return {
+      data,
+      meta: {
+        total,
+        page,
+        limit,
+        total_pages: Math.ceil(total / limit)
+      }
+    };
   }
 
   findAll() {
