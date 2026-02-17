@@ -1,4 +1,4 @@
-import { Controller, Post, Body, UseGuards, Request, Logger, UnauthorizedException } from '@nestjs/common';
+import { Controller, Post, Get, Body, Query, UseGuards, Request, Logger, UnauthorizedException } from '@nestjs/common';
 import { InventoryService } from './inventory.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
@@ -29,5 +29,11 @@ export class InventoryController {
       this.logger.error(`[Inventory] Error creating receipt: ${error.message}`, error.stack);
       throw error;
     }
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('receipts') // GET /inventory/receipts
+  async getHistory(@Request() req: any, @Query() query: any) {
+    return await this.inventoryService.getHistory(query);
   }
 }

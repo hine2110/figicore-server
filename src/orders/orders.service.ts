@@ -142,6 +142,16 @@ export class OrdersService {
             // CALL SERVICE: Pick N Unique Items
             const wonVariants = await this.blindboxesService.pickUniqueItems(tx, bbConfig, bItem.quantity);
 
+            // FIX: Find the "Ticket" Variant to deduct stock from (The one with huge stock)
+            // We assume the Ticket is the variant named 'Blindbox Ticket' or the one used to purchase.
+            // If the user managed to add "Blindbox Standard" (Variant 7) to cart, we should still deduct from Ticket (Variant 6).
+            const ticketVariant = await tx.product_variants.findFirst({
+              where: {
+                product_id: bItem.variant.product_id,
+                option_name: 'Blindbox Ticket' // Ensure this matches ProductService creation
+              }
+            }) || bItem.variant; // Fallback to current if not found
+
             for (const won of wonVariants) {
               // We create individual order line items for opacity? 
               // Or one line item with quantity?
@@ -151,6 +161,7 @@ export class OrdersService {
 
               retailItems.push({
                 ...bItem,
+                variant: ticketVariant, // SWAP to Ticket Variant for Stock Deduction & Order Record
                 quantity: 1, // Split into single units
                 // We need to attach the WON result to this item object so we can use it later when creating order_items
                 _allocated_product_id: won.variant_id,
@@ -185,12 +196,18 @@ export class OrdersService {
             }
 
             // 3. Determine Financials & Incentives
-            let isFullPayment = paymentOption === 'FULL_PAYMENT';
+            // Fix: Check payment_option from payload item, NOT just default.
+            // PItem has the raw item data. We need to check if 'payment_option' or 'paymentOption' was passed.
+            const requestedOption = (pItem as any).payment_option || (pItem as any).paymentOption;
+            let isFullPayment = requestedOption === 'FULL_PAYMENT';
 
             // Amounts
             // Use product_preorder_configs for full_price and deposit_amount
             const fullPrice = Number(variant.product_preorder_configs?.full_price || variant.price);
             const depositConfig = Number(variant.product_preorder_configs?.deposit_amount || 0);
+
+            // Double Check: If user requests DEPOSIT but no deposit config exists -> Force Full?
+            // Or if user requests FULL, we charge Full.
 
             let chargeAmountPerUnit = 0;
             let depositPerUnit = 0;
@@ -292,6 +309,8 @@ export class OrdersService {
           for (const rItem of retailItems) {
             const { variant, quantity, price, _allocated_product_id, _is_opened, _metadata } = rItem;
 
+            // FIX: Always deduct stock for the main variant (Ticket or Retail Item)
+            // For Blindbox: Ticket stock (99999) is deducted here. Real Item stock is deducted in blindboxes.service
             if (variant.stock_available < quantity) {
               throw new BadRequestException(`Out of stock: ${variant.sku}`);
             }
@@ -473,6 +492,33 @@ export class OrdersService {
       }
     });
 
+
+
+    // --- FIX: SEND NOTIFICATIONS AFTER TRANSACTION ---
+    try {
+      // Re-fetch orders with relations to send emails & socket
+      const updatedOrders = await this.prisma.orders.findMany({
+        where: { payment_ref_code: paymentRefCode, user_id: userId },
+        include: {
+          users: true,
+          order_items: { include: { product_variants: { include: { products: true } } } }
+        }
+      });
+
+      for (const order of updatedOrders) {
+        if (order.users && order.users.email) {
+          // Send Email
+          this.mailService.sendOrderConfirmation(order.users, order).catch(e => console.error("Mail Error", e));
+        }
+        // Emit Socket
+        this.eventsGateway.notifyNewOrder(order);
+      }
+      this.logger.log(`Notifications sent for group ${paymentRefCode}`);
+
+    } catch (error) {
+      console.error("Failed to send notifications for group payment", error);
+    }
+
     return { success: true, message: `Payment successful for group ${paymentRefCode}` };
   }
 
@@ -536,6 +582,8 @@ export class OrdersService {
       // 1. Revert Stock
       for (const item of order.order_items) {
         // --- CRITICAL FIX START ---
+        // --- CRITICAL FIX START ---
+        // 1. Restore Real Item / Retail Item
         const targetVariantId = item.allocated_product_id ?? item.variant_id;
         const metadata = (item.metadata as any) || {};
 
@@ -547,6 +595,14 @@ export class OrdersService {
         } else {
           await tx.product_variants.update({
             where: { variant_id: targetVariantId },
+            data: { stock_available: { increment: item.quantity } }
+          });
+        }
+
+        // 2. Restore Blindbox Ticket (Virtual Stock)
+        if (item.allocated_product_id) {
+          await tx.product_variants.update({
+            where: { variant_id: item.variant_id }, // The Ticket ID
             data: { stock_available: { increment: item.quantity } }
           });
         }
@@ -668,7 +724,9 @@ export class OrdersService {
     });
   }
 
-  async findOne(id: number) {
+  // FIX: Allow Staff to see censored video if needed.
+  // Updated signature to accept optional user context
+  async findOne(id: number, user?: any) {
     const order = await this.prisma.orders.findUnique({
       where: { order_id: id },
       include: {
@@ -696,9 +754,16 @@ export class OrdersService {
       i.product_variants.products.type_code === 'BLINDBOX' && !i.is_opened
     );
 
-    if (hasUnopened) {
+    // FIX: Only censor if the order is NOT completed (User hasn't received it yet)
+    // AND User is NOT Staff/Admin
+    const isStaff = user?.role === 'ADMIN' || user?.role?.startsWith('STAFF');
+
+    if (hasUnopened && order.status_code !== 'COMPLETED' && !isStaff) {
       // CENSOR THE VIDEO
-      order.packing_video_urls = null; // or empty array if type requires []
+      order.packing_video_urls = null;
+
+      // Marker for Frontend to show "Spoiler Protected" message
+      (order as any).is_blindbox_protected = true;
 
       // CENSOR THE ITEMS
       order.order_items = order.order_items.map((item: any) => {
@@ -913,6 +978,14 @@ export class OrdersService {
             // Default / Available / Safe Fallback
             await tx.product_variants.update({
               where: { variant_id: targetVariantId },
+              data: { stock_available: { increment: item.quantity } }
+            });
+          }
+
+          // FIX: Restore Blindbox Ticket as well
+          if (item.allocated_product_id) {
+            await tx.product_variants.update({
+              where: { variant_id: item.variant_id },
               data: { stock_available: { increment: item.quantity } }
             });
           }
