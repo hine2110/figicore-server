@@ -664,6 +664,12 @@ model timesheets {
   applied_hourly_rate Decimal?  @db.Decimal(15, 2)
   status_code         String?   @db.VarChar(20)
 
+  // Face Check-in Evidence
+  check_in_img_url    String?   @db.Text
+  check_in_score      Float?
+  check_out_img_url   String?   @db.Text
+  check_out_score     Float?
+
   created_at     DateTime?       @default(now()) @db.Timestamp(6)
   updated_at     DateTime?       @default(now()) @db.Timestamp(6)
   deleted_at     DateTime?       @db.Timestamp(6)
