@@ -220,6 +220,25 @@ async function main() {
     await upsertLookup('PAYMENT_METHOD', 'CASH', 'Cash', 3, { description: 'Pay cash at counter', icon: 'cash' });
 
 
+    // ==========================================
+    // 9. TRẠNG THÁI CHẤM CÔNG (TIMESHEET STATUS)
+    // ==========================================
+    console.log('--- 9. Seeding Timesheet Status ---');
+
+    // 1. Live Statuses (Trong ca)
+    await upsertLookup('TIMESHEET_STATUS', 'PRESENT', 'Đang làm việc (Đúng giờ)', 1, { color: 'green' });
+    await upsertLookup('TIMESHEET_STATUS', 'LATE', 'Đang làm việc (Đi trễ)', 2, { color: 'red' });
+
+    // 2. Final Statuses (Chốt ca)
+    await upsertLookup('TIMESHEET_STATUS', 'COMPLETED', 'Hoàn thành (Đúng giờ)', 3, { color: 'blue' });
+    await upsertLookup('TIMESHEET_STATUS', 'EARLY_LEAVE', 'Về sớm', 4, { color: 'orange' });
+
+    // 3. Error Statuses (Lỗi)
+    await upsertLookup('TIMESHEET_STATUS', 'MISSING', 'Quên Check-out', 5, { color: 'purple' });
+    await upsertLookup('TIMESHEET_STATUS', 'ABSENT', 'Vắng mặt', 6, { color: 'gray' });
+
+    console.log('✅ Timesheet Status Seeding Completed!');
+
     console.log('🎉 SEEDING HOÀN TẤT! Hệ thống đã sẵn sàng định danh.');
 }
 
