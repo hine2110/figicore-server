@@ -24,7 +24,50 @@ export class BlindboxesService {
         const results: any[] = [];
         const excludeIds = new Set<number>();
 
-        const rawConfig = typeof config.tier_config === 'string' ? JSON.parse(config.tier_config) : config.tier_config;
+        // DYNAMIC CONFIG GENERATION
+        let rawConfig: any;
+
+        // If min/max exist, generating dynamic tiers based on user Strategy
+        // Strategy: 75% Low | 20% Mid | 5% High
+        if (config.min_value && config.max_value) {
+            const min = Number(config.min_value);
+            const max = Number(config.max_value);
+            const range = max - min;
+
+            if (range > 0) {
+                // Define Thresholds
+                const lowEnd = min + (range * 0.3); // Top of Low Tier
+                const highStart = min + (range * 0.7); // Start of High Tier
+
+                rawConfig = [
+                    {
+                        name: 'TIER_COMMON',
+                        probability: 75,
+                        min: min,
+                        max: lowEnd // 0% - 30% range
+                    },
+                    {
+                        name: 'TIER_RARE',
+                        probability: 20,
+                        min: lowEnd,
+                        max: highStart // 30% - 70% range
+                    },
+                    {
+                        name: 'TIER_SECRET',
+                        probability: 5,
+                        min: highStart,
+                        max: max // 70% - 100% range
+                    }
+                ];
+                // console.log("Dynamic Blindbox Config Generated:", rawConfig);
+            } else {
+                // Fallback if price is flat
+                rawConfig = typeof config.tier_config === 'string' ? JSON.parse(config.tier_config) : config.tier_config;
+            }
+        } else {
+            rawConfig = typeof config.tier_config === 'string' ? JSON.parse(config.tier_config) : config.tier_config;
+        }
+
         const getRange = (name: string) => {
             if (Array.isArray(rawConfig)) return rawConfig.find((t: any) => t.name === name);
             return rawConfig[name] ? { ...rawConfig[name], name } : null;
