@@ -150,13 +150,21 @@ export class ShipmentsService {
       // 5. Save & Update
       await this.prisma.$transaction(async (tx) => {
         // Create Shipment Record
-        await tx.shipments.create({
-          data: {
+        // Create or Update Shipment Record (Idempotency)
+        await tx.shipments.upsert({
+          where: { order_id: orderId },
+          create: {
             order_id: orderId,
             tracking_code: ghnData.order_code,
             shipping_fee: ghnData.total_fee,
             status_code: 'READY_TO_PICK',
             ghn_service_id: 2
+          },
+          update: {
+            tracking_code: ghnData.order_code,
+            shipping_fee: ghnData.total_fee,
+            status_code: 'READY_TO_PICK',
+            updated_at: new Date()
           }
         });
 

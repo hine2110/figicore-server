@@ -215,6 +215,61 @@ export class InventoryService {
     }
   }
 
+
+  async getHistory(query: any) {
+    const page = Number(query.page) || 1;
+    const limit = Number(query.limit) || 20;
+    const skip = (page - 1) * limit;
+    const { search, startDate, endDate } = query;
+
+    const where: any = {};
+
+    if (search) {
+      where.OR = [
+        { note: { contains: search, mode: 'insensitive' } },
+        { employees: { users: { full_name: { contains: search, mode: 'insensitive' } } } }
+      ];
+    }
+
+    if (startDate || endDate) {
+      where.created_at = {};
+      if (startDate) where.created_at.gte = new Date(startDate);
+      if (endDate) where.created_at.lte = new Date(endDate);
+    }
+
+    const [data, total] = await Promise.all([
+      this.prisma.inventory_receipts.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { created_at: 'desc' },
+        include: {
+          employees: {
+            include: { users: { select: { full_name: true } } }
+          },
+          inventory_receipt_items: {
+            include: {
+              product_variants: {
+                include: { products: { select: { name: true, media_urls: true } } }
+              }
+            }
+          }
+        }
+      }),
+      this.prisma.inventory_receipts.count({ where })
+    ]);
+
+    return {
+      data,
+      meta: {
+        total,
+        page,
+        limit,
+        total_pages: Math.ceil(total / limit)
+      }
+    };
+  }
+
   findAll() {
     return this.prisma.inventory_receipts.findMany({
       include: { inventory_receipt_items: true },
