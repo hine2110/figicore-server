@@ -49,7 +49,8 @@ export class WorkSchedulesStaffService {
                             }
                         }
                     }
-                }
+                },
+                timesheets: true,
             },
             orderBy: {
                 date: 'asc',
