@@ -35,6 +35,8 @@ import { AccessControlModule } from './access-control/access-control.module';
 import { CheckInModule } from './check-in/check-in.module';
 
 
+import { WalletModule } from './wallet/wallet.module';
+import { BlindboxesModule } from './blindboxes/blindboxes.module';
 import { ServeStaticModule } from '@nestjs/serve-static';
 import { join } from 'path';
 
@@ -78,6 +80,8 @@ import { join } from 'path';
     AccessControlModule,
     CheckInModule,
 
+    WalletModule,
+    BlindboxesModule
   ],
 
   controllers: [AppController],

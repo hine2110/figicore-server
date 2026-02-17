@@ -10,12 +10,19 @@ export class ProductsService {
   constructor(private prisma: PrismaService) { }
 
   async create(createProductDto: CreateProductDto) {
-    const {
+    let {
       variants,
       blindbox,
       preorder,
       ...productData
     } = createProductDto;
+
+    // --- FIX: FORCE CLEAR VARIANTS FOR BLINDBOX ---
+    // This prevents the Retail loop from creating a "Ghost Variant" with 0 stock.
+    if (productData.type_code === 'BLINDBOX') {
+      variants = [];
+    }
+    // ----------------------------------------------
 
     // Helper: Generate SKU/Barcode
     const genCode = (prefix: string) => `${prefix}-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
@@ -31,54 +38,90 @@ export class ProductsService {
           series_id: productData.series_id,
           description: productData.description,
           media_urls: productData.media_urls ? (productData.media_urls as any) : Prisma.JsonNull,
-          status_code: 'ACTIVE',
+          status_code: productData.status_code || 'ACTIVE', // Default ACTIVE if not provided
         },
       });
 
-      // 2. Handle Variants & Type Specifics
-      const commonVariantData = {
-        product_id: product.product_id,
-        stock_available: 0,
-        stock_defect: 0,
-      };
+      // 2. Process Variants
+      if (variants && variants.length > 0) {
+        for (const variantDto of variants) {
+          // Prepare Core Variant Data
+          const isPreorder = productData.type_code === 'PREORDER';
 
-      if (productData.type_code === 'RETAIL') {
-        if (!variants || variants.length === 0) {
-          throw new BadRequestException('Retail products must have at least one variant.');
+          const variantData = {
+            product_id: product.product_id,
+            option_name: variantDto.option_name,
+            sku: variantDto.sku || genCode('SKU'),
+            barcode: variantDto.barcode || genCode('BAR'),
+            media_assets: variantDto.media_assets ? (variantDto.media_assets as any) : JSON.stringify([]),
+            description: variantDto.description,
+            // Physical Specs
+            weight_g: variantDto.weight_g || 200,
+            length_cm: variantDto.length_cm || 10,
+            width_cm: variantDto.width_cm || 10,
+            height_cm: variantDto.height_cm || 10,
+
+            // New Specs
+            scale: variantDto.scale,
+            material: variantDto.material,
+            included_items: variantDto.included_items ? (variantDto.included_items as any) : undefined,
+
+            // Retail Logic Guard: Force 0 for Pre-order
+            price: isPreorder ? 0 : variantDto.price,
+            stock_available: isPreorder ? 0 : (variantDto.stock_available ?? 0),
+            stock_defect: variantDto.stock_defect ?? 0
+          };
+
+          // Step C: Insert Core Variant
+          const createdVariant = await tx.product_variants.create({
+            data: variantData,
+          });
+
+          // Step D: Handle Extensions
+          if (isPreorder && variantDto.preorder_config) {
+            await tx.product_preorder_configs.create({
+              data: {
+                variant_id: createdVariant.variant_id,
+                deposit_amount: variantDto.preorder_config.deposit_amount,
+                full_price: variantDto.preorder_config.full_price,
+                total_slots: variantDto.preorder_config.total_slots,
+                sold_slots: 0,
+                max_qty_per_user: variantDto.preorder_config.max_qty_per_user ?? 2,
+                release_date: preorder?.release_date ? new Date(preorder.release_date) : null,
+                // stock_held: 0 (default)
+              },
+            });
+          }
         }
-
-        await tx.product_variants.createMany({
-          data: variants.map(v => ({
-            ...commonVariantData,
-            sku: genCode('SKU'),
-            barcode: genCode('BAR'),
-            option_name: v.option_name,
-            price: v.price,
-            description: v.description, // Map description
-            media_assets: v.media_assets ? (v.media_assets as any) : JSON.stringify([]), // Map media_assets
-            weight_g: v.weight_g || 200,
-            length_cm: v.length_cm || 10,
-            width_cm: v.width_cm || 10,
-            height_cm: v.height_cm || 10,
-          }))
-        });
       }
 
-      else if (productData.type_code === 'BLINDBOX') {
-        if (!blindbox) throw new BadRequestException('Blindbox configuration is required.');
-
-        // Weighted Random Algorithm: Auto-Calculate Tiers
+      // Handle Blindbox extension (Legacy Logic preserved for completeness if needed, 
+      // but strictly following the request which focused on Pre-order structure)
+      if (productData.type_code === 'BLINDBOX' && blindbox) {
+        // Defines price for calculations
         const price = Number(blindbox.price);
+
+        // FIX: Create a Dummy Variant with INFINITE STOCK so users can add to cart
+        // Logic: When type_code='BLINDBOX', we create a placeholder variant.
+        // Real stock is managed by the underlying pool.
+        await tx.product_variants.create({
+          data: {
+            product_id: product.product_id,
+            sku: genCode('BBOX'),
+            barcode: genCode('BAR'),
+            option_name: 'Blindbox Ticket',
+            price: price,
+            media_assets: JSON.stringify([]),
+            stock_available: 999999, // <--- ALLOW UNLIMITED PURCHASES
+            stock_defect: 0,
+
+            // Blindboxes are technically retail items but managed differently
+            weight_g: 200, length_cm: 10, width_cm: 10, height_cm: 10
+          }
+        });
         const minVal = Number(blindbox.min_value_allow);
         const maxVal = Number(blindbox.max_value_allow);
-
-        // Tier Logic
-        // Tier 1 (Common - 80%): [Min, Price]
-        // Tier 2 (Rare - 15%): (Price, Price + (Max - Price) * 0.7]
-        // Tier 3 (Legend - 5%): (Tier 2 Max, Max]
-
         const tier2Max = price + (maxVal - price) * 0.7;
-
         const tiers = [
           { probability: 80, min: minVal, max: price, name: "Common" },
           { probability: 15, min: price + 1, max: tier2Max, name: "Rare" },
@@ -95,53 +138,23 @@ export class ProductsService {
           }
         });
 
-        // Smart Variant: Sync Single Variant
+        // Ensure a blindbox variant exists if not in 'variants' array
+        // Usually Blindbox has 1 variant.
         await tx.product_variants.create({
           data: {
-            ...commonVariantData,
+            product_id: product.product_id,
             sku: genCode('BBOX'),
             barcode: genCode('BAR'),
             option_name: 'Blindbox Standard',
             price: blindbox.price,
-            media_assets: JSON.stringify([])
+            media_assets: JSON.stringify([]),
+            stock_available: 0
           }
         });
       }
 
-      else if (productData.type_code === 'PREORDER') {
-        if (!preorder) throw new BadRequestException('Preorder configuration is required.');
 
-        // 1. Create Preorder Info (Metadata Only)
-        await tx.product_preorders.create({
-          data: {
-            product_id: product.product_id,
-            release_date: new Date(preorder.release_date),
-            // Removed: deposit_amount, full_price, max_slots (Now in variants)
-          }
-        });
 
-        // 2. Variants from DTO (Supports Multivariant Preorder)
-        if (variants && variants.length > 0) {
-          await tx.product_variants.createMany({
-            data: variants.map(v => ({
-              ...commonVariantData,
-              sku: v.sku || genCode('PRE-SKU'),
-              barcode: v.barcode || genCode('PRE-BAR'),
-              option_name: v.option_name,
-              price: v.price,                         // FULL PRICE from frontend
-              deposit_amount: v.deposit_amount || 0,  // <--- VARIANT DEPOSIT
-              stock_available: 0,                     // Physical stock is 0
-              preorder_slot_limit: v.preorder_slot_limit || v.stock_available || 0, // <--- SLOT LIMIT
-              description: v.description,
-              media_assets: v.media_assets ? (v.media_assets as any) : JSON.stringify([]),
-              weight_g: v.weight_g || 200,
-              length_cm: v.length_cm || 10,
-              width_cm: v.width_cm || 10,
-              height_cm: v.height_cm || 10,
-            }))
-          });
-        }
-      }
 
       return product;
     });
@@ -185,9 +198,10 @@ export class ProductsService {
       return await tx.products.findUnique({
         where: { product_id: product.product_id },
         include: {
-          product_variants: true,
+          product_variants: {
+            include: { product_preorder_configs: true }
+          },
           product_blindboxes: true,
-          product_preorders: true,
           brands: true,
           categories: true,
           series: true
@@ -196,7 +210,7 @@ export class ProductsService {
     });
   }
 
-  findAll(params: { search?: string, brand_id?: number, category_id?: number, series_id?: number, type_code?: any, min_price?: number, max_price?: number, sort?: string }) {
+  async findAll(params: { search?: string, brand_id?: number, category_id?: number, series_id?: number, type_code?: any, min_price?: number, max_price?: number, sort?: string }) {
     const { search, brand_id, category_id, series_id, type_code, min_price, max_price, sort } = params;
 
     const where: Prisma.productsWhereInput = {
@@ -211,7 +225,8 @@ export class ProductsService {
         search ? {
           OR: [
             { name: { contains: search, mode: 'insensitive' } },
-            { product_variants: { some: { sku: { contains: search, mode: 'insensitive' } } } }
+            { product_variants: { some: { sku: { contains: search, mode: 'insensitive' } } } },
+            { product_variants: { some: { option_name: { contains: search, mode: 'insensitive' } } } }
           ]
         } : {},
 
@@ -239,19 +254,170 @@ export class ProductsService {
     }
     // Note: price_asc and price_desc are handled in the frontend
 
-    return this.prisma.products.findMany({
+    const products = await this.prisma.products.findMany({
       where,
       include: {
         brands: true,
         categories: true,
         series: true,
-        product_variants: true,
+        product_variants: {
+          include: {
+            product_preorder_configs: true
+          }
+        },
         product_blindboxes: true,
-        product_preorders: true
+        product_promotions: true,
       },
       orderBy
     });
+
+    // [NEW] Apply Dynamic Pricing Logic
+    return products.map(product => this.calculatePromotionalPrice(product));
   }
+
+  /**
+   * POS Product Search - Tìm kiếm sản phẩm cho POS
+   * Trả về variants với tồn kho, giá, hình ảnh
+   */
+  async posSearch(query: { q?: string, category_id?: string, brand_id?: string, min_price?: number, max_price?: number, sort?: string }) {
+    const { q, category_id, brand_id, min_price, max_price, sort } = query;
+
+    // Build where clause cho products
+    const productWhere: Prisma.productsWhereInput = {
+      status_code: 'ACTIVE', // Chỉ lấy sản phẩm active
+      deleted_at: null,
+      AND: [
+        // Search by product name or SKU
+        q ? {
+          OR: [
+            { name: { contains: q, mode: 'insensitive' } },
+            { product_variants: { some: { sku: { contains: q, mode: 'insensitive' } } } }
+          ]
+        } : {},
+        // Filter by category
+        category_id ? { category_id: Number(category_id) } : {},
+        // Filter by brand
+        brand_id ? { brand_id: Number(brand_id) } : {},
+        // Filter by Price Range (at least one variant matches)
+        (min_price !== undefined || max_price !== undefined) ? {
+          product_variants: {
+            some: {
+              price: {
+                gte: min_price || 0,
+                lte: max_price || 9999999999
+              }
+            }
+          }
+        } : {}
+      ]
+    };
+
+    // Sorting Logic
+    let orderBy: any = { name: 'asc' }; // Default POS sort
+    if (sort === 'newest') {
+      orderBy = { created_at: 'desc' };
+    } else if (sort === 'name_asc') {
+      orderBy = { name: 'asc' };
+    } else if (sort === 'name_desc') {
+      orderBy = { name: 'desc' };
+    }
+    // Note: price sorting for grouped products is complex via SQL, 
+    // we'll handle basic text/date sorting here. 
+    // If sort is price_asc/desc, we might need a different approach or client-side sort for the grouped result.
+    // Let's stick to these for now.
+
+    // Lấy products với variants
+    const products = await this.prisma.products.findMany({
+      where: productWhere,
+      include: {
+        product_variants: {
+          where: {
+            deleted_at: null,
+          }
+        },
+        categories: true,
+        brands: true,
+      },
+      orderBy: orderBy,
+    });
+
+    // Group by product and return with variants array
+    const groupedProducts = products.map(product => {
+      // Get all active variants with stock > 0
+      const activeVariants = product.product_variants
+        .filter(v => (v.stock_available || 0) > 0)
+        .map(variant => {
+          // Get thumbnail from media_urls or media_assets
+          let thumbnail = null;
+
+          // Try product.media_urls first
+          if (product.media_urls && typeof product.media_urls === 'object') {
+            const mediaArray = Array.isArray(product.media_urls)
+              ? product.media_urls
+              : (product.media_urls as any).images || [];
+            thumbnail = mediaArray[0] || null;
+          }
+
+          // Fallback to variant.media_assets
+          if (!thumbnail && variant.media_assets) {
+            try {
+              const assets = typeof variant.media_assets === 'string'
+                ? JSON.parse(variant.media_assets)
+                : variant.media_assets;
+              thumbnail = Array.isArray(assets) && assets[0] ? assets[0] : null;
+            } catch (e) {
+              thumbnail = null;
+            }
+          }
+
+          return {
+            variant_id: variant.variant_id,
+            sku: variant.sku,
+            option_name: variant.option_name,
+            price: Number(variant.price),
+            current_stock: variant.stock_available || 0,
+            thumbnail: thumbnail,
+          };
+        });
+
+      // Only return products that have at least one available variant
+      if (activeVariants.length === 0) return null;
+
+      // Use first variant's thumbnail for product thumbnail
+      const productThumbnail = activeVariants[0]?.thumbnail || null;
+
+      return {
+        product_id: product.product_id,
+        product_name: product.name,
+        thumbnail: productThumbnail,
+        category: product.categories?.name || 'Uncategorized',
+        brand: product.brands?.name || null,
+        product_type: product.type_code,
+        variants: activeVariants,
+      };
+    }).filter((p): p is NonNullable<typeof p> => p !== null); // Remove null entries and narrow type
+
+    // Sorting grouped products
+    const sortedProducts = groupedProducts.sort((a, b) => {
+      if (sort === 'price_asc') {
+        const minA = Math.min(...a.variants.map((v: any) => v.price));
+        const minB = Math.min(...b.variants.map((v: any) => v.price));
+        return minA - minB;
+      } else if (sort === 'price_desc') {
+        const maxA = Math.max(...a.variants.map((v: any) => v.price));
+        const maxB = Math.max(...b.variants.map((v: any) => v.price));
+        return maxB - maxA;
+      }
+      return 0; // Already sorted by name/date via SQL if sort is name_* or newest
+    });
+
+    return {
+      success: true,
+      count: sortedProducts.length,
+      data: sortedProducts,
+    };
+  }
+
 
   async findSimilar(id: number) {
     const product = await this.prisma.products.findUnique({
@@ -277,9 +443,8 @@ export class ProductsService {
           brands: true,
           categories: true,
           series: true,
-          product_variants: true,
-          product_blindboxes: true,
-          product_preorders: true
+          product_variants: { include: { product_preorder_configs: true } },
+          product_blindboxes: true
         }
       });
       similarProducts = [...bySeries];
@@ -298,9 +463,8 @@ export class ProductsService {
           brands: true,
           categories: true,
           series: true,
-          product_variants: true,
-          product_blindboxes: true,
-          product_preorders: true
+          product_variants: { include: { product_preorder_configs: true } },
+          product_blindboxes: true
         }
       });
       similarProducts = [...similarProducts, ...byBrand];
@@ -321,7 +485,7 @@ export class ProductsService {
           series: true,
           product_variants: true,
           product_blindboxes: true,
-          product_preorders: true
+          product_promotions: true
         }
       });
       similarProducts = [...similarProducts, ...byCategory];
@@ -335,15 +499,59 @@ export class ProductsService {
     const product = await this.prisma.products.findUnique({
       where: { product_id: id },
       include: {
-        product_variants: { where: { deleted_at: null } },
+        product_variants: {
+          where: { deleted_at: null },
+          include: { product_preorder_configs: true }
+        },
         product_blindboxes: true,
-        product_preorders: true,
         brands: true,
         categories: true,
-        series: true
+        series: true,
+        product_promotions: true,
       }
     });
     if (!product) throw new BadRequestException('Product not found');
+
+    // [NEW] Apply Dynamic Pricing Logic
+    return this.calculatePromotionalPrice(product);
+  }
+
+  // [NEW] Helper: Dynamic Pricing Logic
+  private calculatePromotionalPrice(product: any) {
+    const promo = product.product_promotions;
+    const now = new Date();
+
+    // Check if promotion is valid
+    const isValidPromo = promo &&
+      promo.is_active &&
+      new Date(promo.start_date) <= now &&
+      new Date(promo.end_date) >= now;
+
+    // Apply to Variants
+    if (product.product_variants) {
+      product.product_variants = product.product_variants.map((variant: any) => {
+        let final_price = Number(variant.price);
+        let discount_amount = 0;
+
+        if (isValidPromo) {
+          if (promo.type_code === 'PERCENTAGE') {
+            discount_amount = final_price * (Number(promo.value) / 100);
+            final_price = final_price - discount_amount;
+          } else if (promo.type_code === 'FIXED_AMOUNT') {
+            discount_amount = Number(promo.value);
+            final_price = Math.max(0, final_price - discount_amount);
+          }
+        }
+
+        return {
+          ...variant,
+          final_price,
+          is_on_sale: isValidPromo,
+          discount_percentage: isValidPromo && promo.type_code === 'PERCENTAGE' ? Number(promo.value) : 0,
+        };
+      });
+    }
+
     return product;
   }
 
@@ -405,6 +613,11 @@ export class ProductsService {
                 length_cm: v.length_cm,
                 width_cm: v.width_cm,
                 height_cm: v.height_cm,
+                scale: v.scale,
+                material: v.material,
+                included_items: v.included_items ? (v.included_items as any) : undefined,
+                stock_available: v.stock_available, // Retail specific
+                stock_defect: v.stock_defect
               },
             });
           } else {
@@ -423,6 +636,9 @@ export class ProductsService {
                 length_cm: v.length_cm || 10,
                 width_cm: v.width_cm || 10,
                 height_cm: v.height_cm || 10,
+                scale: v.scale,
+                material: v.material,
+                included_items: v.included_items ? (v.included_items as any) : undefined,
               },
             });
           }
@@ -466,20 +682,7 @@ export class ProductsService {
       }
 
       else if (type === 'PREORDER' && preorder) {
-        await tx.product_preorders.upsert({
-          where: { product_id: id },
-          create: {
-            product_id: id,
-            release_date: new Date(preorder.release_date),
-            // Legacy fields removed
-          },
-          update: {
-            release_date: new Date(preorder.release_date),
-            // Legacy fields removed
-          },
-        });
 
-        // Loop through variants and update/create them
         if (variants && variants.length > 0) {
           for (const v of variants) {
             const existingVariant = await tx.product_variants.findUnique({
@@ -487,17 +690,17 @@ export class ProductsService {
             });
 
             if (existingVariant && existingVariant.product_id !== id) {
-              // Skip or throw, but here we proceed
+              // Skip or throw
             }
+
+            let variantId = existingVariant?.variant_id;
 
             if (existingVariant) {
               await tx.product_variants.update({
                 where: { variant_id: existingVariant.variant_id },
                 data: {
                   option_name: v.option_name,
-                  price: v.price,
-                  deposit_amount: v.deposit_amount, // Update Deposit
-                  preorder_slot_limit: v.preorder_slot_limit ?? v.stock_available, // Update Slot Limit
+                  price: 0, // Retail price 0
                   barcode: v.barcode,
                   description: v.description,
                   media_assets: v.media_assets ? (v.media_assets as any) : undefined,
@@ -505,18 +708,20 @@ export class ProductsService {
                   length_cm: v.length_cm,
                   width_cm: v.width_cm,
                   height_cm: v.height_cm,
+                  scale: v.scale,
+                  material: v.material,
+                  included_items: v.included_items ? (v.included_items as any) : undefined,
                 },
               });
             } else {
-              await tx.product_variants.create({
+              // CREATE NEW VARIANT
+              const newVariant = await tx.product_variants.create({
                 data: {
                   product_id: id,
                   sku: v.sku,
                   option_name: v.option_name,
-                  price: v.price,
-                  deposit_amount: v.deposit_amount || 0,
-                  preorder_slot_limit: v.preorder_slot_limit || v.stock_available || 0,
-                  stock_available: 0, // Physical stock 0
+                  price: 0,
+                  stock_available: 0,
                   barcode: v.barcode,
                   description: v.description,
                   media_assets: v.media_assets ? (v.media_assets as any) : JSON.stringify([]),
@@ -524,7 +729,34 @@ export class ProductsService {
                   length_cm: v.length_cm || 10,
                   width_cm: v.width_cm || 10,
                   height_cm: v.height_cm || 10,
+                  scale: v.scale,
+                  material: v.material,
+                  included_items: v.included_items ? (v.included_items as any) : undefined,
                 },
+              });
+              variantId = newVariant.variant_id;
+            }
+
+            // UPSERT Preorder Config (Decoupled)
+            if (variantId && v.preorder_config) {
+              await tx.product_preorder_configs.upsert({
+                where: { variant_id: variantId },
+                create: {
+                  variant_id: variantId,
+                  deposit_amount: v.preorder_config.deposit_amount,
+                  full_price: v.preorder_config.full_price,
+                  total_slots: v.preorder_config.total_slots,
+                  sold_slots: 0,
+                  max_qty_per_user: v.preorder_config.max_qty_per_user ?? 2,
+                  release_date: new Date(preorder.release_date)
+                },
+                update: {
+                  deposit_amount: v.preorder_config.deposit_amount,
+                  full_price: v.preorder_config.full_price,
+                  total_slots: v.preorder_config.total_slots,
+                  max_qty_per_user: v.preorder_config.max_qty_per_user,
+                  release_date: new Date(preorder.release_date)
+                }
               });
             }
           }
@@ -560,11 +792,34 @@ export class ProductsService {
     });
   }
 
+  async findAttributeSuggestions(key: string) {
+    const allowedKeys = ['scale', 'material'];
+    if (!allowedKeys.includes(key)) {
+      return [];
+    }
+
+    // Using raw query for distinct might be overkill if findMany distinct works well. 
+    // Prisma distinct is cleaner.
+    const results = await this.prisma.product_variants.findMany({
+      where: {
+        [key]: { not: null }
+      },
+      select: {
+        [key]: true
+      },
+      distinct: [key as Prisma.Product_variantsScalarFieldEnum],
+      take: 50 // Limit suggestions to 50
+    });
+
+    return results.map(item => (item as any)[key]).filter(val => val !== null && val !== "");
+  }
+
   async generateAiDescription(dto: {
     productName: string;
     variantName?: string;
     userContext?: string;
-    imageUrl?: string; // Multimodal Input
+    imageUrl?: string;
+    richContext?: any;
   }) {
     if (!process.env.GEMINI_API_KEY) {
       throw new ServiceUnavailableException("AI service is not configured (Missing API Key).");
@@ -575,6 +830,26 @@ export class ProductsService {
     const context = dto.userContext ? `User Notes/Context: "${dto.userContext}"` : "User Notes: N/A";
     const variantContext = dto.variantName ? `Target Specific Variant: "${dto.variantName}"` : "Target: Main Product Overview";
 
+    // RICH CONTEXT PROCESSING
+    let richContextString = "";
+    if (dto.richContext) {
+      const { brand, category, series, variants } = dto.richContext as any;
+      if (brand) richContextString += `Brand: ${brand}\n`;
+      if (category) richContextString += `Category: ${category}\n`;
+      if (series) richContextString += `Series: ${series}\n`;
+
+      // Variant Specifics (if available for the target)
+      if (dto.variantName && variants) {
+        // Try to find the specific variant data or use the generic structure passed
+        // Assuming variants is an object with details
+        const v = variants; // If we pass the specific variant object directly
+        if (v.scale) richContextString += `Scale: ${v.scale}\n`;
+        if (v.material) richContextString += `Material: ${v.material}\n`;
+        if (v.included_items) richContextString += `Included Items: ${v.included_items}\n`;
+        if (v.price) richContextString += `Price: ${v.price} VND\n`;
+      }
+    }
+
     const prompt = `
             Role: Expert Copywriter for Collectibles (Gunpla, Figures, Toys).
             Task: Write a professional, engaging description in Vietnamese.
@@ -583,11 +858,14 @@ export class ProductsService {
             ${variantContext}
             ${context}
             
+            Technical Specs & Classification:
+            ${richContextString}
+            
             Guidelines:
-            1. **Tone**: Enthusiastic, professional, "Dan choi" friendly.
-            2. **Content**: Use the provided User Notes to highlight specific details. If an image is provided, describe the visual details (pose, accessories, color) accurately.
+            1. **Tone**: Enthusiastic, professional, "Dan choi" friendly (Otaku culture aware).
+            2. **Content**: Use the Technical Specs (Scale, Material, Brand, etc.) to enhance the description. If an image is provided, describe visual details.
             3. **Format**: Plain text, clear paragraph breaks, 2-3 paragraphs max. Use relevant emojis 🤖✨.
-            4. **Hallucination Check**: Only describe features visible in the image or explicitly stated in notes.
+            4. **Hallucination Check**: Only describe features visible in the image or explicitly stated.
             5. **Language**: Vietnamese.
         `;
 
@@ -635,5 +913,38 @@ export class ProductsService {
       Logger.error("AI Gen Failed (All Models)", finalError);
       throw new ServiceUnavailableException("AI service is currently unavailable. Please try again later.");
     }
+  }
+
+  // --- BLINDBOX TIER ALGORITHM ---
+  generateBlindboxTiers(price: number, min: number, max: number) {
+    // 1. Tier 1 (Common - 75%)
+    // Range: [Min, Price]
+    const tier1 = {
+      name: 'Common',
+      probability: 75,
+      value_min: min,
+      value_max: price
+    };
+
+    // 2. Tier 2 (Rare - 20%)
+    // Range: [Price + 1, Price + (Max - Price) * 0.4]
+    const tier2Max = Math.floor(price + (max - price) * 0.4);
+    const tier2 = {
+      name: 'Rare',
+      probability: 20,
+      value_min: price + 1,
+      value_max: tier2Max
+    };
+
+    // 3. Tier 3 (Legendary - 5%)
+    // Range: [End of Tier 2 + 1, Max]
+    const tier3 = {
+      name: 'Legendary',
+      probability: 5,
+      value_min: tier2Max + 1,
+      value_max: max
+    };
+
+    return [tier1, tier2, tier3];
   }
 }
