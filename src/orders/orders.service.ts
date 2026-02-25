@@ -83,8 +83,8 @@ export class OrdersService {
         }
       }
 
-      // 1.5 Generate Payment Ref Code
-      const paymentRefCode = `PAY-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+      // 1.5 Generate Payment Ref Code (No hyphens, as banking apps often strip them)
+      const paymentRefCode = `PAY${Date.now()}${Math.floor(Math.random() * 1000)}`;
 
       // 2. Start Transaction
       const createdOrders = await this.prisma.$transaction(async (tx) => {
@@ -844,23 +844,20 @@ export class OrdersService {
       let newStatus = 'PROCESSING'; // Default to Ready to Ship (COD)
       let additionalPaid = 0;
 
+      let paymentRefCodeStr: string | undefined = undefined;
+
       // WALLET PAYMENT LOGIC
       if (payment_method_code === 'WALLET') {
-        // Calculate what is owed
-        // We know 'deposit_amount_paid' is what they paid.
-        // Total - DepositPaid = Remaining to Deduct.
         const depositPaid = Number(contract.deposit_amount_paid);
-        const amountToDeduct = totalAmount - depositPaid; // Should equal remaining + shipping
+        const amountToDeduct = totalAmount - depositPaid;
 
         await this.walletService.deductBalance(userId, amountToDeduct, `ORD-${contract.deposit_order_id}`, `Final Payment for Contract #${contractId}`);
 
         newStatus = 'PROCESSING';
         additionalPaid = amountToDeduct;
       } else if (payment_method_code === 'BANKING') {
-        // If Banking, maybe PENDING_PAYMENT? But user requested PROCESSING for mock simplicity or manual verify. 
-        // Sticking to 'PROCESSING' as requested for "Mock/Final" simplicity in this task.
-        // Realistically might be 'PENDING_FINAL_PAYMENT' if async.
-        newStatus = 'PROCESSING';
+        newStatus = 'PENDING_FINAL_PAYMENT';
+        paymentRefCodeStr = `PAY${Date.now()}${Math.floor(Math.random() * 1000)}`;
       }
 
       // 4. MUTATE the Original Order (Single ID Strategy)
@@ -877,6 +874,7 @@ export class OrdersService {
 
           // If Wallet, we increase paid_amount. If COD, we keep it as Deposit (so Due = Total - Paid)
           paid_amount: { increment: additionalPaid },
+          payment_ref_code: paymentRefCodeStr !== undefined ? paymentRefCodeStr : undefined,
 
           updated_at: new Date(),
 
@@ -886,12 +884,12 @@ export class OrdersService {
         }
       });
 
-      // 5. Link & Update Contract to logic Closed
+      // 5. Link & Update Contract to logic Closed (Only if fully paid via Wallet)
       await tx.preorder_contracts.update({
         where: { contract_id: contractId },
         data: {
           final_payment_order_id: contract.deposit_order_id, // Self-reference
-          status_code: 'COMPLETED',
+          status_code: newStatus === 'PROCESSING' ? 'COMPLETED' : 'READY_FOR_PAYMENT',
           updated_at: new Date()
         }
       });
@@ -1090,10 +1088,48 @@ export class OrdersService {
       this.mailService.sendShippingUpdate(order.users, order);
     }
 
+    // Sync RETURNED to corresponding return_requests
+    if (status === 'RETURNED') {
+      await this.prisma.return_requests.updateMany({
+        where: {
+          order_id: order.order_id,
+          status_code: 'SHIPPING_TO_WAREHOUSE'
+        },
+        data: {
+          status_code: 'INSPECTING'
+        }
+      });
+    }
+
     return this.prisma.orders.update({
       where: { order_id: order.order_id },
       data: { status_code: status }
     });
+  }
+
+  async simulateReturnByOrderCode(orderCode: string) {
+    const order = await this.prisma.orders.findUnique({
+      where: { order_code: orderCode },
+      include: { shipments: true }
+    });
+
+    if (!order || !order.shipments) {
+      throw new NotFoundException(`Cannot simulate return: Order ${orderCode} or its shipment not found`);
+    }
+
+    const trackingCode = order.shipments.tracking_code;
+
+    if (!trackingCode) {
+      throw new NotFoundException(`Tracking code not found for order ${orderCode}`);
+    }
+
+    // Simulate Pick Up
+    await this.updateStatusByTrackingCode(trackingCode, 'RETURNING');
+
+    // Simulate Delivery to Warehouse
+    await this.updateStatusByTrackingCode(trackingCode, 'RETURNED');
+
+    return { success: true, trackingCode };
   }
 
   async completeOrder(trackingCode: string, realShippingFee?: number) {
