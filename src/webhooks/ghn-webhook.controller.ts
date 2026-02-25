@@ -52,4 +52,20 @@ export class GHNWebhookController {
 
         return { RspCode: 0, Message: 'Success' };
     }
+
+    @Post('simulate-return')
+    @HttpCode(HttpStatus.OK)
+    async simulateReturn(@Body() payload: { orderCode: string }) {
+        console.log(`🚀 Simulating GHN Return Delivery for Order Code: ${payload.orderCode}`);
+
+        // Find tracking code for the given orderCode
+        // Assuming there's a findByOrderCode or similar. Let's look it up via Orders database if needed,
+        // or we can add a new simulate returning helper in ordersService.
+        // Actually, updateStatusByTrackingCode takes a trackingCode.
+        // Let's add a quick Prisma lookup right here or inside OrdersService.
+        // For simplicity, let's call a new simulate method inside OrdersService.
+        await this.ordersService.simulateReturnByOrderCode(payload.orderCode);
+
+        return { success: true, message: `Simulated GHN return delivery for ${payload.orderCode}` };
+    }
 }
