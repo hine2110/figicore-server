@@ -337,6 +337,7 @@ model orders {
   // Inverse Relations
   contract_deposit      preorder_contracts[]   @relation("DepositOrderRel")
   contract_final        preorder_contracts[]   @relation("FinalOrderRel")
+  payment_transactions  payment_transactions[]
 
   @@index([order_code], map: "idx_orders_code")
 }
@@ -492,6 +493,7 @@ model product_variants {
   price                   Decimal                   @default(0) @db.Decimal(15, 2) // Retail Price
   stock_available         Int                       @default(0) // Physical Stock
   stock_defect            Int                       @default(0)
+  stock_factory_defect    Int                       @default(0)
   tax_rate                Float?                    @default(0) // VAT %
   
   // PHYSICAL SPECS
