@@ -136,20 +136,29 @@ export class CustomersService {
   async updateCustomerStats(userId: number, amountSpent: number) {
     console.log(`[DEBUG] updateCustomerStats for User ${userId}. Amount Spent: ${amountSpent}`);
 
-    // 1 Point per 100,000 VND
-    const pointsEarned = Math.floor(amountSpent / 100000);
+    // Fetch existing stats
+    const existing = await this.prisma.customers.findUnique({
+      where: { user_id: userId }
+    });
+
+    const oldSpent = Number(existing?.total_spent || 0);
+    const newSpent = oldSpent + amountSpent;
+
+    // Cumulative Points Logic:
+    // Total points after = Math.floor(newTotalSpent / 100000)
+    const newTotalPoints = Math.floor(newSpent / 100000);
 
     // Update Customer Points & Spend
     const customer = await this.prisma.customers.upsert({
       where: { user_id: userId },
       update: {
-        loyalty_points: { increment: pointsEarned },
-        total_spent: { increment: amountSpent }
+        loyalty_points: newTotalPoints, // Set to absolute new total
+        total_spent: newSpent
       },
       create: {
         user_id: userId,
-        loyalty_points: pointsEarned,
-        total_spent: amountSpent,
+        loyalty_points: newTotalPoints,
+        total_spent: newSpent,
         current_rank_code: 'BRONZE'
       }
     });
@@ -171,11 +180,14 @@ export class CustomersService {
       rankUpgraded = true;
     }
 
+    const oldPoints = Math.floor(oldSpent / 100000);
+    const pointsEarnedThisTime = newTotalPoints - oldPoints;
+
     return {
       success: true,
-      pointsAdded: pointsEarned,
+      pointsAdded: pointsEarnedThisTime,
       newTotalSpent: totalSpent,
-      rankUpgraded,
+      rank_upgraded: rankUpgraded, // Using consistent naming if preferred
       newRank
     };
   }
