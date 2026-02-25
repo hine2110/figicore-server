@@ -42,24 +42,33 @@ export class PosOrdersService {
             include: { products: true },
         });
 
-        // 3. Tính toán tổng tiền
+        // 3. Tính toán tổng tiền và thuế
         let totalAmount = 0;
+        let totalTax = 0;
         const orderItems = dto.items.map(item => {
             const variant = variants.find(v => v.variant_id === item.variant_id);
             if (!variant) throw new BadRequestException('Sản phẩm không tồn tại');
+
             const unitPrice = Number(variant.price);
             const totalPrice = unitPrice * item.quantity;
+            const taxRate = Number(variant.tax_rate || 0);
+            const taxAmount = (totalPrice * taxRate) / 100;
+
             totalAmount += totalPrice;
+            totalTax += taxAmount;
+
             return {
                 variant_id: variant.variant_id,
                 quantity: item.quantity,
                 unit_price: unitPrice,
                 total_price: totalPrice,
+                tax_rate: taxRate,
+                tax_amount: taxAmount
             };
         });
 
         const discountAmount = dto.discount_amount || 0;
-        const finalAmount = totalAmount - discountAmount;
+        const finalAmount = totalAmount + totalTax - discountAmount;
         const orderCode = this.generateOrderCode();
 
         // 4. Transaction: Tạo đơn + Finalize Sync
@@ -79,22 +88,28 @@ export class PosOrdersService {
             let newOrder;
             if (existingOrder) {
                 // Finalize existing pending order
-                newOrder = await tx.orders.update({
+                newOrder = await (tx.orders as any).update({
                     where: { order_id: existingOrder.order_id },
                     data: {
                         user_id: dto.user_id || null,
                         payment_method_code: dto.payment_method_code,
                         total_amount: finalAmount,
+                        total_tax: totalTax, // Update tax
                         paid_amount: finalAmount,
                         discount_amount: discountAmount,
+                        is_vat_export: dto.is_vat_export || false,
+                        vat_tax_number: dto.vat_tax_number || null,
+                        vat_company_name: dto.vat_company_name || null,
+                        vat_company_address: dto.vat_company_address || null,
+                        vat_invoice_email: dto.vat_invoice_email || null,
                         status_code: 'COMPLETED',
                         note: dto.note,
                         updated_at: new Date(),
-                    },
+                    } as any,
                 });
             } else {
                 // Tạo mới hoàn toàn (Trường hợp skip sync)
-                newOrder = await tx.orders.create({
+                newOrder = await (tx.orders as any).create({
                     data: {
                         order_code: orderCode,
                         user_id: dto.user_id || null,
@@ -103,12 +118,18 @@ export class PosOrdersService {
                         channel_code: 'POS',
                         payment_method_code: dto.payment_method_code,
                         total_amount: finalAmount,
+                        total_tax: totalTax, // Save tax
                         paid_amount: finalAmount,
                         discount_amount: discountAmount,
                         shipping_fee: 0,
                         status_code: 'COMPLETED',
                         note: dto.note,
-                    },
+                        is_vat_export: dto.is_vat_export || false,
+                        vat_tax_number: dto.vat_tax_number || null,
+                        vat_company_name: dto.vat_company_name || null,
+                        vat_company_address: dto.vat_company_address || null,
+                        vat_invoice_email: dto.vat_invoice_email || null,
+                    } as any,
                 });
 
                 for (const item of orderItems) {
@@ -119,6 +140,8 @@ export class PosOrdersService {
                             quantity: item.quantity,
                             unit_price: item.unit_price,
                             total_price: item.total_price,
+                            tax_rate: item.tax_rate,
+                            tax_amount: item.tax_amount
                         },
                     });
 
@@ -129,28 +152,44 @@ export class PosOrdersService {
                 }
             }
 
-            return tx.orders.findUnique({
-                where: { order_id: newOrder.order_id },
-                include: {
-                    order_items: {
-                        include: {
-                            product_variants: { include: { products: true } },
-                        },
-                    },
-                },
-            });
+            return newOrder;
         });
 
-        // 5. Cập nhật hạng thành viên
+        // 5. Cập nhật hạng thành viên & Điểm tích lũy
         if (dto.user_id) {
             try {
+                // Chúng ta gọi update trước khi trả về kết quả cuối cùng để lấy được data mới nhất
                 await this.customersService.updateCustomerStats(dto.user_id, Number(finalAmount));
             } catch (e) {
                 console.error('Failed to update customer stats', e);
             }
         }
 
-        return { success: true, message: 'Tạo đơn hàng thành công', data: order };
+        // 6. Lấy lại đơn hàng kèm thông tin User/Customer mới nhất
+        const finalOrder = await this.prisma.orders.findUnique({
+            where: { order_id: order.order_id },
+            include: {
+                order_items: {
+                    include: {
+                        product_variants: { include: { products: true } },
+                    },
+                },
+                users: {
+                    include: {
+                        customers: true
+                    }
+                },
+                employees: {
+                    include: {
+                        users: {
+                            select: { full_name: true }
+                        }
+                    }
+                }
+            },
+        });
+
+        return { success: true, message: 'Tạo đơn hàng thành công', data: finalOrder };
     }
 
     private generateOrderCode(): string {
@@ -374,7 +413,7 @@ export class PosOrdersService {
         if (!activeSession) throw new BadRequestException('Session POS đóng');
 
         return await this.prisma.$transaction(async (tx) => {
-            let order = await tx.orders.findFirst({
+            let order: any = await tx.orders.findFirst({
                 where: { session_id: activeSession.session_id, created_by_staff_id: staffId, status_code: 'PENDING', channel_code: 'POS', deleted_at: null },
                 include: { order_items: true }
             });
@@ -391,7 +430,7 @@ export class PosOrdersService {
             }
 
             if (!order) {
-                order = await tx.orders.create({
+                order = await (tx.orders as any).create({
                     data: {
                         order_code: this.generateOrderCode(),
                         session_id: activeSession.session_id,
@@ -399,17 +438,36 @@ export class PosOrdersService {
                         user_id: dto.user_id || null,
                         channel_code: 'POS',
                         total_amount: 0,
+                        total_tax: 0,
                         status_code: 'PENDING',
-                        note: dto.note
-                    },
+                        note: dto.note,
+                        is_vat_export: dto.is_vat_export || false,
+                        vat_tax_number: dto.vat_tax_number || null,
+                        vat_company_name: dto.vat_company_name || null,
+                        vat_company_address: dto.vat_company_address || null,
+                        vat_invoice_email: dto.vat_invoice_email || null,
+                    } as any,
                     include: { order_items: true }
                 });
             } else {
-                await tx.orders.update({ where: { order_id: order.order_id }, data: { user_id: dto.user_id || null, note: dto.note } });
+                await (tx.orders as any).update({
+                    where: { order_id: order.order_id },
+                    data: {
+                        user_id: dto.user_id || null,
+                        note: dto.note,
+                        is_vat_export: dto.is_vat_export || false,
+                        vat_tax_number: dto.vat_tax_number || null,
+                        vat_company_name: dto.vat_company_name || null,
+                        vat_company_address: dto.vat_company_address || null,
+                        vat_invoice_email: dto.vat_invoice_email || null,
+                    } as any
+                });
             }
 
+            if (!order) return null;
+
             const currentMap = new Map(dto.items.map(i => [i.variant_id, i.quantity]));
-            const dbMap = new Map(order.order_items.map(i => [i.variant_id, i.quantity]));
+            const dbMap = new Map((order.order_items as any[]).map(i => [i.variant_id, i.quantity]));
 
             for (const [vId, nQty] of currentMap) {
                 const oQty = dbMap.get(vId) || 0;
@@ -419,12 +477,33 @@ export class PosOrdersService {
                 await tx.product_variants.update({ where: { variant_id: vId }, data: { stock_available: { decrement: delta } } });
                 const variant = await tx.product_variants.findUnique({ where: { variant_id: vId } });
                 if (!variant) throw new BadRequestException(`Variant ${vId} not found`);
+
                 const price = Number(variant.price);
+                const taxRate = Number(variant.tax_rate || 0);
+                const taxAmount = (price * nQty * taxRate) / 100;
 
                 if (oQty > 0) {
-                    await tx.order_items.updateMany({ where: { order_id: order.order_id, variant_id: vId }, data: { quantity: nQty, total_price: price * nQty } });
+                    await tx.order_items.updateMany({
+                        where: { order_id: order.order_id, variant_id: vId },
+                        data: {
+                            quantity: nQty,
+                            total_price: price * nQty,
+                            tax_rate: taxRate,
+                            tax_amount: taxAmount
+                        }
+                    });
                 } else {
-                    await tx.order_items.create({ data: { order_id: order.order_id, variant_id: vId, quantity: nQty, unit_price: price, total_price: price * nQty } });
+                    await tx.order_items.create({
+                        data: {
+                            order_id: order.order_id,
+                            variant_id: vId,
+                            quantity: nQty,
+                            unit_price: price,
+                            total_price: price * nQty,
+                            tax_rate: taxRate,
+                            tax_amount: taxAmount
+                        }
+                    });
                 }
             }
 
@@ -437,9 +516,18 @@ export class PosOrdersService {
 
             const finalItems = await tx.order_items.findMany({ where: { order_id: order.order_id } });
             const total = finalItems.reduce((sum, i) => sum + Number(i.total_price), 0);
+            const totalTax = finalItems.reduce((sum, i) => sum + Number(i.tax_amount || 0), 0);
             const discount = dto.discount_amount || 0;
 
-            return tx.orders.update({ where: { order_id: order.order_id }, data: { total_amount: total - discount, discount_amount: discount }, include: { order_items: true } });
+            return tx.orders.update({
+                where: { order_id: order.order_id },
+                data: {
+                    total_amount: total + totalTax - discount,
+                    total_tax: totalTax,
+                    discount_amount: discount
+                },
+                include: { order_items: true }
+            });
         });
     }
 }

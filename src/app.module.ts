@@ -35,6 +35,7 @@ import { WalletModule } from './wallet/wallet.module';
 import { BlindboxesModule } from './blindboxes/blindboxes.module';
 import { ServeStaticModule } from '@nestjs/serve-static';
 import { join } from 'path';
+import { KiotVietModule } from './kiotviet/kiotviet.module';
 
 @Module({
 
@@ -74,7 +75,8 @@ import { join } from 'path';
     WebhooksModule,
     EventsModule,
     WalletModule,
-    BlindboxesModule
+    BlindboxesModule,
+    KiotVietModule,
   ],
 
   controllers: [AppController],

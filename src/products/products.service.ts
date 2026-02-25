@@ -1,13 +1,17 @@
 import { Injectable, BadRequestException, ServiceUnavailableException, Logger } from '@nestjs/common';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { PrismaService } from 'src/prisma/prisma.service';
+import { KiotVietService } from 'src/kiotviet/kiotviet.service';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { Prisma } from '@prisma/client';
 
 @Injectable()
 export class ProductsService {
-  constructor(private prisma: PrismaService) { }
+  constructor(
+    private prisma: PrismaService,
+    private kiotvietService: KiotVietService,
+  ) { }
 
   async create(createProductDto: CreateProductDto) {
     let {
@@ -27,9 +31,9 @@ export class ProductsService {
     // Helper: Generate SKU/Barcode
     const genCode = (prefix: string) => `${prefix}-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
-    return await this.prisma.$transaction(async (tx) => {
+    const product = await this.prisma.$transaction(async (tx) => {
       // 1. Create Parent Product
-      const product = await tx.products.create({
+      const parentProduct = await tx.products.create({
         data: {
           name: productData.name,
           type_code: productData.type_code,
@@ -38,46 +42,37 @@ export class ProductsService {
           series_id: productData.series_id,
           description: productData.description,
           media_urls: productData.media_urls ? (productData.media_urls as any) : Prisma.JsonNull,
-          status_code: productData.status_code || 'ACTIVE', // Default ACTIVE if not provided
+          status_code: productData.status_code || 'ACTIVE',
         },
       });
 
       // 2. Process Variants
       if (variants && variants.length > 0) {
         for (const variantDto of variants) {
-          // Prepare Core Variant Data
           const isPreorder = productData.type_code === 'PREORDER';
 
-          const variantData = {
-            product_id: product.product_id,
+          const variantData: any = {
+            product_id: parentProduct.product_id,
             option_name: variantDto.option_name,
             sku: variantDto.sku || genCode('SKU'),
             barcode: variantDto.barcode || genCode('BAR'),
             media_assets: variantDto.media_assets ? (variantDto.media_assets as any) : JSON.stringify([]),
             description: variantDto.description,
-            // Physical Specs
             weight_g: variantDto.weight_g || 200,
             length_cm: variantDto.length_cm || 10,
             width_cm: variantDto.width_cm || 10,
             height_cm: variantDto.height_cm || 10,
-
-            // New Specs
             scale: variantDto.scale,
             material: variantDto.material,
             included_items: variantDto.included_items ? (variantDto.included_items as any) : undefined,
-
-            // Retail Logic Guard: Force 0 for Pre-order
             price: isPreorder ? 0 : variantDto.price,
             stock_available: isPreorder ? 0 : (variantDto.stock_available ?? 0),
-            stock_defect: variantDto.stock_defect ?? 0
+            stock_defect: variantDto.stock_defect ?? 0,
+            tax_rate: productData.type_code === 'RETAIL' ? 1 : 0,
           };
 
-          // Step C: Insert Core Variant
-          const createdVariant = await tx.product_variants.create({
-            data: variantData,
-          });
+          const createdVariant = await tx.product_variants.create({ data: variantData });
 
-          // Step D: Handle Extensions
           if (isPreorder && variantDto.preorder_config) {
             await tx.product_preorder_configs.create({
               data: {
@@ -88,34 +83,25 @@ export class ProductsService {
                 sold_slots: 0,
                 max_qty_per_user: variantDto.preorder_config.max_qty_per_user ?? 2,
                 release_date: preorder?.release_date ? new Date(preorder.release_date) : null,
-                // stock_held: 0 (default)
               },
             });
           }
         }
       }
 
-      // Handle Blindbox extension (Legacy Logic preserved for completeness if needed, 
-      // but strictly following the request which focused on Pre-order structure)
+      // Handle Blindbox extension
       if (productData.type_code === 'BLINDBOX' && blindbox) {
-        // Defines price for calculations
         const price = Number(blindbox.price);
-
-        // FIX: Create a Dummy Variant with INFINITE STOCK so users can add to cart
-        // Logic: When type_code='BLINDBOX', we create a placeholder variant.
-        // Real stock is managed by the underlying pool.
         await tx.product_variants.create({
           data: {
-            product_id: product.product_id,
+            product_id: parentProduct.product_id,
             sku: genCode('BBOX'),
             barcode: genCode('BAR'),
             option_name: 'Blindbox Ticket',
             price: price,
             media_assets: JSON.stringify([]),
-            stock_available: 999999, // <--- ALLOW UNLIMITED PURCHASES
+            stock_available: 999999,
             stock_defect: 0,
-
-            // Blindboxes are technically retail items but managed differently
             weight_g: 200, length_cm: 10, width_cm: 10, height_cm: 10
           }
         });
@@ -130,34 +116,52 @@ export class ProductsService {
 
         await tx.product_blindboxes.create({
           data: {
-            product_id: product.product_id,
+            product_id: parentProduct.product_id,
             price: blindbox.price,
             min_value: blindbox.min_value_allow,
             max_value: blindbox.max_value_allow,
             tier_config: JSON.stringify(tiers) as any
           }
         });
-
-        // Ensure a blindbox variant exists if not in 'variants' array
-        // Usually Blindbox has 1 variant.
-        await tx.product_variants.create({
-          data: {
-            product_id: product.product_id,
-            sku: genCode('BBOX'),
-            barcode: genCode('BAR'),
-            option_name: 'Blindbox Standard',
-            price: blindbox.price,
-            media_assets: JSON.stringify([]),
-            stock_available: 0
-          }
-        });
       }
 
-
-
-
-      return product;
+      return parentProduct;
     });
+
+    // 4. KiotViet Push Logic (Retail Only)
+    if (createProductDto.type_code === 'RETAIL') {
+      try {
+        const createdProduct = await this.prisma.products.findUnique({
+          where: { product_id: product.product_id },
+          include: {
+            product_variants: true,
+            categories: true,
+            brands: true
+          }
+        });
+
+        if (createdProduct) {
+          for (const variant of createdProduct.product_variants) {
+            try {
+              await this.kiotvietService.createProductOnKiotViet({
+                name: createdProduct.name,
+                sku: variant.sku,
+                price: Number(variant.price),
+                categoryName: createdProduct.categories?.name || 'Chưa phân loại',
+                images: Array.isArray(createdProduct.media_urls) ? (createdProduct.media_urls as string[]) : [],
+                weight: variant.weight_g || 200
+              });
+            } catch (kvError) {
+              Logger.error(`KiotViet push failed for SKU ${variant.sku}: ${kvError.message}`);
+            }
+          }
+        }
+      } catch (pushError) {
+        Logger.error(`KiotViet critical push error: ${pushError.message}`);
+      }
+    }
+
+    return product;
   }
 
   async quickCreate(data: { name: string, brand_id?: number, variant_names?: string[] }) {
@@ -373,6 +377,7 @@ export class ProductsService {
             price: Number(variant.price),
             current_stock: variant.stock_available || 0,
             thumbnail: thumbnail,
+            tax_rate: Number(variant.tax_rate || 0), // Include tax_rate for POS
           };
         });
 
