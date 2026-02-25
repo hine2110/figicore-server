@@ -39,6 +39,8 @@ import { WalletModule } from './wallet/wallet.module';
 import { BlindboxesModule } from './blindboxes/blindboxes.module';
 import { ServeStaticModule } from '@nestjs/serve-static';
 import { join } from 'path';
+import { PaymentsModule } from './payments/payments.module';
+import { ReturnsModule } from './returns/returns.module';
 
 @Module({
 
@@ -81,7 +83,9 @@ import { join } from 'path';
     CheckInModule,
 
     WalletModule,
-    BlindboxesModule
+    BlindboxesModule,
+    PaymentsModule,
+    ReturnsModule
   ],
 
   controllers: [AppController],

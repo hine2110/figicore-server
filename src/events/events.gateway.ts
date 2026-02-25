@@ -42,4 +42,20 @@ export class EventsGateway
         this.server.emit('warehouse:new_order', orderData);
         this.logger.log(`🔔 Emitted warehouse:new_order for Order #${orderData.order_code}`);
     }
+
+    /**
+     * Bắn thông báo khi thanh toán thành công
+     */
+    notifyPaymentSuccess(orderId: number | string) {
+        this.server.emit(`payment:success:${orderId}`);
+        this.logger.log(`🔔 Emitted payment:success:${orderId}`);
+    }
+
+    /**
+     * Bắn thông báo cho Manager khi có yêu cầu Hoàn Hàng mới
+     */
+    notifyNewReturnRequest(returnData: any) {
+        this.server.emit('manager:new_return_request', returnData);
+        this.logger.log(`🔔 Emitted manager:new_return_request for Return #${returnData.return_id}`);
+    }
 }
