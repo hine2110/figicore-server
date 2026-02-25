@@ -41,13 +41,11 @@ export class CartService {
     if (!variant) throw new NotFoundException('Variant not found');
     if (variant.product_id !== productId) throw new BadRequestException('Mismatch between Product and Variant');
 
-    // BRANCHED VALIDATION: Pre-order vs Retail
+    // BRANCHED VALIDATION: Pre-order vs Retail vs Blindbox
     if (variant.products.type_code === 'PREORDER' || variant.product_preorder_configs) {
       // Pre-order Validation: Check Slots
       const def = variant.product_preorder_configs;
       if (!def) {
-        // If type PREORDER but no definition, assume unlimited or handled elsewhere? 
-        // For now, strict:
         throw new BadRequestException('Pre-order configuration missing');
       }
 
@@ -57,6 +55,10 @@ export class CartService {
       if (currentSold + quantity > limit) {
         throw new BadRequestException(`Pre-order slots full. Remaining: ${Math.max(0, limit - currentSold)}`);
       }
+    } else if (variant.products.type_code === 'BLINDBOX') {
+      // BLINDBOX: Bypass stock check
+      // Logic: Blindbox "stock" is virtual or determined by the pool at Checkout.
+      // We allow adding to cart even if variant.stock_available is 0.
     } else {
       // Retail Validation: Check Physical Stock
       if (variant.stock_available < quantity) {
@@ -89,8 +91,30 @@ export class CartService {
     }
 
     // 3. Upsert Item
+    // FIX: Must check payment_option to avoid merging Deposit vs Full Payment
+    const paymentOption = dto.paymentOption || 'DEPOSIT';
+
+    // FIX: User cannot have the same variant with DIFFERENT payment options in the cart.
+    const conflictingItem = await this.prisma.cart_items.findFirst({
+      where: {
+        cart_id: cart.cart_id,
+        variant_id: variantId,
+        payment_option: { not: paymentOption },
+        deleted_at: null
+      }
+    });
+
+    if (conflictingItem) {
+      throw new BadRequestException(`Bạn đã có sản phẩm này trong giỏ hàng với hình thức thanh toán khác (${conflictingItem.payment_option}). Vui lòng xóa sản phẩm cũ trước khi chọn hình thức mới.`);
+    }
+
     const existingItem = await this.prisma.cart_items.findFirst({
-      where: { cart_id: cart.cart_id, variant_id: variantId, deleted_at: null }
+      where: {
+        cart_id: cart.cart_id,
+        variant_id: variantId,
+        payment_option: paymentOption, // <--- CRITICAL FIX
+        deleted_at: null
+      }
     });
 
     if (existingItem) {
@@ -256,12 +280,19 @@ export class CartService {
     // Check stock before update
     const item = await this.prisma.cart_items.findUnique({
       where: { item_id: itemId },
-      include: { product_variants: true }
+      include: {
+        product_variants: {
+          include: { products: true } // Need products to check type_code
+        }
+      }
     });
 
     if (!item || item.cart_id !== cart.cart_id) throw new NotFoundException('Item not found');
 
-    if (item.product_variants.stock_available < quantity) {
+    // Bypass check for Blindbox
+    const isBlindbox = item.product_variants.products.type_code === 'BLINDBOX';
+
+    if (!isBlindbox && item.product_variants.stock_available < quantity) {
       throw new BadRequestException(`Insufficient stock. Max: ${item.product_variants.stock_available}`);
     }
 

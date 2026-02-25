@@ -264,7 +264,11 @@ export class ProductsService {
         brands: true,
         categories: true,
         series: true,
-        product_variants: true,
+        product_variants: {
+          include: {
+            product_preorder_configs: true
+          }
+        },
         product_blindboxes: true,
         product_promotions: true,
       },
