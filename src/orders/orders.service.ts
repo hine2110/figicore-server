@@ -83,8 +83,8 @@ export class OrdersService {
         }
       }
 
-      // 1.5 Generate Payment Ref Code
-      const paymentRefCode = `PAY-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+      // 1.5 Generate Payment Ref Code (No hyphens, as banking apps often strip them)
+      const paymentRefCode = `PAY${Date.now()}${Math.floor(Math.random() * 1000)}`;
 
       // 2. Start Transaction
       const createdOrders = await this.prisma.$transaction(async (tx) => {
@@ -142,6 +142,16 @@ export class OrdersService {
             // CALL SERVICE: Pick N Unique Items
             const wonVariants = await this.blindboxesService.pickUniqueItems(tx, bbConfig, bItem.quantity);
 
+            // FIX: Find the "Ticket" Variant to deduct stock from (The one with huge stock)
+            // We assume the Ticket is the variant named 'Blindbox Ticket' or the one used to purchase.
+            // If the user managed to add "Blindbox Standard" (Variant 7) to cart, we should still deduct from Ticket (Variant 6).
+            const ticketVariant = await tx.product_variants.findFirst({
+              where: {
+                product_id: bItem.variant.product_id,
+                option_name: 'Blindbox Ticket' // Ensure this matches ProductService creation
+              }
+            }) || bItem.variant; // Fallback to current if not found
+
             for (const won of wonVariants) {
               // We create individual order line items for opacity? 
               // Or one line item with quantity?
@@ -151,6 +161,7 @@ export class OrdersService {
 
               retailItems.push({
                 ...bItem,
+                variant: ticketVariant, // SWAP to Ticket Variant for Stock Deduction & Order Record
                 quantity: 1, // Split into single units
                 // We need to attach the WON result to this item object so we can use it later when creating order_items
                 _allocated_product_id: won.variant_id,
@@ -185,12 +196,18 @@ export class OrdersService {
             }
 
             // 3. Determine Financials & Incentives
-            let isFullPayment = paymentOption === 'FULL_PAYMENT';
+            // Fix: Check payment_option from payload item, NOT just default.
+            // PItem has the raw item data. We need to check if 'payment_option' or 'paymentOption' was passed.
+            const requestedOption = (pItem as any).payment_option || (pItem as any).paymentOption;
+            let isFullPayment = requestedOption === 'FULL_PAYMENT';
 
             // Amounts
             // Use product_preorder_configs for full_price and deposit_amount
             const fullPrice = Number(variant.product_preorder_configs?.full_price || variant.price);
             const depositConfig = Number(variant.product_preorder_configs?.deposit_amount || 0);
+
+            // Double Check: If user requests DEPOSIT but no deposit config exists -> Force Full?
+            // Or if user requests FULL, we charge Full.
 
             let chargeAmountPerUnit = 0;
             let depositPerUnit = 0;
@@ -292,6 +309,8 @@ export class OrdersService {
           for (const rItem of retailItems) {
             const { variant, quantity, price, _allocated_product_id, _is_opened, _metadata } = rItem;
 
+            // FIX: Always deduct stock for the main variant (Ticket or Retail Item)
+            // For Blindbox: Ticket stock (99999) is deducted here. Real Item stock is deducted in blindboxes.service
             if (variant.stock_available < quantity) {
               throw new BadRequestException(`Out of stock: ${variant.sku}`);
             }
@@ -473,6 +492,33 @@ export class OrdersService {
       }
     });
 
+
+
+    // --- FIX: SEND NOTIFICATIONS AFTER TRANSACTION ---
+    try {
+      // Re-fetch orders with relations to send emails & socket
+      const updatedOrders = await this.prisma.orders.findMany({
+        where: { payment_ref_code: paymentRefCode, user_id: userId },
+        include: {
+          users: true,
+          order_items: { include: { product_variants: { include: { products: true } } } }
+        }
+      });
+
+      for (const order of updatedOrders) {
+        if (order.users && order.users.email) {
+          // Send Email
+          this.mailService.sendOrderConfirmation(order.users, order).catch(e => console.error("Mail Error", e));
+        }
+        // Emit Socket
+        this.eventsGateway.notifyNewOrder(order);
+      }
+      this.logger.log(`Notifications sent for group ${paymentRefCode}`);
+
+    } catch (error) {
+      console.error("Failed to send notifications for group payment", error);
+    }
+
     return { success: true, message: `Payment successful for group ${paymentRefCode}` };
   }
 
@@ -536,6 +582,8 @@ export class OrdersService {
       // 1. Revert Stock
       for (const item of order.order_items) {
         // --- CRITICAL FIX START ---
+        // --- CRITICAL FIX START ---
+        // 1. Restore Real Item / Retail Item
         const targetVariantId = item.allocated_product_id ?? item.variant_id;
         const metadata = (item.metadata as any) || {};
 
@@ -547,6 +595,14 @@ export class OrdersService {
         } else {
           await tx.product_variants.update({
             where: { variant_id: targetVariantId },
+            data: { stock_available: { increment: item.quantity } }
+          });
+        }
+
+        // 2. Restore Blindbox Ticket (Virtual Stock)
+        if (item.allocated_product_id) {
+          await tx.product_variants.update({
+            where: { variant_id: item.variant_id }, // The Ticket ID
             data: { stock_available: { increment: item.quantity } }
           });
         }
@@ -668,7 +724,9 @@ export class OrdersService {
     });
   }
 
-  async findOne(id: number) {
+  // FIX: Allow Staff to see censored video if needed.
+  // Updated signature to accept optional user context
+  async findOne(id: number, user?: any) {
     const order = await this.prisma.orders.findUnique({
       where: { order_id: id },
       include: {
@@ -696,9 +754,16 @@ export class OrdersService {
       i.product_variants.products.type_code === 'BLINDBOX' && !i.is_opened
     );
 
-    if (hasUnopened) {
+    // FIX: Only censor if the order is NOT completed (User hasn't received it yet)
+    // AND User is NOT Staff/Admin
+    const isStaff = user?.role === 'ADMIN' || user?.role?.startsWith('STAFF');
+
+    if (hasUnopened && order.status_code !== 'COMPLETED' && !isStaff) {
       // CENSOR THE VIDEO
-      order.packing_video_urls = null; // or empty array if type requires []
+      order.packing_video_urls = null;
+
+      // Marker for Frontend to show "Spoiler Protected" message
+      (order as any).is_blindbox_protected = true;
 
       // CENSOR THE ITEMS
       order.order_items = order.order_items.map((item: any) => {
@@ -779,23 +844,20 @@ export class OrdersService {
       let newStatus = 'PROCESSING'; // Default to Ready to Ship (COD)
       let additionalPaid = 0;
 
+      let paymentRefCodeStr: string | undefined = undefined;
+
       // WALLET PAYMENT LOGIC
       if (payment_method_code === 'WALLET') {
-        // Calculate what is owed
-        // We know 'deposit_amount_paid' is what they paid.
-        // Total - DepositPaid = Remaining to Deduct.
         const depositPaid = Number(contract.deposit_amount_paid);
-        const amountToDeduct = totalAmount - depositPaid; // Should equal remaining + shipping
+        const amountToDeduct = totalAmount - depositPaid;
 
         await this.walletService.deductBalance(userId, amountToDeduct, `ORD-${contract.deposit_order_id}`, `Final Payment for Contract #${contractId}`);
 
         newStatus = 'PROCESSING';
         additionalPaid = amountToDeduct;
       } else if (payment_method_code === 'BANKING') {
-        // If Banking, maybe PENDING_PAYMENT? But user requested PROCESSING for mock simplicity or manual verify. 
-        // Sticking to 'PROCESSING' as requested for "Mock/Final" simplicity in this task.
-        // Realistically might be 'PENDING_FINAL_PAYMENT' if async.
-        newStatus = 'PROCESSING';
+        newStatus = 'PENDING_FINAL_PAYMENT';
+        paymentRefCodeStr = `PAY${Date.now()}${Math.floor(Math.random() * 1000)}`;
       }
 
       // 4. MUTATE the Original Order (Single ID Strategy)
@@ -812,6 +874,7 @@ export class OrdersService {
 
           // If Wallet, we increase paid_amount. If COD, we keep it as Deposit (so Due = Total - Paid)
           paid_amount: { increment: additionalPaid },
+          payment_ref_code: paymentRefCodeStr !== undefined ? paymentRefCodeStr : undefined,
 
           updated_at: new Date(),
 
@@ -821,12 +884,12 @@ export class OrdersService {
         }
       });
 
-      // 5. Link & Update Contract to logic Closed
+      // 5. Link & Update Contract to logic Closed (Only if fully paid via Wallet)
       await tx.preorder_contracts.update({
         where: { contract_id: contractId },
         data: {
           final_payment_order_id: contract.deposit_order_id, // Self-reference
-          status_code: 'COMPLETED',
+          status_code: newStatus === 'PROCESSING' ? 'COMPLETED' : 'READY_FOR_PAYMENT',
           updated_at: new Date()
         }
       });
@@ -913,6 +976,14 @@ export class OrdersService {
             // Default / Available / Safe Fallback
             await tx.product_variants.update({
               where: { variant_id: targetVariantId },
+              data: { stock_available: { increment: item.quantity } }
+            });
+          }
+
+          // FIX: Restore Blindbox Ticket as well
+          if (item.allocated_product_id) {
+            await tx.product_variants.update({
+              where: { variant_id: item.variant_id },
               data: { stock_available: { increment: item.quantity } }
             });
           }
@@ -1017,10 +1088,48 @@ export class OrdersService {
       this.mailService.sendShippingUpdate(order.users, order);
     }
 
+    // Sync RETURNED to corresponding return_requests
+    if (status === 'RETURNED') {
+      await this.prisma.return_requests.updateMany({
+        where: {
+          order_id: order.order_id,
+          status_code: 'SHIPPING_TO_WAREHOUSE'
+        },
+        data: {
+          status_code: 'INSPECTING'
+        }
+      });
+    }
+
     return this.prisma.orders.update({
       where: { order_id: order.order_id },
       data: { status_code: status }
     });
+  }
+
+  async simulateReturnByOrderCode(orderCode: string) {
+    const order = await this.prisma.orders.findUnique({
+      where: { order_code: orderCode },
+      include: { shipments: true }
+    });
+
+    if (!order || !order.shipments) {
+      throw new NotFoundException(`Cannot simulate return: Order ${orderCode} or its shipment not found`);
+    }
+
+    const trackingCode = order.shipments.tracking_code;
+
+    if (!trackingCode) {
+      throw new NotFoundException(`Tracking code not found for order ${orderCode}`);
+    }
+
+    // Simulate Pick Up
+    await this.updateStatusByTrackingCode(trackingCode, 'RETURNING');
+
+    // Simulate Delivery to Warehouse
+    await this.updateStatusByTrackingCode(trackingCode, 'RETURNED');
+
+    return { success: true, trackingCode };
   }
 
   async completeOrder(trackingCode: string, realShippingFee?: number) {
