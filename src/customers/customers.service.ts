@@ -41,7 +41,7 @@ export class CustomersService {
       status_code: u.status_code,
       avatar_url: u.avatar_url,
       loyalty_points: u.customers?.loyalty_points ?? 0,
-      current_rank_code: u.customers?.current_rank_code ?? 'UNRANKED',
+      current_rank_code: u.customers?.current_rank_code ?? 'NEWBIE',
       total_spent: u.customers?.total_spent ?? 0,
       address: [] // Placeholder if needed, or omit
     }));
@@ -78,7 +78,7 @@ export class CustomersService {
         data: {
           user_id: user.user_id,
           loyalty_points: 0,
-          current_rank_code: 'BRONZE',
+          current_rank_code: 'NEWBIE',
           total_spent: 0,
         },
       });
@@ -95,7 +95,7 @@ export class CustomersService {
       status_code: user.status_code,
       avatar_url: user.avatar_url,
       loyalty_points: user.customers?.loyalty_points ?? 0,
-      current_rank_code: user.customers?.current_rank_code ?? 'UNRANKED',
+      current_rank_code: user.customers?.current_rank_code ?? 'NEWBIE',
       total_spent: user.customers?.total_spent ?? 0,
       addresses: user.addresses ?? [],
     };
@@ -127,7 +127,7 @@ export class CustomersService {
       walletBalance: wallet?.balance_available || 0,
       loyaltyPoints: customer?.loyalty_points || 0,
       activeOrders: activeOrders,
-      rankCode: customer?.current_rank_code || 'BRONZE'
+      rankCode: customer?.current_rank_code || 'NEWBIE'
     };
 
 
@@ -145,8 +145,8 @@ export class CustomersService {
     const newSpent = oldSpent + amountSpent;
 
     // Cumulative Points Logic:
-    // Total points after = Math.floor(newTotalSpent / 100000)
-    const newTotalPoints = Math.floor(newSpent / 100000);
+    // 10,000 VNĐ = 1 Point (Very common in e-commerce, user gets points for small orders)
+    const newTotalPoints = Math.floor(newSpent / 10000);
 
     // Update Customer Points & Spend
     const customer = await this.prisma.customers.upsert({
@@ -159,17 +159,18 @@ export class CustomersService {
         user_id: userId,
         loyalty_points: newTotalPoints,
         total_spent: newSpent,
-        current_rank_code: 'BRONZE'
+        current_rank_code: 'NEWBIE'
       }
     });
 
-    // Check & Update Rank based on Total Spent
-    const totalSpent = Number(customer.total_spent);
-    let newRank = 'BRONZE';
-
-    if (totalSpent >= 50000000) newRank = 'DIAMOND';      // 50M
-    else if (totalSpent >= 10000000) newRank = 'GOLD';    // 10M
-    else if (totalSpent >= 2000000) newRank = 'SILVER';   // 2M
+    // Sync Backend Ranks with Frontend UI requirements (Based on points):
+    // Active: 100 pts (1M VNĐ)
+    // Elite: 500 pts (5M VNĐ)
+    // Legendary: 2000 pts (20M VNĐ)
+    let newRank = 'NEWBIE';
+    if (newTotalPoints >= 2000) newRank = 'LEGENDARY';
+    else if (newTotalPoints >= 500) newRank = 'ELITE';
+    else if (newTotalPoints >= 100) newRank = 'ACTIVE';
 
     let rankUpgraded = false;
     if (newRank !== customer.current_rank_code) {
@@ -180,13 +181,13 @@ export class CustomersService {
       rankUpgraded = true;
     }
 
-    const oldPoints = Math.floor(oldSpent / 100000);
+    const oldPoints = Math.floor(oldSpent / 10000);
     const pointsEarnedThisTime = newTotalPoints - oldPoints;
 
     return {
       success: true,
       pointsAdded: pointsEarnedThisTime,
-      newTotalSpent: totalSpent,
+      newTotalSpent: Number(customer.total_spent),
       rank_upgraded: rankUpgraded, // Using consistent naming if preferred
       newRank
     };

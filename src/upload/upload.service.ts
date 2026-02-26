@@ -20,6 +20,7 @@ export class UploadService {
                 {
                     folder: folder,
                     resource_type: 'auto', // Detect image or video
+                    chunk_size: 6000000, // Important: Chunk video uploads to avoid timeout
                 },
                 (error, result) => {
                     if (error || !result) {

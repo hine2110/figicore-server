@@ -40,7 +40,9 @@ export class UploadController {
     */
 
     @Post()
-    @UseInterceptors(FileInterceptor('file'))
+    @UseInterceptors(FileInterceptor('file', {
+        limits: { fileSize: 50 * 1024 * 1024 }, // Enforce 50MB limit at Multer level
+    }))
     async uploadFile(@UploadedFile() file: Express.Multer.File) {
         return await this.uploadService.uploadFile(file);
     }

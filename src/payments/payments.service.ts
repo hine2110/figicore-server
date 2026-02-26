@@ -40,10 +40,11 @@ export class PaymentsService {
 
         const extractedRef = match[1];
         const isGroupRef = extractedRef.toUpperCase().startsWith('PAY');
+        const isTopUpRef = extractedRef.toUpperCase().startsWith('TU');
 
         try {
             return await this.prisma.$transaction(async (tx) => {
-                // 2. Prevent Duplicate Processing
+                // 2. Prevent Duplicate Processing (Shared across all types)
                 const existingTx = await tx.payment_transactions.findUnique({
                     where: { sepay_id: sepayId },
                 });
@@ -52,6 +53,77 @@ export class PaymentsService {
                     this.logger.log(`Transaction ${sepayId} already processed.`);
                     return { success: true, message: 'Already processed' };
                 }
+
+                // ----------------------------------------------------
+                // TOP UP FLOW
+                // ----------------------------------------------------
+                if (isTopUpRef) {
+                    // Ref format: TU[userId]V[timestamp]
+                    const parts = extractedRef.toUpperCase().split('V');
+                    if (parts.length < 2) {
+                        return { success: false, message: 'Invalid Top-Up reference format' };
+                    }
+
+                    // parts[0] is like "TU5"
+                    const userIdString = parts[0].replace('TU', '');
+                    const userId = parseInt(userIdString, 10);
+
+                    if (isNaN(userId)) {
+                        return { success: false, message: 'Invalid User ID in Top-Up reference' };
+                    }
+
+                    // Log the processed webhook ID so we don't process it again
+                    // (Top-ups don't have an order_id, so we use sepay_id as reference_number in wallet_transactions
+                    // and also create a dummy payment_transaction record linked to a system or existing user order just to mark it done?
+                    // Wait, payment_transactions REQUIRES order_id. This is a schema constraint.
+                    // Let's check schema.prisma: `order_id Int`.
+                    // To avoid schema migration, we MUST NOT use `payment_transactions` for Top-Ups if we don't have an order_id.
+                    // Actually, if we use `wallet_transactions`, how do we prevent duplicates?
+                    // We can check `wallet_transactions` where `reference_code == sepayId.toString()`!
+
+                    const existingWalletTx = await tx.wallet_transactions.findFirst({
+                        where: { reference_code: sepayId.toString() }
+                    });
+
+                    if (existingWalletTx) {
+                        this.logger.log(`Top-Up Transaction ${sepayId} already processed.`);
+                        return { success: true, message: 'Already processed' };
+                    }
+
+                    // Ensure wallet exists
+                    let wallet = await tx.wallets.findUnique({ where: { user_id: userId } });
+                    if (!wallet) {
+                        wallet = await tx.wallets.create({
+                            data: { user_id: userId, balance_available: 0, balance_locked: 0 }
+                        });
+                    }
+
+                    // Add funds
+                    await tx.wallets.update({
+                        where: { wallet_id: wallet.wallet_id },
+                        data: { balance_available: { increment: amount } }
+                    });
+
+                    // Record transaction
+                    await tx.wallet_transactions.create({
+                        data: {
+                            wallet_id: wallet.wallet_id,
+                            type_code: 'TOP_UP',
+                            amount: amount,
+                            reference_code: sepayId.toString(), // Use Sepay ID as unique ref against duplicates
+                            description: `Top up via VietQR (${bankBrandName}) - Ref: ${extractedRef}`
+                        }
+                    });
+
+                    this.logger.log(`Wallet Top-Up successful for User ID ${userId}. Amount: ${amount}`);
+                    this.eventsGateway.notifyPaymentSuccess(extractedRef);
+
+                    return { success: true, message: 'Top-up processed successfully' };
+                }
+
+                // ----------------------------------------------------
+                // REGULAR ORDER FLOW
+                // ----------------------------------------------------
 
                 // 3. Find Orders
                 let orders: any[] = [];
