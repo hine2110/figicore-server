@@ -40,6 +40,8 @@ import { BlindboxesModule } from './blindboxes/blindboxes.module';
 import { ServeStaticModule } from '@nestjs/serve-static';
 import { join } from 'path';
 import { KiotVietModule } from './kiotviet/kiotviet.module';
+import { PaymentsModule } from './payments/payments.module';
+import { ReturnsModule } from './returns/returns.module';
 
 @Module({
 
@@ -82,7 +84,9 @@ import { KiotVietModule } from './kiotviet/kiotviet.module';
     CheckInModule,
 
     WalletModule,
-    BlindboxesModule
+    BlindboxesModule,
+    PaymentsModule,
+    ReturnsModule
   ],
 
   controllers: [AppController],

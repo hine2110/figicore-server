@@ -58,4 +58,12 @@ export class EventsGateway
         this.server.emit('manager:new_return_request', returnData);
         this.logger.log(`🔔 Emitted manager:new_return_request for Return #${returnData.return_id}`);
     }
+
+    /**
+     * Bắn thông báo trực tiếp cho một khách hàng bằng ID
+     */
+    notifyCustomer(userId: number, title: string, content: string) {
+        this.server.emit(`customer:notify:${userId}`, { title, content });
+        this.logger.log(`🔔 Emitted customer:notify:${userId}`);
+    }
 }

@@ -105,6 +105,20 @@ export class ReturnsService {
                     where: { order_id: returnReq.order_id },
                     data: { status_code: 'COMPLETED' } // revert order status
                 });
+
+                const title = `Return Request Rejected`;
+                const content = `Your return request #${returnId} has been rejected.\nReason: ${adminNote || 'Does not meet return policy requirements'}`;
+                await tx.notifications.create({
+                    data: { user_id: returnReq.user_id, title, content }
+                });
+                this.eventsGateway.notifyCustomer(returnReq.user_id, title, content);
+            } else if (status === 'SHIPPING_TO_WAREHOUSE') {
+                const title = `Return Request Approved`;
+                const content = `Your return request #${returnId} has been approved. Please pack the products carefully, a shipper will contact you for pickup within 24 hours.\n${adminNote ? `Shop Note: ${adminNote}` : ''}`;
+                await tx.notifications.create({
+                    data: { user_id: returnReq.user_id, title, content }
+                });
+                this.eventsGateway.notifyCustomer(returnReq.user_id, title, content);
             }
 
             return updated;
@@ -196,8 +210,19 @@ export class ReturnsService {
                 data: { status_code: 'RETURNED' }
             });
 
+            // Notification Flags
+            const hasFraud = dto.items.some(i => i.result === InspectionResult.FRAUD);
+            const hasValidReturn = dto.items.some(i => i.result !== InspectionResult.FRAUD);
+
+            if (hasFraud) {
+                const title = `⚠️ ACCOUNT VIOLATION WARNING`;
+                const content = `We have detected fraudulent activity or the return of invalid items/trash in return request #${returnId}. Refunds have been denied for the violating products. Any further violations will result in your account being PERMANENTLY BANNED.`;
+                await tx.notifications.create({ data: { user_id: returnReq.user_id, title, content } });
+                this.eventsGateway.notifyCustomer(returnReq.user_id, title, content);
+            }
+
             // Automatically Top Up Wallet if not fraud
-            if (totalRefundAmount > 0) {
+            if (totalRefundAmount > 0 && hasValidReturn) {
                 // Find or create wallet inside transaction
                 let wallet = await tx.wallets.findUnique({ where: { user_id: returnReq.user_id } });
                 if (!wallet) {
@@ -220,6 +245,11 @@ export class ReturnsService {
                         description: `Refund for returned items in order #${returnReq.order_id}`
                     }
                 });
+
+                const title = `Refund Successful 💸`;
+                const content = `Inspection completed successfully for request #${returnId}. An amount of ${totalRefundAmount.toLocaleString('vi-VN')} VNĐ has been credited to your Wallet. Figicore sincerely apologizes for this unexpected shopping experience!`;
+                await tx.notifications.create({ data: { user_id: returnReq.user_id, title, content } });
+                this.eventsGateway.notifyCustomer(returnReq.user_id, title, content);
             }
 
             return {
