@@ -271,6 +271,8 @@ CREATE TABLE "order_items" (
     "quantity" INTEGER NOT NULL,
     "unit_price" DECIMAL(15,2) NOT NULL,
     "total_price" DECIMAL(15,2) NOT NULL,
+    "tax_rate" DOUBLE PRECISION DEFAULT 0,
+    "tax_amount" DECIMAL(15,2) DEFAULT 0,
     "metadata" JSONB,
     "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
@@ -305,6 +307,7 @@ CREATE TABLE "orders" (
     "paid_amount" DECIMAL(15,2) DEFAULT 0,
     "discount_amount" DECIMAL(15,2) DEFAULT 0,
     "shipping_fee" DECIMAL(15,2) DEFAULT 0,
+    "total_tax" DECIMAL(15,2) DEFAULT 0,
     "original_shipping_fee" DECIMAL(15,2) DEFAULT 0,
     "payment_deadline" TIMESTAMP(6),
     "channel_code" VARCHAR(20) NOT NULL,
@@ -314,11 +317,32 @@ CREATE TABLE "orders" (
     "packing_video_urls" JSONB,
     "packed_at" TIMESTAMP(6),
     "note" TEXT,
+    "is_vat_export" BOOLEAN DEFAULT false,
+    "vat_tax_number" VARCHAR(50),
+    "vat_company_name" VARCHAR(255),
+    "vat_company_address" VARCHAR(500),
+    "vat_invoice_email" VARCHAR(100),
     "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "deleted_at" TIMESTAMP(6),
 
     CONSTRAINT "orders_pkey" PRIMARY KEY ("order_id")
+);
+
+-- CreateTable
+CREATE TABLE "payment_transactions" (
+    "id" SERIAL NOT NULL,
+    "order_id" INTEGER NOT NULL,
+    "sepay_id" INTEGER NOT NULL,
+    "bank_brand_name" VARCHAR(100),
+    "account_number" VARCHAR(50),
+    "transaction_date" TIMESTAMP(6),
+    "amount" DECIMAL(15,2) NOT NULL,
+    "transaction_content" TEXT,
+    "reference_number" VARCHAR(100),
+    "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "payment_transactions_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
@@ -435,6 +459,8 @@ CREATE TABLE "product_variants" (
     "price" DECIMAL(15,2) NOT NULL DEFAULT 0,
     "stock_available" INTEGER NOT NULL DEFAULT 0,
     "stock_defect" INTEGER NOT NULL DEFAULT 0,
+    "stock_factory_defect" INTEGER NOT NULL DEFAULT 0,
+    "tax_rate" DOUBLE PRECISION DEFAULT 0,
     "weight_g" INTEGER NOT NULL DEFAULT 200,
     "length_cm" INTEGER NOT NULL DEFAULT 10,
     "width_cm" INTEGER NOT NULL DEFAULT 10,
@@ -520,7 +546,8 @@ CREATE TABLE "return_requests" (
     "user_id" INTEGER NOT NULL,
     "reason" TEXT,
     "unbox_video_url" TEXT,
-    "status_code" VARCHAR(20) DEFAULT 'PENDING',
+    "defect_image_urls" TEXT,
+    "status_code" VARCHAR(50) DEFAULT 'PENDING',
     "admin_note" TEXT,
     "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
@@ -624,6 +651,10 @@ CREATE TABLE "timesheets" (
     "real_work_hours" DOUBLE PRECISION DEFAULT 0,
     "applied_hourly_rate" DECIMAL(15,2),
     "status_code" VARCHAR(20),
+    "check_in_img_url" TEXT,
+    "check_in_score" DOUBLE PRECISION,
+    "check_out_img_url" TEXT,
+    "check_out_score" DOUBLE PRECISION,
     "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "deleted_at" TIMESTAMP(6),
@@ -752,6 +783,15 @@ CREATE UNIQUE INDEX "orders_order_code_key" ON "orders"("order_code");
 
 -- CreateIndex
 CREATE INDEX "idx_orders_code" ON "orders"("order_code");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "payment_transactions_sepay_id_key" ON "payment_transactions"("sepay_id");
+
+-- CreateIndex
+CREATE INDEX "idx_payment_trx_order" ON "payment_transactions"("order_id");
+
+-- CreateIndex
+CREATE INDEX "idx_payment_trx_sepay" ON "payment_transactions"("sepay_id");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "product_preorder_configs_variant_id_key" ON "product_preorder_configs"("variant_id");
@@ -899,6 +939,9 @@ ALTER TABLE "orders" ADD CONSTRAINT "orders_shipping_address_id_fkey" FOREIGN KE
 
 -- AddForeignKey
 ALTER TABLE "orders" ADD CONSTRAINT "orders_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("user_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
+
+-- AddForeignKey
+ALTER TABLE "payment_transactions" ADD CONSTRAINT "payment_transactions_order_id_fkey" FOREIGN KEY ("order_id") REFERENCES "orders"("order_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
 
 -- AddForeignKey
 ALTER TABLE "payrolls" ADD CONSTRAINT "payrolls_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "employees"("user_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
