@@ -586,6 +586,89 @@ export class OrdersService {
     return { success: true, message: `Payment successful for group ${paymentRefCode}` };
   }
 
+  // --- NEW: WALLET PAYMENT FOR GROUP ---
+  async payWithWallet(paymentRefCode: string, userId: number) {
+    if (!paymentRefCode) throw new BadRequestException("Payment Ref Code required");
+
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        // 1. Fetch orders in the group that are pending payment
+        const orders = await tx.orders.findMany({
+          where: { payment_ref_code: paymentRefCode, user_id: userId, status_code: 'PENDING_PAYMENT' }
+        });
+
+        if (!orders.length) throw new BadRequestException("No pending orders found for this reference");
+
+        // 2. Calculate Total Required
+        const totalAmount = orders.reduce((sum, o) => sum + Number(o.total_amount), 0);
+
+        // 3. Fetch Wallet & Verify Balance
+        const wallet = await tx.wallets.findUnique({
+          where: { user_id: userId }
+        });
+
+        if (!wallet) {
+          throw new BadRequestException("Wallet not found. Please activate your FigiWallet.");
+        }
+
+        if (Number(wallet.balance_available) < totalAmount) {
+          throw new BadRequestException("Insufficient wallet balance.");
+        }
+
+        // 4. Deduct Balance
+        await tx.wallets.update({
+          where: { wallet_id: wallet.wallet_id },
+          data: { balance_available: { decrement: totalAmount } }
+        });
+
+        // 5. Update Orders to PROCESSING and Create Payment Transactions
+        for (const order of orders) {
+          await tx.orders.update({
+            where: { order_id: order.order_id },
+            data: { status_code: 'PROCESSING', paid_amount: order.total_amount }
+          });
+
+
+        }
+
+        // 6. Record Wallet Deduction Transaction
+        await tx.wallet_transactions.create({
+          data: {
+            wallet_id: wallet.wallet_id,
+            type_code: 'PAYMENT',
+            amount: -totalAmount,
+            reference_code: paymentRefCode,
+            description: `Payment for order group ${paymentRefCode}`
+          }
+        });
+      });
+
+      // 7. Post-Transaction Actions (Notifications, Socket)
+      const updatedOrders = await this.prisma.orders.findMany({
+        where: { payment_ref_code: paymentRefCode, user_id: userId },
+        include: {
+          users: true,
+          order_items: { include: { product_variants: { include: { products: true } } } }
+        }
+      });
+
+      for (const order of updatedOrders) {
+        if (order.users && order.users.email) {
+          this.mailService.sendOrderConfirmation(order.users, order).catch(e => console.error("Mail Error", e));
+        }
+        this.eventsGateway.notifyNewOrder(order);
+      }
+      this.logger.log(`Wallet Payment successful for group ${paymentRefCode}`);
+
+    } catch (error) {
+      this.logger.error("Wallet Payment Error:", error);
+      if (error instanceof BadRequestException) throw error;
+      throw new InternalServerErrorException('Payment processing failed');
+    }
+
+    return { success: true, message: `Wallet payment successful for group ${paymentRefCode}` };
+  }
+
   async confirmPayment(orderId: number, userId: number) {
     // 1. Run Transaction (Update Status)
     await this.prisma.$transaction(async (tx) => {
@@ -1227,13 +1310,17 @@ export class OrdersService {
     });
 
     // B. Trigger Loyalty Points
+    let earnedPoints = 0;
     if (this.customersService && order.user_id) {
-      await this.customersService.updateCustomerStats(order.user_id, Number(order.total_amount));
+      const statsResult = await this.customersService.updateCustomerStats(order.user_id, Number(order.total_amount));
+      if (statsResult?.pointsAdded) {
+        earnedPoints = statsResult.pointsAdded;
+      }
     }
 
     // C. Trigger Delivery Success Email
     if (order.users) {
-      this.mailService.sendDeliverySuccess(order.users, order, Number(order.total_amount));
+      this.mailService.sendDeliverySuccess(order.users, order, earnedPoints);
     }
 
     return { success: true, message: `Order ${trackingCode} completed and points added.` };

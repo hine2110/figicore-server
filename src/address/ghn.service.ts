@@ -87,9 +87,9 @@ export class GhnService {
 
         const payload = {
             "service_type_id": 2, // Standard Delivery
-            "insurance_value": params.insurance_value, // Product Value
+            "insurance_value": 0, // Solution 3: Opt-out of GHN Insurance to lower fees
             "coupon": null,
-            "from_district_id": 1542, // Hanoi/Thanh Xuan (Example default)
+            "from_district_id": 1534, // Da Nang Warehouse
             "to_district_id": params.to_district_id,
             "to_ward_code": params.to_ward_code,
             "height": 15,
@@ -115,10 +115,10 @@ export class GhnService {
         const url = `https://dev-online-gateway.ghn.vn/shiip/public-api/v2/shipping-order/fee`;
 
         // 2. Payload with FULL Insurance Value (Plan A: Safety First)
-        // We declare the full value to ensure full compensation if lost
+        // We declare 0 value (Solution 3) to bypass high insurance fees
         const payload = {
             "service_type_id": 2, // Standard Delivery
-            "insurance_value": params.insurance_value, // <--- KEY: Full Order Value
+            "insurance_value": 0, // <--- KEY: Solution 3 enforces 0
             "coupon": null,
             "from_district_id": 1534, // UPDATE: Correct Warehouse District (Da Nang/Example)
             "to_district_id": params.to_district_id,
