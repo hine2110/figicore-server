@@ -68,7 +68,7 @@ export class ProductsService {
             price: isPreorder ? 0 : variantDto.price,
             stock_available: isPreorder ? 0 : (variantDto.stock_available ?? 0),
             stock_defect: variantDto.stock_defect ?? 0,
-            tax_rate: productData.type_code === 'RETAIL' ? 1 : 0,
+            tax_rate: (productData.type_code === 'RETAIL' || productData.type_code === 'AUCTION') ? 1 : 0,
           };
 
           const createdVariant = await tx.product_variants.create({ data: variantData });
@@ -595,7 +595,7 @@ export class ProductsService {
 
       const type = currentProduct.type_code;
 
-      if (type === 'RETAIL' && variants && variants.length > 0) {
+      if ((type === 'RETAIL' || type === 'AUCTION') && variants && variants.length > 0) {
         for (const v of variants) {
           const existingVariant = await tx.product_variants.findUnique({
             where: { sku: v.sku },
