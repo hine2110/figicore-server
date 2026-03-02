@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CreatePosOrderDto } from './dto/create-pos-order.dto';
 import { RegisterCustomerDto } from './dto/register-customer.dto';
 import { SyncPosOrderDto } from './dto/sync-pos-order.dto';
+import { GetPosOrdersDto } from './dto/get-pos-orders.dto';
 import * as bcrypt from 'bcrypt';
 
 import { CustomersService } from '../customers/customers.service';
@@ -102,6 +103,8 @@ export class PosOrdersService {
                         vat_company_name: dto.vat_company_name || null,
                         vat_company_address: dto.vat_company_address || null,
                         vat_invoice_email: dto.vat_invoice_email || null,
+                        cash_received: dto.cash_received || null,
+                        cash_change: dto.cash_change || null,
                         status_code: 'COMPLETED',
                         note: dto.note,
                         updated_at: new Date(),
@@ -226,16 +229,42 @@ export class PosOrdersService {
         });
     }
 
-    async getOrdersByStaff(staffId: number, page: number = 1, limit: number = 12) {
-        const activeSession = await this.prisma.pos_sessions.findFirst({
-            where: { user_id: staffId, status_code: 'OPEN', deleted_at: null },
-        });
+    async getOrdersByStaff(staffId: number, query: GetPosOrdersDto) {
+        const page = Number(query.page) || 1;
+        const limit = Number(query.limit) || 12;
 
-        if (!activeSession) return { success: true, count: 0, data: [], total: 0, page: 1, limit };
+        const where: any = {
+            created_by_staff_id: staffId,
+            channel_code: 'POS',
+            deleted_at: null,
+            status_code: query.status && query.status !== 'ALL' ? query.status : { not: 'PENDING' }
+        };
 
-        const where = { session_id: activeSession.session_id, channel_code: 'POS', deleted_at: null, status_code: { not: 'PENDING' } };
+        // Lọc theo phương thức thanh toán
+        if (query.payment_method && query.payment_method !== 'ALL') {
+            where.payment_method_code = query.payment_method;
+        }
 
-        const [orders, total] = await Promise.all([
+        // Lọc theo ngày đơn lẻ (date)
+        if (query.date) {
+            const date = new Date(query.date);
+            const startOfDay = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0);
+            const endOfDay = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 23, 59, 59, 999);
+            where.created_at = {
+                gte: startOfDay,
+                lte: endOfDay
+            };
+        }
+
+        // Sorting
+        const orderBy: any = {};
+        if (query.sort_by) {
+            orderBy[query.sort_by] = query.sort_order || 'desc';
+        } else {
+            orderBy.created_at = 'desc';
+        }
+
+        const [orders, total, aggregate] = await Promise.all([
             this.prisma.orders.findMany({
                 where,
                 include: {
@@ -243,14 +272,26 @@ export class PosOrdersService {
                     users: true,
                     employees: { include: { users: true } }
                 },
-                orderBy: { created_at: 'desc' },
+                orderBy,
                 skip: (page - 1) * limit,
                 take: limit,
             }),
-            this.prisma.orders.count({ where })
+            this.prisma.orders.count({ where }),
+            this.prisma.orders.aggregate({
+                where,
+                _sum: { total_amount: true }
+            })
         ]);
 
-        return { success: true, count: orders.length, data: orders, total, page, limit };
+        return {
+            success: true,
+            count: orders.length,
+            data: orders,
+            total,
+            page,
+            limit,
+            total_revenue: Number(aggregate._sum.total_amount || 0)
+        };
     }
 
     async searchCustomer(query: { phone?: string; email?: string; q?: string; page?: number; limit?: number }) {
@@ -366,30 +407,46 @@ export class PosOrdersService {
     }
 
     async registerCustomer(dto: RegisterCustomerDto) {
-        const existing = await this.prisma.users.findFirst({
-            where: { phone: dto.phone, deleted_at: null }
+        // 1. Check if user exists
+        let user = await this.prisma.users.findFirst({
+            where: { phone: dto.phone, deleted_at: null },
+            include: { customers: true }
         });
-        if (existing) throw new ConflictException('Số điện thoại đã tồn tại');
 
-        const randomPassword = Math.random().toString(36).slice(-16);
-        const hashedPassword = await bcrypt.hash(randomPassword, 10);
+        if (user) {
+            // IF GUEST_POS and we have a new better name, update it
+            if (user.status_code === 'GUEST_POS' && dto.full_name && dto.full_name !== 'Khách POS') {
+                user = await this.prisma.users.update({
+                    where: { user_id: user.user_id },
+                    data: { full_name: dto.full_name },
+                    include: { customers: true }
+                });
+            }
+            return { success: true, message: 'Khách hàng đã tồn tại.', data: user };
+        }
 
-        const user = await this.prisma.users.create({
+        // 2. Create new GUEST_POS user
+        const newUser = await this.prisma.users.create({
             data: {
-                email: dto.email || `pos${Date.now()}@figicore.com`,
-                password_hash: hashedPassword,
-                full_name: dto.full_name,
+                email: dto.email || null,
+                password_hash: null,
+                full_name: dto.full_name || 'Khách POS',
                 phone: dto.phone,
                 role_code: 'CUSTOMER',
-                status_code: 'ACTIVE'
+                status_code: 'GUEST_POS',
+                is_verified: false
             }
         });
 
         const profile = await this.prisma.customers.create({
-            data: { user_id: user.user_id, current_rank_code: 'BRONZE' }
+            data: { user_id: newUser.user_id, current_rank_code: 'BRONZE' }
         });
 
-        return { success: true, data: { ...user, customers: profile } };
+        return {
+            success: true,
+            message: 'Đăng ký khách hàng mới thành công.',
+            data: { ...newUser, customers: profile }
+        };
     }
 
     async getActiveOrder(staffId: number) {
@@ -425,7 +482,7 @@ export class PosOrdersService {
                     await tx.product_variants.update({ where: { variant_id: item.variant_id }, data: { stock_available: { increment: item.quantity } } });
                 }
                 await tx.order_items.deleteMany({ where: { order_id: order.order_id } });
-                await tx.orders.delete({ where: { order_id: order.order_id } });
+                await tx.orders.deleteMany({ where: { order_id: order.order_id } });
                 return null;
             }
 

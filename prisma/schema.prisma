@@ -252,6 +252,47 @@ model order_status_history {
 }
 
 model orders {
+  order_id             Int                    @id @default(autoincrement())
+  order_code           String                 @unique @db.VarChar(50)
+  user_id              Int?
+  session_id           Int?
+  created_by_staff_id  Int?
+  shipping_address_id  Int?
+  promotion_id         Int?
+  total_amount         Decimal                @db.Decimal(15, 2)
+  paid_amount          Decimal?               @default(0) @db.Decimal(15, 2)
+  discount_amount      Decimal?               @default(0) @db.Decimal(15, 2)
+  shipping_fee         Decimal?               @default(0) @db.Decimal(15, 2)
+  total_tax            Decimal?               @default(0) @db.Decimal(15, 2)
+  original_shipping_fee Decimal?              @default(0) @db.Decimal(15, 2)
+  payment_deadline     DateTime?              @db.Timestamp(6)
+  channel_code         String                 @db.VarChar(20)
+  payment_method_code  String?                @db.VarChar(20)
+  payment_ref_code     String?                @db.VarChar(50) // NEW: Group Payment Reference
+  status_code          String?                @default("PENDING") @db.VarChar(50)
+  packing_video_urls   Json?
+  packed_at            DateTime?              @db.Timestamp(6)
+  note                 String?
+  is_vat_export        Boolean?               @default(false)
+  vat_tax_number       String?                @db.VarChar(50)
+  vat_company_name     String?                @db.VarChar(255)
+  vat_company_address  String?                @db.VarChar(500)
+  vat_invoice_email    String?                @db.VarChar(100)
+  cash_received        Decimal?               @db.Decimal(15, 2)
+  cash_change          Decimal?               @db.Decimal(15, 2)
+  created_at           DateTime?              @default(now()) @db.Timestamp(6)
+  updated_at           DateTime?              @default(now()) @db.Timestamp(6)
+  deleted_at           DateTime?              @db.Timestamp(6)
+  feedbacks            feedbacks[]
+  order_items          order_items[]
+  order_status_history order_status_history[]
+  employees            employees?             @relation(fields: [created_by_staff_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  promotions           promotions?            @relation(fields: [promotion_id], references: [promotion_id], onDelete: NoAction, onUpdate: NoAction)
+  pos_sessions         pos_sessions?          @relation(fields: [session_id], references: [session_id], onDelete: NoAction, onUpdate: NoAction)
+  addresses            addresses?             @relation(fields: [shipping_address_id], references: [address_id], onDelete: NoAction, onUpdate: NoAction)
+  users                users?                 @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  return_requests      return_requests[]
+  shipments            shipments?
   order_id              Int                    @id @default(autoincrement())
   order_code            String                 @unique @db.VarChar(50)
   user_id               Int?
@@ -334,20 +375,23 @@ model payrolls {
 }
 
 model pos_sessions {
-  session_id     Int              @id @default(autoincrement())
-  user_id        Int
-  opened_at      DateTime?        @default(now()) @db.Timestamp(6)
-  closed_at      DateTime?        @db.Timestamp(6)
-  opening_cash   Decimal?         @default(0) @db.Decimal(15, 2)
-  closing_cash   Decimal?         @db.Decimal(15, 2)
-  status_code    String?          @default("OPEN") @db.VarChar(20)
-  note           String?
-  created_at     DateTime?        @default(now()) @db.Timestamp(6)
-  updated_at     DateTime?        @default(now()) @db.Timestamp(6)
-  deleted_at     DateTime?        @db.Timestamp(6)
-  orders         orders[]
-  employees      employees        @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
-  store_expenses store_expenses[]
+  session_id       Int              @id @default(autoincrement())
+  user_id          Int
+  opened_at        DateTime?        @default(now()) @db.Timestamp(6)
+  closed_at        DateTime?        @db.Timestamp(6)
+  opening_cash     Decimal?         @default(0) @db.Decimal(15, 2)
+  closing_cash     Decimal?         @db.Decimal(15, 2)
+  cash_revenue_app Decimal?         @default(0) @db.Decimal(15, 2)
+  total_expenses   Decimal?         @default(0) @db.Decimal(15, 2)
+  cash_breakdown   Json?
+  status_code      String?          @default("OPEN") @db.VarChar(20)
+  note             String?
+  created_at       DateTime?        @default(now()) @db.Timestamp(6)
+  updated_at       DateTime?        @default(now()) @db.Timestamp(6)
+  deleted_at       DateTime?        @db.Timestamp(6)
+  orders           orders[]
+  employees        employees        @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  store_expenses   store_expenses[]
 }
 
 model product_blindboxes {

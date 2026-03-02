@@ -34,7 +34,6 @@ import { EventsModule } from './events/events.module';
 import { AccessControlModule } from './access-control/access-control.module';
 import { CheckInModule } from './check-in/check-in.module';
 import { ProductPromotionsModule } from './product-promotions/product-promotions.module';
-
 import { WalletModule } from './wallet/wallet.module';
 import { BlindboxesModule } from './blindboxes/blindboxes.module';
 import { ServeStaticModule } from '@nestjs/serve-static';
