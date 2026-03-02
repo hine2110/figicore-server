@@ -39,49 +39,6 @@ model addresses {
   orders          orders[]
 }
 
-model auction_bids {
-  bid_id     Int       @id @default(autoincrement())
-  auction_id Int
-  user_id    Int
-  bid_amount Decimal   @db.Decimal(15, 2)
-  created_at DateTime? @default(now()) @db.Timestamp(6)
-  updated_at DateTime? @default(now()) @db.Timestamp(6)
-  deleted_at DateTime? @db.Timestamp(6)
-  auctions   auctions  @relation(fields: [auction_id], references: [auction_id], onDelete: NoAction, onUpdate: NoAction)
-  users      users     @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
-
-  @@unique([auction_id, bid_amount], map: "uq_auction_bid_amount")
-}
-
-model auction_participants {
-  id             Int       @id @default(autoincrement())
-  auction_id     Int
-  user_id        Int
-  deposit_amount Decimal   @db.Decimal(15, 2)
-  created_at     DateTime? @default(now()) @db.Timestamp(6)
-  updated_at     DateTime? @default(now()) @db.Timestamp(6)
-  deleted_at     DateTime? @db.Timestamp(6)
-  auctions       auctions  @relation(fields: [auction_id], references: [auction_id], onDelete: NoAction, onUpdate: NoAction)
-  users          users     @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
-}
-
-model auctions {
-  auction_id           Int                    @id @default(autoincrement())
-  product_id           Int
-  start_price          Decimal                @db.Decimal(15, 2)
-  current_price        Decimal?               @db.Decimal(15, 2)
-  start_time           DateTime               @db.Timestamp(6)
-  end_time             DateTime               @db.Timestamp(6)
-  status_code          String?                @default("PENDING") @db.VarChar(20)
-  winner_id            Int?
-  created_at           DateTime?              @default(now()) @db.Timestamp(6)
-  updated_at           DateTime?              @default(now()) @db.Timestamp(6)
-  deleted_at           DateTime?              @db.Timestamp(6)
-  auction_bids         auction_bids[]
-  auction_participants auction_participants[]
-  products             products               @relation(fields: [product_id], references: [product_id], onDelete: NoAction, onUpdate: NoAction)
-  users                users?                 @relation(fields: [winner_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
-}
 
 model brands {
   brand_id   Int        @id @default(autoincrement())
@@ -269,10 +226,10 @@ model order_items {
   allocated_product_id Int?
   is_opened            Boolean?          @default(false)
   quantity             Int
-  unit_price           Decimal          @db.Decimal(15, 2)
-  total_price          Decimal          @db.Decimal(15, 2)
-  tax_rate             Float?           @default(0)
-  tax_amount           Decimal?         @default(0) @db.Decimal(15, 2)
+  unit_price           Decimal           @db.Decimal(15, 2)
+  total_price          Decimal           @db.Decimal(15, 2)
+  tax_rate             Float?            @default(0)
+  tax_amount           Decimal?          @default(0) @db.Decimal(15, 2)
   metadata             Json?
   created_at           DateTime?         @default(now()) @db.Timestamp(6)
   updated_at           DateTime?         @default(now()) @db.Timestamp(6)
@@ -336,6 +293,47 @@ model orders {
   users                users?                 @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
   return_requests      return_requests[]
   shipments            shipments?
+  order_id              Int                    @id @default(autoincrement())
+  order_code            String                 @unique @db.VarChar(50)
+  user_id               Int?
+  session_id            Int?
+  created_by_staff_id   Int?
+  shipping_address_id   Int?
+  promotion_id          Int?
+  shipping_promotion_id Int?
+  total_amount          Decimal                @db.Decimal(15, 2)
+  paid_amount           Decimal?               @default(0) @db.Decimal(15, 2)
+  discount_amount       Decimal?               @default(0) @db.Decimal(15, 2)
+  shipping_fee          Decimal?               @default(0) @db.Decimal(15, 2)
+  total_tax             Decimal?               @default(0) @db.Decimal(15, 2)
+  original_shipping_fee Decimal?               @default(0) @db.Decimal(15, 2)
+  payment_deadline      DateTime?              @db.Timestamp(6)
+  channel_code          String                 @db.VarChar(20)
+  payment_method_code   String?                @db.VarChar(20)
+  payment_ref_code      String?                @db.VarChar(50) // NEW: Group Payment Reference
+  status_code           String?                @default("PENDING") @db.VarChar(50)
+  packing_video_urls    Json?
+  packed_at             DateTime?              @db.Timestamp(6)
+  note                  String?
+  is_vat_export         Boolean?               @default(false)
+  vat_tax_number        String?                @db.VarChar(50)
+  vat_company_name      String?                @db.VarChar(255)
+  vat_company_address   String?                @db.VarChar(500)
+  vat_invoice_email     String?                @db.VarChar(100)
+  created_at            DateTime?              @default(now()) @db.Timestamp(6)
+  updated_at            DateTime?              @default(now()) @db.Timestamp(6)
+  deleted_at            DateTime?              @db.Timestamp(6)
+  feedbacks             feedbacks[]
+  order_items           order_items[]
+  order_status_history  order_status_history[]
+  employees             employees?             @relation(fields: [created_by_staff_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  promotions            promotions?            @relation("DiscountPromotionRel", fields: [promotion_id], references: [promotion_id], onDelete: NoAction, onUpdate: NoAction)
+  shipping_promotions   promotions?            @relation("ShippingPromotionRel", fields: [shipping_promotion_id], references: [promotion_id], onDelete: NoAction, onUpdate: NoAction)
+  pos_sessions          pos_sessions?          @relation(fields: [session_id], references: [session_id], onDelete: NoAction, onUpdate: NoAction)
+  addresses             addresses?             @relation(fields: [shipping_address_id], references: [address_id], onDelete: NoAction, onUpdate: NoAction)
+  users                 users?                 @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  return_requests       return_requests[]
+  shipments             shipments?
   // Inverse Relations
   contract_deposit      preorder_contracts[]   @relation("DepositOrderRel")
   contract_final        preorder_contracts[]   @relation("FinalOrderRel")
@@ -467,7 +465,7 @@ model products {
   brand_id           Int?
   series_id          Int?
   name               String              @db.VarChar(255)
-  type_code          String              @db.VarChar(50) // RETAIL, BLINDBOX, PREORDER
+  type_code          String              @db.VarChar(50) // RETAIL, BLINDBOX, PREORDER, AUCTION
   status_code        String?             @default("DRAFT") @db.VarChar(50)
   specifications     Json?
   media_urls         Json?
@@ -476,7 +474,6 @@ model products {
   created_at         DateTime?           @default(now()) @db.Timestamp(6)
   updated_at         DateTime?           @default(now()) @db.Timestamp(6)
   deleted_at         DateTime?           @db.Timestamp(6)
-  auctions           auctions[]
   feedbacks          feedbacks[]
   product_blindboxes product_blindboxes?
 
@@ -493,14 +490,16 @@ model product_variants {
   product_id  Int
   sku         String @unique @db.VarChar(50)
   option_name String @db.VarChar(100)
+  
+  auctions    auctions[]
 
   // RETAIL FIELDS
-  price                   Decimal                   @default(0) @db.Decimal(15, 2) // Retail Price
-  stock_available         Int                       @default(0) // Physical Stock
-  stock_defect            Int                       @default(0)
-  stock_factory_defect    Int                       @default(0)
-  tax_rate                Float?                    @default(0) // VAT %
-  
+  price                Decimal @default(0) @db.Decimal(15, 2) // Retail Price
+  stock_available      Int     @default(0) // Physical Stock
+  stock_defect         Int     @default(0)
+  stock_factory_defect Int     @default(0)
+  tax_rate             Float?  @default(0) // VAT %
+
   // PHYSICAL SPECS
   weight_g  Int @default(200)
   length_cm Int @default(10)
@@ -570,18 +569,23 @@ model product_promotions {
 }
 
 model promotions {
-  promotion_id    Int             @id @default(autoincrement())
-  code            String          @unique @db.VarChar(50)
-  discount_value  Decimal?        @db.Decimal(15, 2)
-  discount_type   String?         @db.VarChar(20)
-  min_order_value Decimal?        @default(0) @db.Decimal(15, 2)
-  start_date      DateTime?       @db.Timestamp(6)
-  end_date        DateTime?       @db.Timestamp(6)
-  created_at      DateTime?       @default(now()) @db.Timestamp(6)
-  updated_at      DateTime?       @default(now()) @db.Timestamp(6)
-  deleted_at      DateTime?       @db.Timestamp(6)
-  orders          orders[]
-  user_vouchers   user_vouchers[]
+  promotion_id       Int             @id @default(autoincrement())
+  code               String          @unique @db.VarChar(50)
+  discount_value     Decimal?        @db.Decimal(15, 2)
+  discount_type      String?         @db.VarChar(20)
+  min_order_value    Decimal?        @default(0) @db.Decimal(15, 2)
+  apply_rank_code    String?         @db.VarChar(50)
+  max_quantity       Int?
+  collected_quantity Int?            @default(0)
+  is_public          Boolean?        @default(true)
+  start_date         DateTime?       @db.Timestamp(6)
+  end_date           DateTime?       @db.Timestamp(6)
+  created_at         DateTime?       @default(now()) @db.Timestamp(6)
+  updated_at         DateTime?       @default(now()) @db.Timestamp(6)
+  deleted_at         DateTime?       @db.Timestamp(6)
+  orders             orders[]        @relation("DiscountPromotionRel")
+  shipping_orders    orders[]        @relation("ShippingPromotionRel")
+  user_vouchers      user_vouchers[]
 }
 
 model return_items {
@@ -698,10 +702,10 @@ model timesheets {
   status_code         String?   @db.VarChar(20)
 
   // Face Check-in Evidence
-  check_in_img_url    String?   @db.Text
-  check_in_score      Float?
-  check_out_img_url   String?   @db.Text
-  check_out_score     Float?
+  check_in_img_url  String? @db.Text
+  check_in_score    Float?
+  check_out_img_url String? @db.Text
+  check_out_score   Float?
 
   created_at     DateTime?       @default(now()) @db.Timestamp(6)
   updated_at     DateTime?       @default(now()) @db.Timestamp(6)
@@ -783,11 +787,70 @@ model wallet_transactions {
   type_code      String    @db.VarChar(50)
   amount         Decimal   @db.Decimal(15, 2)
   reference_code String?   @db.VarChar(100)
-  description    String?
+  description    String?   @db.Text
   created_at     DateTime? @default(now()) @db.Timestamp(6)
   updated_at     DateTime? @default(now()) @db.Timestamp(6)
   deleted_at     DateTime? @db.Timestamp(6)
   wallets        wallets   @relation(fields: [wallet_id], references: [wallet_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+// ----------------------------------------------------------------------------
+// AUCTION TABLES (B2C)
+// ----------------------------------------------------------------------------
+
+model auctions {
+  auction_id      Int       @id @default(autoincrement())
+  variant_id      Int       @unique 
+  start_price     Decimal   @db.Decimal(15, 2)
+  step_price      Decimal   @db.Decimal(15, 2)
+  deposit_fee     Decimal   @db.Decimal(15, 2) // Phí giữ chỗ (Khóa ví)
+  max_participants Int      @default(50) // Giới hạn số lượng người được tham gia
+  
+  start_time      DateTime  @db.Timestamp(6)
+  end_time        DateTime  @db.Timestamp(6) // Có thể bị phình ra bởi Anti-Snipe
+  
+  // Status: DRAFT, UPCOMING, ACTIVE, AWAITING_PAYMENT, COMPLETED, CANCELLED, FAILED_NO_BUYER
+  status_code     String    @default("DRAFT") @db.VarChar(50) 
+  
+  winner_id       Int?      // Người đang giữ quyền thanh toán (Top 1 hoặc Top 2)
+  final_price     Decimal?  @db.Decimal(15, 2)
+  payment_deadline  DateTime? @db.Timestamp(6) // Timestamp giới hạn 24h
+  
+  created_at      DateTime? @default(now())
+  updated_at      DateTime? @default(now())
+
+  product_variants product_variants @relation(fields: [variant_id], references: [variant_id])
+  users            users?           @relation(fields: [winner_id], references: [user_id])
+  auction_bids     auction_bids[]
+  auction_participants auction_participants[]
+}
+
+// Bảng Quản Lý Những Người Đã Nộp Cọc Vào Chơi
+model auction_participants {
+  id         Int      @id @default(autoincrement())
+  auction_id Int
+  user_id    Int
+  deposit_amount Decimal @db.Decimal(15, 2)
+  status     String   @default("JOINED") // JOINED, REFUNDED, FORFEITED, RETAINED_AS_BACKUP
+  
+  created_at DateTime @default(now())
+
+  auctions   auctions @relation(fields: [auction_id], references: [auction_id])
+  users      users    @relation(fields: [user_id], references: [user_id])
+  
+  @@unique([auction_id, user_id]) // Một người chỉ bị khóa ví 1 lần mỗi phòng
+}
+
+// Bảng Ghi Nhận Từng "Lần Giơ Biển" Báo Giá
+model auction_bids {
+  bid_id      Int      @id @default(autoincrement())
+  auction_id  Int
+  user_id     Int
+  bid_amount  Decimal  @db.Decimal(15, 2)
+  created_at  DateTime @default(now())
+
+  auctions    auctions @relation(fields: [auction_id], references: [auction_id])
+  users       users    @relation(fields: [user_id], references: [user_id])
 }
 
 model wallets {
