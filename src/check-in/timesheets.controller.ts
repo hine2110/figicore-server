@@ -5,6 +5,14 @@ import { StoreIpGuard } from '../common/guards/store-ip.guard';
 import { FaceVerificationService } from './face-verification.service';
 import { UploadService } from '../upload/upload.service';
 import { PrismaService } from '../prisma/prisma.service';
+import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc';
+import timezone from 'dayjs/plugin/timezone';
+
+dayjs.extend(utc);
+dayjs.extend(timezone);
+dayjs.tz.setDefault('Asia/Ho_Chi_Minh');
+
 
 const TIMESHEET_STATUS = {
     PRESENT: 'PRESENT',          // Đúng giờ
@@ -85,8 +93,8 @@ export class TimesheetsController {
     }
 
     private async processCheckIn(userId: number, now: Date, score: number, imgUrl: string) {
-        const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
-        const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
+        const startOfDay = dayjs(now).tz('Asia/Ho_Chi_Minh').startOf('day').toDate();
+        const endOfDay = dayjs(now).tz('Asia/Ho_Chi_Minh').endOf('day').toDate();
 
         const schedules = await this.prisma.work_schedules.findMany({
             where: {
@@ -301,7 +309,7 @@ export class TimesheetsController {
         let totalShifts = 0;
         let totalRealHours = 0;
         const logs: any[] = [];
-        const todayZero = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const todayZero = dayjs(now).tz('Asia/Ho_Chi_Minh').startOf('day').toDate();
 
         for (const schedule of schedules) {
             totalShifts++;
@@ -358,22 +366,23 @@ export class TimesheetsController {
     }
 
     private getStartAndEndOfMonth(month: number, year: number) {
-        const startOfMonth = new Date(year, month - 1, 1, 0, 0, 0, 0);
-        const endOfMonth = new Date(year, month, 0, 23, 59, 59, 999);
+        const dateStr = `${year}-${String(month).padStart(2, '0')}-01`;
+        const startOfMonth = dayjs.tz(dateStr, 'Asia/Ho_Chi_Minh').startOf('month').toDate();
+        const endOfMonth = dayjs(startOfMonth).tz('Asia/Ho_Chi_Minh').endOf('month').toDate();
         return { startOfMonth, endOfMonth };
     }
 
     private mergeDateAndTime(dateObj: Date, timeObj: Date): Date {
-        const year = dateObj.getUTCFullYear();
-        const month = String(dateObj.getUTCMonth() + 1).padStart(2, '0');
-        const day = String(dateObj.getUTCDate()).padStart(2, '0');
+        // Lấy ngày dưới định dạng YYYY-MM-DD tại múi giờ VN
+        const dateStr = dayjs(dateObj).tz('Asia/Ho_Chi_Minh').format('YYYY-MM-DD');
 
-        const hours = String(timeObj.getUTCHours()).padStart(2, '0');
-        const minutes = String(timeObj.getUTCMinutes()).padStart(2, '0');
-        const seconds = String(timeObj.getUTCSeconds()).padStart(2, '0');
+        // Lấy thời gian UTC của timeObj do Prisma nạp lên (vốn dĩ lúc save đã dùng setUTCHours = Local Time)
+        const h = String(timeObj.getUTCHours()).padStart(2, '0');
+        const m = String(timeObj.getUTCMinutes()).padStart(2, '0');
+        const s = String(timeObj.getUTCSeconds()).padStart(2, '0');
+        const timeStrRaw = `${h}:${m}:${s}`;
 
-        const isoString = `${year}-${month}-${day}T${hours}:${minutes}:${seconds}+07:00`;
-
-        return new Date(isoString);
+        // Kết hợp lại nguyên khối vào múi giờ Asia/Ho_Chi_Minh
+        return dayjs.tz(`${dateStr} ${timeStrRaw}`, 'YYYY-MM-DD HH:mm:ss', 'Asia/Ho_Chi_Minh').toDate();
     }
 }
