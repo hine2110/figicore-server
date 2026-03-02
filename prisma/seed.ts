@@ -239,6 +239,36 @@ async function main() {
 
     console.log('✅ Timesheet Status Seeding Completed!');
 
+    // ==========================================
+    // 10. HR & PAYROLL MODULE
+    // ==========================================
+    console.log('--- 10. Seeding HR & Payroll Lookups ---');
+
+    await upsertLookup('PAYROLL_STATUS', 'DRAFT', 'Nháp', 1);
+    await upsertLookup('PAYROLL_STATUS', 'SENT_FOR_REVIEW', 'Gửi Chờ Duyệt (Quản lý)', 2);
+    await upsertLookup('PAYROLL_STATUS', 'DISPUTED', 'Đang Khiếu Nại', 3);
+    await upsertLookup('PAYROLL_STATUS', 'PENDING_APPROVAL', 'Chờ Duyệt (Admin)', 4);
+    await upsertLookup('PAYROLL_STATUS', 'APPROVED', 'Đã Duyệt', 5);
+    await upsertLookup('PAYROLL_STATUS', 'PAID', 'Đã Thanh Toán', 6);
+
+    await upsertLookup('SALARY_ITEM_TYPE', 'ALLOWANCE', 'Phụ Cấp', 1);
+    await upsertLookup('SALARY_ITEM_TYPE', 'DEDUCTION', 'Khấu Trừ', 2);
+
+    await upsertLookup('LEAVE_TYPE', 'ANNUAL_PAID', 'Nghỉ Phép Năm (Có Lương)', 1);
+    await upsertLookup('LEAVE_TYPE', 'UNPAID', 'Nghỉ Không Lương', 2);
+    await upsertLookup('LEAVE_TYPE', 'SICK', 'Nghỉ Ốm', 3);
+
+    console.log('✅ HR & Payroll Lookups Seeding Completed!');
+
+    // ==========================================
+    // 11. TIMESHEET CORRECTIONS
+    // ==========================================
+    console.log('--- 11. Seeding Timesheet Correction Status ---');
+
+    await upsertLookup('CORRECTION_STATUS', 'PENDING', 'Chờ duyệt', 1);
+    await upsertLookup('CORRECTION_STATUS', 'APPROVED', 'Đã duyệt', 2);
+    await upsertLookup('CORRECTION_STATUS', 'REJECTED', 'Từ chối', 3);
+
     console.log('🎉 SEEDING HOÀN TẤT! Hệ thống đã sẵn sàng định danh.');
 }
 

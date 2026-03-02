@@ -5,6 +5,13 @@ import { CreateWorkScheduleDto } from './dto/create-work-schedule.dto';
 import { CloneWorkScheduleDto } from './dto/clone-work-schedule.dto';
 import { GetSchedulesFilterDto } from './dto/get-schedules-filter.dto';
 import { UpdateWorkScheduleDto } from './dto/update-work-schedule.dto';
+import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc';
+import timezone from 'dayjs/plugin/timezone';
+
+dayjs.extend(utc);
+dayjs.extend(timezone);
+dayjs.tz.setDefault('Asia/Ho_Chi_Minh');
 
 @Injectable()
 export class WorkSchedulesService {
@@ -289,13 +296,13 @@ export class WorkSchedulesService {
 
         if (from && to) {
             where.date = {
-                gte: new Date(from),
-                lte: new Date(to),
+                gte: dayjs.tz(from, 'Asia/Ho_Chi_Minh').startOf('day').toDate(),
+                lte: dayjs.tz(to, 'Asia/Ho_Chi_Minh').endOf('day').toDate(),
             };
         } else if (from) {
-            where.date = { gte: new Date(from) };
+            where.date = { gte: dayjs.tz(from, 'Asia/Ho_Chi_Minh').startOf('day').toDate() };
         } else if (to) {
-            where.date = { lte: new Date(to) };
+            where.date = { lte: dayjs.tz(to, 'Asia/Ho_Chi_Minh').endOf('day').toDate() };
         }
 
         return this.prisma.work_schedules.findMany({
@@ -314,21 +321,49 @@ export class WorkSchedulesService {
         });
     }
 
-    async getSummary(filter: GetSchedulesFilterDto) {
-        const schedules = await this.findAll(filter);
+    async getAttendanceReport(filter: GetSchedulesFilterDto) {
+        const { from, to } = filter;
+        const where: Prisma.work_schedulesWhereInput = { deleted_at: null };
+
+        if (from && to) {
+            where.date = {
+                gte: dayjs.tz(from, 'Asia/Ho_Chi_Minh').startOf('day').toDate(),
+                lte: dayjs.tz(to, 'Asia/Ho_Chi_Minh').endOf('day').toDate(),
+            };
+        } else if (from) {
+            where.date = { gte: dayjs.tz(from, 'Asia/Ho_Chi_Minh').startOf('day').toDate() };
+        } else if (to) {
+            where.date = { lte: dayjs.tz(to, 'Asia/Ho_Chi_Minh').endOf('day').toDate() };
+        }
+
+        const schedules = await this.prisma.work_schedules.findMany({
+            where,
+            include: {
+                employees: {
+                    include: {
+                        users: true,
+                    },
+                },
+                timesheets: true,
+            },
+        });
 
         const summaryMap = new Map<number, {
             user_id: number;
             full_name: string;
             avatar_url: string;
-            total_shifts: number;
-            total_hours: number;
             email: string;
+            total_shifts: number;
+            late_count: number;
+            early_leave_count: number;
+            missing_count: number;
+            absent_count: number;
         }>();
+
+        const todayZero = dayjs().tz('Asia/Ho_Chi_Minh').startOf('day').toDate();
 
         for (const schedule of schedules) {
             const userId = schedule.user_id;
-            // Access nested relation safely
             const employee = schedule.employees;
             const user = employee?.users;
 
@@ -339,9 +374,12 @@ export class WorkSchedulesService {
                     user_id: userId,
                     full_name: user.full_name,
                     avatar_url: user.avatar_url || '',
-                    total_shifts: 0,
-                    total_hours: 0,
                     email: user.email || '',
+                    total_shifts: 0,
+                    late_count: 0,
+                    early_leave_count: 0,
+                    missing_count: 0,
+                    absent_count: 0,
                 });
             }
 
@@ -349,21 +387,34 @@ export class WorkSchedulesService {
             if (entry) {
                 entry.total_shifts += 1;
 
-                if (schedule.expected_start && schedule.expected_end) {
-                    const start = new Date(schedule.expected_start).getTime();
-                    const end = new Date(schedule.expected_end).getTime();
-                    const durationMs = end - start;
-                    // Convert to hours
-                    const durationHours = durationMs / (1000 * 60 * 60);
-                    entry.total_hours += durationHours;
+                // Evaluate the timesheet
+                // Assuming one timesheet per schedule or taking the first one as per requirement
+                const timesheet = schedule.timesheets && schedule.timesheets.length > 0 ? schedule.timesheets[0] : null;
+
+                if (timesheet) {
+                    switch (timesheet.status_code) {
+                        case 'LATE':
+                            entry.late_count += 1;
+                            break;
+                        case 'EARLY_LEAVE':
+                            entry.early_leave_count += 1;
+                            break;
+                        case 'MISSING':
+                            entry.missing_count += 1;
+                            break;
+                        case 'ABSENT':
+                            entry.absent_count += 1;
+                            break;
+                    }
+                } else {
+                    const scheduleDate = new Date(schedule.date);
+                    if (scheduleDate < todayZero) {
+                        entry.absent_count += 1;
+                    }
                 }
             }
         }
 
-        // Round total hours to 1 decimal place
-        return Array.from(summaryMap.values()).map(item => ({
-            ...item,
-            total_hours: Math.round(item.total_hours * 10) / 10,
-        }));
+        return Array.from(summaryMap.values());
     }
 }
