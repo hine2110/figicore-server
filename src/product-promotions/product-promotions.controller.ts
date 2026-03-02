@@ -1,6 +1,7 @@
-import { Body, Controller, Delete, Get, Param, ParseIntPipe, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, ParseIntPipe, Post, Patch, UseGuards } from '@nestjs/common';
 import { ProductPromotionsService } from './product-promotions.service';
 import { CreateProductPromotionDto } from './dto/create-product-promotion.dto';
+import { UpdateProductPromotionDto } from './dto/update-product-promotion.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -26,6 +27,12 @@ export class ProductPromotionsController {
   @Roles('MANAGER', 'ADMIN')
   findOne(@Param('id', ParseIntPipe) id: number) {
     return this.service.findOne(id);
+  }
+
+  @Patch(':id')
+  @Roles('MANAGER')
+  update(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateProductPromotionDto) {
+    return this.service.update(id, dto);
   }
 
   @Post(':id/apply')
