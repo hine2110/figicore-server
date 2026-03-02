@@ -83,7 +83,7 @@ export class ShipmentsService {
         name: name,
         code: code,
         quantity: item.quantity,
-        price: Number(item.unit_price),
+        price: 10000, // Solution 3: Dummy price to bypass GHN Insurance Fee
         length: item.product_variants.length_cm || 10,
         width: item.product_variants.width_cm || 10,
         height: item.product_variants.height_cm || 10,
@@ -123,6 +123,7 @@ export class ShipmentsService {
       to_district_id: Number(order.addresses.district_id),
 
       cod_amount: codAmount,
+      insurance_value: 0, // Solution 3: Opt-out of GHN Insurance entirely
       weight: weight, // Total Weight Calculated
       length: 10, // Default Dimensions
       width: 10,

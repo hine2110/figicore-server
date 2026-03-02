@@ -37,7 +37,11 @@ export class CreateOrderDto {
 
     @IsOptional()
     @IsString()
-    voucherCode?: string;
+    discountVoucherCode?: string;
+
+    @IsOptional()
+    @IsString()
+    freeShipVoucherCode?: string;
 
     @IsArray()
     @ValidateNested({ each: true })
