@@ -50,8 +50,9 @@ export class OrdersService {
       items,
       shipping_fee,
       payment_method_code,
-      voucherCode // Extract voucher code
-    } = createOrderDto;
+      discountVoucherCode, // Extracted: For Product/Rank Discount
+      freeShipVoucherCode  // Extracted: For Free Shipping
+    } = createOrderDto as any;
 
     // 1. Calculate Deadlines
     const retailDeadline = new Date();
@@ -66,20 +67,49 @@ export class OrdersService {
       });
       if (!address) throw new BadRequestException("Address not found");
 
-      // Check Voucher Validity for Shipping (Simple Check)
-      let appliedVoucherCode: string | null = null;
-      let isVoucherFreeShip = false;
-      if (voucherCode) {
-        const promo = await this.prisma.promotions.findUnique({
-          where: { code: voucherCode }
+      // Check Discount Voucher Validity
+      let appliedDiscountVoucherCode: string | null = null;
+      let usedDiscountPromotionId: number | null = null;
+
+      if (discountVoucherCode) {
+        const userDiscountVoucher = await this.prisma.user_vouchers.findFirst({
+          where: {
+            user_id: userId,
+            is_used: false,
+            promotions: { code: discountVoucherCode }
+          },
+          include: { promotions: true }
         });
-        // Basic validity check (Date, Active, etc.) - Simplified for this task
-        if (promo && (!promo.end_date || promo.end_date > new Date())) {
-          appliedVoucherCode = voucherCode;
-          // Assuming we have a way to know if it's a FreeShip voucher. 
-          // For now, let's assume ALL validated vouchers passed here allow FreeShipping benefit reservation if applied on Deposit.
-          // Or strictly: if (promo.discount_type === 'SHIPPING')
+        
+        if (userDiscountVoucher && (!userDiscountVoucher.promotions.end_date || userDiscountVoucher.promotions.end_date > new Date())) {
+          appliedDiscountVoucherCode = discountVoucherCode;
+          usedDiscountPromotionId = userDiscountVoucher.promotion_id;
+        } else {
+          throw new BadRequestException("Mã giảm giá không hợp lệ hoặc bạn chưa thu thập mã này.");
+        }
+      }
+
+      // Check Free Ship Voucher Validity
+      let appliedFreeShipVoucherCode: string | null = null;
+      let usedFreeShipPromotionId: number | null = null;
+      let isVoucherFreeShip = false;
+
+      if (freeShipVoucherCode) {
+        const userFreeShipVoucher = await this.prisma.user_vouchers.findFirst({
+          where: {
+            user_id: userId,
+            is_used: false,
+            promotions: { code: freeShipVoucherCode, discount_type: 'FREE_SHIP' }
+          },
+          include: { promotions: true }
+        });
+        
+        if (userFreeShipVoucher && (!userFreeShipVoucher.promotions.end_date || userFreeShipVoucher.promotions.end_date > new Date())) {
+          appliedFreeShipVoucherCode = freeShipVoucherCode;
+          usedFreeShipPromotionId = userFreeShipVoucher.promotion_id;
           isVoucherFreeShip = true;
+        } else {
+           throw new BadRequestException("Mã miễn phí vận chuyển không hợp lệ hoặc bạn chưa thu thập mã này.");
         }
       }
 
@@ -229,7 +259,7 @@ export class OrdersService {
 
               if (isVoucherFreeShip) {
                 isShippingFree = true;
-                shippingNote = `Voucher ${appliedVoucherCode} applied at deposit`;
+                shippingNote = `Voucher ${appliedFreeShipVoucherCode} applied at deposit`;
               }
             }
 
@@ -262,6 +292,8 @@ export class OrdersService {
                 status_code: 'WAITING_DEPOSIT',
                 payment_deadline: preOrderDeadline,
                 channel_code: 'WEB',
+                promotion_id: usedDiscountPromotionId,
+                shipping_promotion_id: usedFreeShipPromotionId,
                 order_items: {
                   create: poOrderItemsData.map(i => ({
                     variant_id: i.variant_id,
@@ -361,9 +393,14 @@ export class OrdersService {
             rtShippingFee = rtNominalShipping;
           }
 
-          // FIX: FLAT RATE SHIPPING POLICY
+          // FIX: FLAT RATE SHIPPING POLICY + VOUCHER FREE SHIP
           const FIXED_SHIPPING_FEE = 30000;
-          const customerShippingFee = FIXED_SHIPPING_FEE;
+          let customerShippingFee = FIXED_SHIPPING_FEE;
+
+          if (isVoucherFreeShip) {
+             const discountValue = 30000; // Implicit 100% free ship
+             customerShippingFee = Math.max(0, customerShippingFee - discountValue);
+          }
 
           // Total now uses the fixed user fee, not the real cost
           const rtFinalTotal = rtTotalAmount + Number(customerShippingFee);
@@ -375,13 +412,15 @@ export class OrdersService {
               order_code: rtOrderCode,
               shipping_address_id,
               total_amount: rtFinalTotal,
-              shipping_fee: customerShippingFee, // Charge fixed 30k to user
+              shipping_fee: customerShippingFee, // Charge fixed 30k to user (or 0 if free ship)
               original_shipping_fee: rtShippingFee, // Store real cost for accounting
               payment_method_code,
               payment_ref_code: paymentRefCode, // LINK TO GROUP
               status_code: 'PENDING_PAYMENT',
               payment_deadline: retailDeadline,
               channel_code: 'WEB',
+              promotion_id: usedDiscountPromotionId,
+              shipping_promotion_id: usedFreeShipPromotionId,
               order_items: { create: rtOrderItemsData },
               order_status_history: { create: { new_status: 'PENDING_PAYMENT', note: 'Retail Order Created' } }
             } as any
@@ -396,6 +435,31 @@ export class OrdersService {
           await tx.cart_items.deleteMany({
             where: { cart_id: cart.cart_id, variant_id: { in: allVariantIds } }
           });
+        }
+
+        // E. Mark Vouchers as Used
+        if (usedDiscountPromotionId) {
+          const uv = await tx.user_vouchers.findFirst({
+            where: { user_id: userId, promotion_id: usedDiscountPromotionId, is_used: false }
+          });
+          if (uv) {
+            await tx.user_vouchers.update({
+              where: { id: uv.id },
+              data: { is_used: true }
+            });
+          }
+        }
+
+        if (usedFreeShipPromotionId) {
+          const uvFs = await tx.user_vouchers.findFirst({
+            where: { user_id: userId, promotion_id: usedFreeShipPromotionId, is_used: false }
+          });
+          if (uvFs) {
+            await tx.user_vouchers.update({
+              where: { id: uvFs.id },
+              data: { is_used: true }
+            });
+          }
         }
 
         return ordersResults;

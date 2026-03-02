@@ -33,13 +33,14 @@ import { WebhooksModule } from './webhooks/webhooks.module';
 import { EventsModule } from './events/events.module';
 import { AccessControlModule } from './access-control/access-control.module';
 import { CheckInModule } from './check-in/check-in.module';
-
+import { ProductPromotionsModule } from './product-promotions/product-promotions.module';
 
 import { WalletModule } from './wallet/wallet.module';
 import { BlindboxesModule } from './blindboxes/blindboxes.module';
 import { ServeStaticModule } from '@nestjs/serve-static';
 import { join } from 'path';
 import { KiotVietModule } from './kiotviet/kiotviet.module';
+import { PromotionsModule } from './promotions/promotions.module';
 
 @Module({
 
@@ -80,9 +81,10 @@ import { KiotVietModule } from './kiotviet/kiotviet.module';
     EventsModule,
     AccessControlModule,
     CheckInModule,
-
+    ProductPromotionsModule,
     WalletModule,
-    BlindboxesModule
+    BlindboxesModule,
+    PromotionsModule
   ],
 
   controllers: [AppController],
