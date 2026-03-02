@@ -321,6 +321,8 @@ model orders {
   vat_company_name     String?                @db.VarChar(255)
   vat_company_address  String?                @db.VarChar(500)
   vat_invoice_email    String?                @db.VarChar(100)
+  cash_received        Decimal?               @db.Decimal(15, 2)
+  cash_change          Decimal?               @db.Decimal(15, 2)
   created_at           DateTime?              @default(now()) @db.Timestamp(6)
   updated_at           DateTime?              @default(now()) @db.Timestamp(6)
   deleted_at           DateTime?              @db.Timestamp(6)
@@ -375,20 +377,23 @@ model payrolls {
 }
 
 model pos_sessions {
-  session_id     Int              @id @default(autoincrement())
-  user_id        Int
-  opened_at      DateTime?        @default(now()) @db.Timestamp(6)
-  closed_at      DateTime?        @db.Timestamp(6)
-  opening_cash   Decimal?         @default(0) @db.Decimal(15, 2)
-  closing_cash   Decimal?         @db.Decimal(15, 2)
-  status_code    String?          @default("OPEN") @db.VarChar(20)
-  note           String?
-  created_at     DateTime?        @default(now()) @db.Timestamp(6)
-  updated_at     DateTime?        @default(now()) @db.Timestamp(6)
-  deleted_at     DateTime?        @db.Timestamp(6)
-  orders         orders[]
-  employees      employees        @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
-  store_expenses store_expenses[]
+  session_id       Int              @id @default(autoincrement())
+  user_id          Int
+  opened_at        DateTime?        @default(now()) @db.Timestamp(6)
+  closed_at        DateTime?        @db.Timestamp(6)
+  opening_cash     Decimal?         @default(0) @db.Decimal(15, 2)
+  closing_cash     Decimal?         @db.Decimal(15, 2)
+  cash_revenue_app Decimal?         @default(0) @db.Decimal(15, 2)
+  total_expenses   Decimal?         @default(0) @db.Decimal(15, 2)
+  cash_breakdown   Json?
+  status_code      String?          @default("OPEN") @db.VarChar(20)
+  note             String?
+  created_at       DateTime?        @default(now()) @db.Timestamp(6)
+  updated_at       DateTime?        @default(now()) @db.Timestamp(6)
+  deleted_at       DateTime?        @db.Timestamp(6)
+  orders           orders[]
+  employees        employees        @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  store_expenses   store_expenses[]
 }
 
 model product_blindboxes {

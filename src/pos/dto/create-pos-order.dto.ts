@@ -48,4 +48,14 @@ export class CreatePosOrderDto {
     @IsEmail()
     @IsString()
     vat_invoice_email?: string;
+
+    @IsOptional()
+    @IsNumber()
+    @Type(() => Number)
+    cash_received?: number;
+
+    @IsOptional()
+    @IsNumber()
+    @Type(() => Number)
+    cash_change?: number;
 }
