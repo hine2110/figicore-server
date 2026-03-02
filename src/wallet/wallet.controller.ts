@@ -1,4 +1,4 @@
-import { Controller, Get, UseGuards, Req } from '@nestjs/common';
+import { Controller, Get, Post, Body, UseGuards, Req } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { WalletService } from './wallet.service';
 
@@ -10,5 +10,10 @@ export class WalletController {
     @Get()
     getMyWallet(@Req() req) {
         return this.walletService.getMyWallet(req.user.user_id);
+    }
+
+    @Post('top-up')
+    createTopUpRequest(@Req() req, @Body('amount') amount: number) {
+        return this.walletService.createTopUpRequest(req.user.user_id, amount);
     }
 }
