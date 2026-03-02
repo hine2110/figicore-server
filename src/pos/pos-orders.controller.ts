@@ -2,6 +2,7 @@ import { Controller, Post, Get, Body, Query, UseGuards, Request, Param, UsePipes
 import { PosOrdersService } from './pos-orders.service';
 import { CreatePosOrderDto } from './dto/create-pos-order.dto';
 import { SearchCustomerDto } from './dto/search-customer.dto';
+import { GetPosOrdersDto } from './dto/get-pos-orders.dto';
 import { RegisterCustomerDto } from './dto/register-customer.dto';
 import { SyncPosOrderDto } from './dto/sync-pos-order.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -39,13 +40,13 @@ export class PosOrdersController {
      * GET /pos/orders
      */
     @Get()
+    @UsePipes(new ValidationPipe({ transform: true }))
     async getOrders(
         @Request() req,
-        @Query('page') page: string = '1',
-        @Query('limit') limit: string = '12',
+        @Query() query: GetPosOrdersDto,
     ) {
         const staffId = req.user.userId;
-        return this.posOrdersService.getOrdersByStaff(staffId, parseInt(page.toString()), parseInt(limit.toString()));
+        return this.posOrdersService.getOrdersByStaff(staffId, query);
     }
 
     /**

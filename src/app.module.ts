@@ -33,6 +33,7 @@ import { WebhooksModule } from './webhooks/webhooks.module';
 import { EventsModule } from './events/events.module';
 import { AccessControlModule } from './access-control/access-control.module';
 import { CheckInModule } from './check-in/check-in.module';
+import { PaymentsModule } from './payments/payments.module';
 
 
 import { WalletModule } from './wallet/wallet.module';

@@ -82,10 +82,11 @@ export class PosService {
       throw new BadRequestException('Ca làm việc đã được đóng');
     }
 
-    // Tính tổng doanh số trong ca (từ orders)
-    const totalSales = await this.prisma.orders.aggregate({
+    // 1. Tính tổng doanh thu TIỀN MẶT trong ca
+    const cashSales = await this.prisma.orders.aggregate({
       where: {
         session_id: sessionId,
+        payment_method_code: 'CASH',
         deleted_at: null,
       },
       _sum: {
@@ -93,14 +94,24 @@ export class PosService {
       },
     });
 
-    const expectedCash = Number(session.opening_cash) + Number(totalSales._sum.paid_amount || 0);
-    const variance = dto.closing_cash - expectedCash;
+    const cashRevenueApp = Number(cashSales._sum.paid_amount || 0);
+    const totalExpenses = Number(dto.expenses || 0);
+
+    // 2. Tính toán tiền mặt kỳ vọng (Expected Cash)
+    // Công thức: Tiền nền + Doanh thu Tiền mặt - Chi phí
+    const expectedCash = Number(session.opening_cash) + cashRevenueApp - totalExpenses;
+
+    // Variance = Tiền mặt thực tế (Closing Cash) - Tiền mặt kỳ vọng
+    const variance = Number(dto.closing_cash) - expectedCash;
 
     // Cập nhật session
     const updatedSession = await this.prisma.pos_sessions.update({
       where: { session_id: sessionId },
       data: {
         closing_cash: dto.closing_cash,
+        cash_revenue_app: cashRevenueApp,
+        total_expenses: totalExpenses,
+        cash_breakdown: dto.cash_breakdown,
         closed_at: new Date(),
         status_code: 'CLOSED',
         note: dto.note,
@@ -115,11 +126,59 @@ export class PosService {
         summary: {
           opening_cash: session.opening_cash,
           closing_cash: dto.closing_cash,
-          total_sales: totalSales._sum.paid_amount || 0,
+          cash_revenue_app: cashRevenueApp,
+          total_expenses: totalExpenses,
           expected_cash: expectedCash,
           variance: variance,
         },
       },
+    };
+  }
+
+  /**
+   * Lấy danh sách ca làm việc
+   */
+  async getSessions(userId: number, query: { page: number; limit: number }) {
+    const { page, limit } = query;
+    const skip = (page - 1) * limit;
+
+    const [sessions, total] = await Promise.all([
+      this.prisma.pos_sessions.findMany({
+        where: {
+          user_id: userId,
+          deleted_at: null,
+        },
+        orderBy: {
+          opened_at: 'desc',
+        },
+        include: {
+          employees: {
+            include: {
+              users: {
+                select: {
+                  full_name: true,
+                },
+              },
+            },
+          },
+        },
+        skip,
+        take: limit,
+      }),
+      this.prisma.pos_sessions.count({
+        where: {
+          user_id: userId,
+          deleted_at: null,
+        },
+      }),
+    ]);
+
+    return {
+      success: true,
+      data: sessions,
+      total,
+      page,
+      limit,
     };
   }
 
@@ -323,6 +382,48 @@ export class PosService {
         top_products: topProducts,
         low_stock_alerts: lowStockAlerts,
       },
+    };
+  }
+
+  /**
+   * Lấy chi tiết một ca làm việc cụ thể
+   */
+  async getSessionDetails(sessionId: number) {
+    const session = await this.prisma.pos_sessions.findUnique({
+      where: { session_id: sessionId },
+      include: {
+        employees: {
+          include: {
+            users: {
+              select: {
+                full_name: true,
+                avatar_url: true,
+              },
+            },
+          },
+        },
+        orders: {
+          where: { deleted_at: null },
+          orderBy: { created_at: 'desc' },
+          include: {
+            users: {
+              select: {
+                full_name: true,
+                phone: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!session) {
+      throw new Error('Session not found');
+    }
+
+    return {
+      success: true,
+      data: session,
     };
   }
 }
