@@ -41,6 +41,8 @@ import { ServeStaticModule } from '@nestjs/serve-static';
 import { join } from 'path';
 import { KiotVietModule } from './kiotviet/kiotviet.module';
 import { PromotionsModule } from './promotions/promotions.module';
+import { PaymentsModule } from './payments/payments.module';
+import { ReturnsModule } from './returns/returns.module';
 
 @Module({
 
@@ -84,7 +86,9 @@ import { PromotionsModule } from './promotions/promotions.module';
     ProductPromotionsModule,
     WalletModule,
     BlindboxesModule,
-    PromotionsModule
+    PromotionsModule,
+    PaymentsModule,
+    ReturnsModule
   ],
 
   controllers: [AppController],

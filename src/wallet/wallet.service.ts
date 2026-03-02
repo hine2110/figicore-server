@@ -9,13 +9,21 @@ export class WalletService {
 
     async getMyWallet(userId: number) {
         let wallet = await this.prisma.wallets.findUnique({
-            where: { user_id: userId }
+            where: { user_id: userId },
+            include: {
+                wallet_transactions: {
+                    orderBy: { created_at: 'desc' }
+                }
+            }
         });
 
         if (!wallet) {
             // Auto-create wallet if not exists
             wallet = await this.prisma.wallets.create({
-                data: { user_id: userId, balance_available: 0, balance_locked: 0 }
+                data: { user_id: userId, balance_available: 0, balance_locked: 0 },
+                include: {
+                    wallet_transactions: true // Empty initially, but matches return type
+                }
             });
         }
 
@@ -51,5 +59,19 @@ export class WalletService {
 
             return updatedWallet;
         });
+    }
+
+    async createTopUpRequest(userId: number, amount: number) {
+        // Generate a unique reference code: TU[userId]V[timestamp]
+        // Example: TU5V1772080106
+        const timestamp = Date.now().toString().slice(-10); // use just last 10 digits to keep QR content short
+        const refCode = `TU${userId}V${timestamp}`;
+
+        // Return the code so the frontend can generate the VietQR image
+        return {
+            paymentRefCode: refCode,
+            amount: amount,
+            message: 'Use this reference code in your VietQR transfer content'
+        };
     }
 }

@@ -112,6 +112,12 @@ export class OrdersController {
     return this.ordersService.mockPayGroup(body.payment_ref_code, req.user.user_id);
   }
 
+  @Post('pay-with-wallet')
+  @UseGuards(AuthGuard('jwt'))
+  payWithWallet(@Req() req, @Body() body: { payment_ref_code: string }) {
+    return this.ordersService.payWithWallet(body.payment_ref_code, req.user.user_id);
+  }
+
   @Get('by-ref/:ref')
   @UseGuards(AuthGuard('jwt'))
   getOrdersByRef(@Req() req, @Param('ref') ref: string) {
