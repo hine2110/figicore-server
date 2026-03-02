@@ -1,9 +1,12 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { CreateProductPromotionDto } from './dto/create-product-promotion.dto';
-
+import { UpdateProductPromotionDto } from './dto/update-product-promotion.dto';
 @Injectable()
 export class ProductPromotionsService {
+  private readonly logger = new Logger(ProductPromotionsService.name);
+
   constructor(private prisma: PrismaService) {}
 
   async create(dto: CreateProductPromotionDto) {
@@ -44,6 +47,28 @@ export class ProductPromotionsService {
     });
     if (!promo) throw new BadRequestException('Promotion not found');
     return promo;
+  }
+
+  async update(id: number, dto: UpdateProductPromotionDto) {
+    if (dto.start_date && dto.end_date && new Date(dto.start_date) >= new Date(dto.end_date)) {
+      throw new BadRequestException('End date must be after start date');
+    }
+
+    const promo = await this.findOne(id);
+
+    return this.prisma.product_promotions.update({
+      where: { promotion_id: id },
+      data: {
+        name: dto.name !== undefined ? dto.name : promo.name,
+        type_code: dto.type_code !== undefined ? dto.type_code : promo.type_code,
+        value: dto.value !== undefined ? dto.value : promo.value,
+        start_date: dto.start_date ? new Date(dto.start_date) : promo.start_date,
+        end_date: dto.end_date ? new Date(dto.end_date) : promo.end_date,
+        is_active: dto.is_active !== undefined ? dto.is_active : promo.is_active,
+        min_apply_price: dto.min_apply_price !== undefined ? dto.min_apply_price : promo.min_apply_price,
+        max_apply_price: dto.max_apply_price !== undefined ? dto.max_apply_price : promo.max_apply_price,
+      },
+    });
   }
 
   async applyToProducts(id: number, productIds: number[]) {
@@ -116,5 +141,54 @@ export class ProductPromotionsService {
       count: updateResult.count, 
       message: `Successfully applied promotion to ${updateResult.count} products` 
     };
+  }
+
+  @Cron(CronExpression.EVERY_HOUR)
+  async handleExpiredPromotions() {
+    this.logger.log('Running cron job to check for expired promotions...');
+    const now = new Date();
+
+    // Find all active promotions that have expired
+    const expiredPromotions = await this.prisma.product_promotions.findMany({
+      where: {
+        is_active: true,
+        end_date: {
+          lt: now
+        }
+      }
+    });
+
+    if (expiredPromotions.length > 0) {
+      const promotionIds = expiredPromotions.map(p => p.promotion_id);
+
+      // 1. Unlink expired promotions from products
+      await this.prisma.products.updateMany({
+        where: {
+          product_promotion_id: {
+            in: promotionIds
+          }
+        },
+        data: {
+          product_promotion_id: null
+        }
+      });
+
+      // 2. Mark promotions as inactive and deleted
+      await this.prisma.product_promotions.updateMany({
+        where: {
+          promotion_id: {
+            in: promotionIds
+          }
+        },
+        data: {
+          is_active: false,
+          deleted_at: now
+        }
+      });
+
+      this.logger.log(`Expired and removed ${promotionIds.length} promotions: ${promotionIds.join(', ')}`);
+    } else {
+      this.logger.log('No expired promotions found.');
+    }
   }
 }
