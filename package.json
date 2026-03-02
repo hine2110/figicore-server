@@ -19,8 +19,7 @@
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "seed": "ts-node prisma/seed.ts",
-    "seed:products": "ts-node prisma/seed-products.ts",
-    "webhook": "ngrok http --domain=DOMAIN_CUA_BAN 3000"
+    "seed:products": "ts-node prisma/seed-products.ts"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",

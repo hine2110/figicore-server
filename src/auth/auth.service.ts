@@ -28,15 +28,16 @@ export class AuthService {
 
     const userByPhone = await this.usersService.findByPhone(registerDto.phone);
     if (userByPhone) {
-      // If it's the SAME user (email match), we proceed (it will fall into the update block)
-      // BUT findByPhone returns a user object. We need to check if it's a DIFFERENT user.
-      if (!user || userByPhone.user_id !== user.user_id) {
+      // IF Phone exists but it's a GUEST_POS (Shell) -> We allow UPGRADE
+      if (userByPhone.status_code === 'GUEST_POS') {
+        user = userByPhone; // Use this user for update below
+      } else if (!user || userByPhone.user_id !== user.user_id) {
+        // If it's a different user and NOT a GUEST_POS, block it
         throw new BadRequestException('Phone number already registered');
       }
     }
 
     const saltOrRounds = 10;
-    const items = [1, 2, 3, 4, 5, 6];
     const hash = await bcrypt.hash(registerDto.password, saltOrRounds);
 
     // Generate 6 digit OTP
@@ -44,16 +45,18 @@ export class AuthService {
     const otpExpiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
 
     if (user) {
-      // User exists but Inactive -> Update
+      // User exists (GUEST_POS or INACTIVE) -> Upgrade/Update
       await this.usersService.update(user.user_id, {
+        email: registerDto.email, // Link email if it was null
         password_hash: hash,
         full_name: registerDto.fullName,
         phone: registerDto.phone,
+        status_code: 'INACTIVE', // Move to Inactive to wait for OTP
         otp_code: otp,
         otp_expires_at: otpExpiresAt,
       });
     } else {
-      // Create new user
+      // Create new user (Standard flow)
       await this.usersService.create({
         email: registerDto.email,
         password_hash: hash,
