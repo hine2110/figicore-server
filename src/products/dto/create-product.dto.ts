@@ -5,6 +5,7 @@ export enum ProductType {
     RETAIL = 'RETAIL',
     BLINDBOX = 'BLINDBOX',
     PREORDER = 'PREORDER',
+    AUCTION = 'AUCTION',
 }
 
 class MediaAssetDto {
@@ -194,7 +195,7 @@ export class CreateProductDto {
     @IsOptional()
     media_urls?: string[];
 
-    @ValidateIf(o => o.type_code === ProductType.RETAIL || o.type_code === ProductType.PREORDER)
+    @ValidateIf(o => o.type_code === ProductType.RETAIL || o.type_code === ProductType.PREORDER || o.type_code === ProductType.AUCTION)
     @IsArray()
     @ValidateNested({ each: true })
     @Type(() => ProductVariantDto)

@@ -39,49 +39,6 @@ model addresses {
   orders          orders[]
 }
 
-model auction_bids {
-  bid_id     Int       @id @default(autoincrement())
-  auction_id Int
-  user_id    Int
-  bid_amount Decimal   @db.Decimal(15, 2)
-  created_at DateTime? @default(now()) @db.Timestamp(6)
-  updated_at DateTime? @default(now()) @db.Timestamp(6)
-  deleted_at DateTime? @db.Timestamp(6)
-  auctions   auctions  @relation(fields: [auction_id], references: [auction_id], onDelete: NoAction, onUpdate: NoAction)
-  users      users     @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
-
-  @@unique([auction_id, bid_amount], map: "uq_auction_bid_amount")
-}
-
-model auction_participants {
-  id             Int       @id @default(autoincrement())
-  auction_id     Int
-  user_id        Int
-  deposit_amount Decimal   @db.Decimal(15, 2)
-  created_at     DateTime? @default(now()) @db.Timestamp(6)
-  updated_at     DateTime? @default(now()) @db.Timestamp(6)
-  deleted_at     DateTime? @db.Timestamp(6)
-  auctions       auctions  @relation(fields: [auction_id], references: [auction_id], onDelete: NoAction, onUpdate: NoAction)
-  users          users     @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
-}
-
-model auctions {
-  auction_id           Int                    @id @default(autoincrement())
-  product_id           Int
-  start_price          Decimal                @db.Decimal(15, 2)
-  current_price        Decimal?               @db.Decimal(15, 2)
-  start_time           DateTime               @db.Timestamp(6)
-  end_time             DateTime               @db.Timestamp(6)
-  status_code          String?                @default("PENDING") @db.VarChar(20)
-  winner_id            Int?
-  created_at           DateTime?              @default(now()) @db.Timestamp(6)
-  updated_at           DateTime?              @default(now()) @db.Timestamp(6)
-  deleted_at           DateTime?              @db.Timestamp(6)
-  auction_bids         auction_bids[]
-  auction_participants auction_participants[]
-  products             products               @relation(fields: [product_id], references: [product_id], onDelete: NoAction, onUpdate: NoAction)
-  users                users?                 @relation(fields: [winner_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
-}
 
 model brands {
   brand_id   Int        @id @default(autoincrement())
@@ -462,7 +419,7 @@ model products {
   brand_id           Int?
   series_id          Int?
   name               String              @db.VarChar(255)
-  type_code          String              @db.VarChar(50) // RETAIL, BLINDBOX, PREORDER
+  type_code          String              @db.VarChar(50) // RETAIL, BLINDBOX, PREORDER, AUCTION
   status_code        String?             @default("DRAFT") @db.VarChar(50)
   specifications     Json?
   media_urls         Json?
@@ -471,7 +428,6 @@ model products {
   created_at         DateTime?           @default(now()) @db.Timestamp(6)
   updated_at         DateTime?           @default(now()) @db.Timestamp(6)
   deleted_at         DateTime?           @db.Timestamp(6)
-  auctions           auctions[]
   feedbacks          feedbacks[]
   product_blindboxes product_blindboxes?
 
@@ -488,6 +444,8 @@ model product_variants {
   product_id  Int
   sku         String @unique @db.VarChar(50)
   option_name String @db.VarChar(100)
+  
+  auctions    auctions[]
 
   // RETAIL FIELDS
   price                   Decimal                   @default(0) @db.Decimal(15, 2) // Retail Price
@@ -778,11 +736,70 @@ model wallet_transactions {
   type_code      String    @db.VarChar(50)
   amount         Decimal   @db.Decimal(15, 2)
   reference_code String?   @db.VarChar(100)
-  description    String?
+  description    String?   @db.Text
   created_at     DateTime? @default(now()) @db.Timestamp(6)
   updated_at     DateTime? @default(now()) @db.Timestamp(6)
   deleted_at     DateTime? @db.Timestamp(6)
   wallets        wallets   @relation(fields: [wallet_id], references: [wallet_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+// ----------------------------------------------------------------------------
+// AUCTION TABLES (B2C)
+// ----------------------------------------------------------------------------
+
+model auctions {
+  auction_id      Int       @id @default(autoincrement())
+  variant_id      Int       @unique 
+  start_price     Decimal   @db.Decimal(15, 2)
+  step_price      Decimal   @db.Decimal(15, 2)
+  deposit_fee     Decimal   @db.Decimal(15, 2) // Phí giữ chỗ (Khóa ví)
+  max_participants Int      @default(50) // Giới hạn số lượng người được tham gia
+  
+  start_time      DateTime  @db.Timestamp(6)
+  end_time        DateTime  @db.Timestamp(6) // Có thể bị phình ra bởi Anti-Snipe
+  
+  // Status: DRAFT, UPCOMING, ACTIVE, AWAITING_PAYMENT, COMPLETED, CANCELLED, FAILED_NO_BUYER
+  status_code     String    @default("DRAFT") @db.VarChar(50) 
+  
+  winner_id       Int?      // Người đang giữ quyền thanh toán (Top 1 hoặc Top 2)
+  final_price     Decimal?  @db.Decimal(15, 2)
+  payment_deadline  DateTime? @db.Timestamp(6) // Timestamp giới hạn 24h
+  
+  created_at      DateTime? @default(now())
+  updated_at      DateTime? @default(now())
+
+  product_variants product_variants @relation(fields: [variant_id], references: [variant_id])
+  users            users?           @relation(fields: [winner_id], references: [user_id])
+  auction_bids     auction_bids[]
+  auction_participants auction_participants[]
+}
+
+// Bảng Quản Lý Những Người Đã Nộp Cọc Vào Chơi
+model auction_participants {
+  id         Int      @id @default(autoincrement())
+  auction_id Int
+  user_id    Int
+  deposit_amount Decimal @db.Decimal(15, 2)
+  status     String   @default("JOINED") // JOINED, REFUNDED, FORFEITED, RETAINED_AS_BACKUP
+  
+  created_at DateTime @default(now())
+
+  auctions   auctions @relation(fields: [auction_id], references: [auction_id])
+  users      users    @relation(fields: [user_id], references: [user_id])
+  
+  @@unique([auction_id, user_id]) // Một người chỉ bị khóa ví 1 lần mỗi phòng
+}
+
+// Bảng Ghi Nhận Từng "Lần Giơ Biển" Báo Giá
+model auction_bids {
+  bid_id      Int      @id @default(autoincrement())
+  auction_id  Int
+  user_id     Int
+  bid_amount  Decimal  @db.Decimal(15, 2)
+  created_at  DateTime @default(now())
+
+  auctions    auctions @relation(fields: [auction_id], references: [auction_id])
+  users       users    @relation(fields: [user_id], references: [user_id])
 }
 
 model wallets {
