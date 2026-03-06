@@ -33,49 +33,6 @@ CREATE TABLE "addresses" (
 );
 
 -- CreateTable
-CREATE TABLE "auction_bids" (
-    "bid_id" SERIAL NOT NULL,
-    "auction_id" INTEGER NOT NULL,
-    "user_id" INTEGER NOT NULL,
-    "bid_amount" DECIMAL(15,2) NOT NULL,
-    "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
-    "deleted_at" TIMESTAMP(6),
-
-    CONSTRAINT "auction_bids_pkey" PRIMARY KEY ("bid_id")
-);
-
--- CreateTable
-CREATE TABLE "auction_participants" (
-    "id" SERIAL NOT NULL,
-    "auction_id" INTEGER NOT NULL,
-    "user_id" INTEGER NOT NULL,
-    "deposit_amount" DECIMAL(15,2) NOT NULL,
-    "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
-    "deleted_at" TIMESTAMP(6),
-
-    CONSTRAINT "auction_participants_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
-CREATE TABLE "auctions" (
-    "auction_id" SERIAL NOT NULL,
-    "product_id" INTEGER NOT NULL,
-    "start_price" DECIMAL(15,2) NOT NULL,
-    "current_price" DECIMAL(15,2),
-    "start_time" TIMESTAMP(6) NOT NULL,
-    "end_time" TIMESTAMP(6) NOT NULL,
-    "status_code" VARCHAR(20) DEFAULT 'PENDING',
-    "winner_id" INTEGER,
-    "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
-    "deleted_at" TIMESTAMP(6),
-
-    CONSTRAINT "auctions_pkey" PRIMARY KEY ("auction_id")
-);
-
--- CreateTable
 CREATE TABLE "brands" (
     "brand_id" SERIAL NOT NULL,
     "name" VARCHAR(100) NOT NULL,
@@ -271,6 +228,8 @@ CREATE TABLE "order_items" (
     "quantity" INTEGER NOT NULL,
     "unit_price" DECIMAL(15,2) NOT NULL,
     "total_price" DECIMAL(15,2) NOT NULL,
+    "tax_rate" DOUBLE PRECISION DEFAULT 0,
+    "tax_amount" DECIMAL(15,2) DEFAULT 0,
     "metadata" JSONB,
     "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
@@ -301,10 +260,12 @@ CREATE TABLE "orders" (
     "created_by_staff_id" INTEGER,
     "shipping_address_id" INTEGER,
     "promotion_id" INTEGER,
+    "shipping_promotion_id" INTEGER,
     "total_amount" DECIMAL(15,2) NOT NULL,
     "paid_amount" DECIMAL(15,2) DEFAULT 0,
     "discount_amount" DECIMAL(15,2) DEFAULT 0,
     "shipping_fee" DECIMAL(15,2) DEFAULT 0,
+    "total_tax" DECIMAL(15,2) DEFAULT 0,
     "original_shipping_fee" DECIMAL(15,2) DEFAULT 0,
     "payment_deadline" TIMESTAMP(6),
     "channel_code" VARCHAR(20) NOT NULL,
@@ -314,11 +275,32 @@ CREATE TABLE "orders" (
     "packing_video_urls" JSONB,
     "packed_at" TIMESTAMP(6),
     "note" TEXT,
+    "is_vat_export" BOOLEAN DEFAULT false,
+    "vat_tax_number" VARCHAR(50),
+    "vat_company_name" VARCHAR(255),
+    "vat_company_address" VARCHAR(500),
+    "vat_invoice_email" VARCHAR(100),
     "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "deleted_at" TIMESTAMP(6),
 
     CONSTRAINT "orders_pkey" PRIMARY KEY ("order_id")
+);
+
+-- CreateTable
+CREATE TABLE "payment_transactions" (
+    "id" SERIAL NOT NULL,
+    "order_id" INTEGER NOT NULL,
+    "sepay_id" INTEGER NOT NULL,
+    "bank_brand_name" VARCHAR(100),
+    "account_number" VARCHAR(50),
+    "transaction_date" TIMESTAMP(6),
+    "amount" DECIMAL(15,2) NOT NULL,
+    "transaction_content" TEXT,
+    "reference_number" VARCHAR(100),
+    "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "payment_transactions_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
@@ -330,6 +312,8 @@ CREATE TABLE "payrolls" (
     "total_work_hours" DOUBLE PRECISION DEFAULT 0,
     "final_salary" DECIMAL(15,2) DEFAULT 0,
     "status_code" VARCHAR(20) DEFAULT 'DRAFT',
+    "reviewer_id" INTEGER,
+    "approver_id" INTEGER,
     "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "deleted_at" TIMESTAMP(6),
@@ -345,6 +329,9 @@ CREATE TABLE "pos_sessions" (
     "closed_at" TIMESTAMP(6),
     "opening_cash" DECIMAL(15,2) DEFAULT 0,
     "closing_cash" DECIMAL(15,2),
+    "cash_revenue_app" DECIMAL(15,2) DEFAULT 0,
+    "total_expenses" DECIMAL(15,2) DEFAULT 0,
+    "cash_breakdown" JSONB,
     "status_code" VARCHAR(20) DEFAULT 'OPEN',
     "note" TEXT,
     "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
@@ -435,6 +422,8 @@ CREATE TABLE "product_variants" (
     "price" DECIMAL(15,2) NOT NULL DEFAULT 0,
     "stock_available" INTEGER NOT NULL DEFAULT 0,
     "stock_defect" INTEGER NOT NULL DEFAULT 0,
+    "stock_factory_defect" INTEGER NOT NULL DEFAULT 0,
+    "tax_rate" DOUBLE PRECISION DEFAULT 0,
     "weight_g" INTEGER NOT NULL DEFAULT 200,
     "length_cm" INTEGER NOT NULL DEFAULT 10,
     "width_cm" INTEGER NOT NULL DEFAULT 10,
@@ -491,6 +480,10 @@ CREATE TABLE "promotions" (
     "discount_value" DECIMAL(15,2),
     "discount_type" VARCHAR(20),
     "min_order_value" DECIMAL(15,2) DEFAULT 0,
+    "apply_rank_code" VARCHAR(50),
+    "max_quantity" INTEGER,
+    "collected_quantity" INTEGER DEFAULT 0,
+    "is_public" BOOLEAN DEFAULT true,
     "start_date" TIMESTAMP(6),
     "end_date" TIMESTAMP(6),
     "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
@@ -520,7 +513,8 @@ CREATE TABLE "return_requests" (
     "user_id" INTEGER NOT NULL,
     "reason" TEXT,
     "unbox_video_url" TEXT,
-    "status_code" VARCHAR(20) DEFAULT 'PENDING',
+    "defect_image_urls" TEXT,
+    "status_code" VARCHAR(50) DEFAULT 'PENDING',
     "admin_note" TEXT,
     "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
@@ -704,6 +698,49 @@ CREATE TABLE "wallet_transactions" (
 );
 
 -- CreateTable
+CREATE TABLE "auctions" (
+    "auction_id" SERIAL NOT NULL,
+    "variant_id" INTEGER NOT NULL,
+    "start_price" DECIMAL(15,2) NOT NULL,
+    "step_price" DECIMAL(15,2) NOT NULL,
+    "deposit_fee" DECIMAL(15,2) NOT NULL,
+    "max_participants" INTEGER NOT NULL DEFAULT 50,
+    "start_time" TIMESTAMP(6) NOT NULL,
+    "end_time" TIMESTAMP(6) NOT NULL,
+    "status_code" VARCHAR(50) NOT NULL DEFAULT 'DRAFT',
+    "winner_id" INTEGER,
+    "final_price" DECIMAL(15,2),
+    "payment_deadline" TIMESTAMP(6),
+    "created_at" TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "auctions_pkey" PRIMARY KEY ("auction_id")
+);
+
+-- CreateTable
+CREATE TABLE "auction_participants" (
+    "id" SERIAL NOT NULL,
+    "auction_id" INTEGER NOT NULL,
+    "user_id" INTEGER NOT NULL,
+    "deposit_amount" DECIMAL(15,2) NOT NULL,
+    "status" TEXT NOT NULL DEFAULT 'JOINED',
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "auction_participants_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "auction_bids" (
+    "bid_id" SERIAL NOT NULL,
+    "auction_id" INTEGER NOT NULL,
+    "user_id" INTEGER NOT NULL,
+    "bid_amount" DECIMAL(15,2) NOT NULL,
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "auction_bids_pkey" PRIMARY KEY ("bid_id")
+);
+
+-- CreateTable
 CREATE TABLE "wallets" (
     "wallet_id" SERIAL NOT NULL,
     "user_id" INTEGER NOT NULL,
@@ -733,11 +770,95 @@ CREATE TABLE "work_schedules" (
     CONSTRAINT "work_schedules_pkey" PRIMARY KEY ("schedule_id")
 );
 
--- CreateIndex
-CREATE INDEX "idx_access_control_lookup" ON "access_controls"("role_code", "ip_address", "is_active");
+-- CreateTable
+CREATE TABLE "employee_salary_configs" (
+    "config_id" SERIAL NOT NULL,
+    "user_id" INTEGER NOT NULL,
+    "type_code" VARCHAR(50) NOT NULL,
+    "name" VARCHAR(255) NOT NULL,
+    "amount" DECIMAL(15,2) NOT NULL,
+    "is_recurring" BOOLEAN DEFAULT true,
+    "effective_from" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
+    "effective_to" TIMESTAMP(6),
+    "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "employee_salary_configs_pkey" PRIMARY KEY ("config_id")
+);
+
+-- CreateTable
+CREATE TABLE "salary_change_histories" (
+    "history_id" SERIAL NOT NULL,
+    "user_id" INTEGER NOT NULL,
+    "changed_by_id" INTEGER,
+    "old_salary" DECIMAL(15,2) NOT NULL,
+    "new_salary" DECIMAL(15,2) NOT NULL,
+    "effective_date" DATE NOT NULL,
+    "reason" VARCHAR(255),
+    "note" TEXT,
+    "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "salary_change_histories_pkey" PRIMARY KEY ("history_id")
+);
+
+-- CreateTable
+CREATE TABLE "payroll_items" (
+    "item_id" SERIAL NOT NULL,
+    "payroll_id" INTEGER NOT NULL,
+    "title" VARCHAR(255) NOT NULL,
+    "amount" DECIMAL(15,2) NOT NULL,
+    "is_addition" BOOLEAN DEFAULT true,
+
+    CONSTRAINT "payroll_items_pkey" PRIMARY KEY ("item_id")
+);
+
+-- CreateTable
+CREATE TABLE "leave_requests" (
+    "request_id" SERIAL NOT NULL,
+    "user_id" INTEGER NOT NULL,
+    "type_code" VARCHAR(50) NOT NULL,
+    "start_date" TIMESTAMP(6) NOT NULL,
+    "end_date" TIMESTAMP(6) NOT NULL,
+    "reason" TEXT,
+    "status_code" VARCHAR(50) DEFAULT 'PENDING',
+    "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "leave_requests_pkey" PRIMARY KEY ("request_id")
+);
+
+-- CreateTable
+CREATE TABLE "payroll_disputes" (
+    "dispute_id" SERIAL NOT NULL,
+    "payroll_id" INTEGER NOT NULL,
+    "user_id" INTEGER NOT NULL,
+    "content" TEXT NOT NULL,
+    "response" TEXT,
+    "status_code" VARCHAR(50) DEFAULT 'OPEN',
+    "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "payroll_disputes_pkey" PRIMARY KEY ("dispute_id")
+);
+
+-- CreateTable
+CREATE TABLE "timesheet_corrections" (
+    "correction_id" SERIAL NOT NULL,
+    "timesheet_id" INTEGER NOT NULL,
+    "user_id" INTEGER NOT NULL,
+    "reason" TEXT NOT NULL,
+    "evidence_url" TEXT,
+    "status_code" VARCHAR(50) DEFAULT 'PENDING',
+    "manager_note" TEXT,
+    "reviewer_id" INTEGER,
+    "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "timesheet_corrections_pkey" PRIMARY KEY ("correction_id")
+);
 
 -- CreateIndex
-CREATE UNIQUE INDEX "uq_auction_bid_amount" ON "auction_bids"("auction_id", "bid_amount");
+CREATE INDEX "idx_access_control_lookup" ON "access_controls"("role_code", "ip_address", "is_active");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "brands_name_key" ON "brands"("name");
@@ -756,6 +877,15 @@ CREATE UNIQUE INDEX "orders_order_code_key" ON "orders"("order_code");
 
 -- CreateIndex
 CREATE INDEX "idx_orders_code" ON "orders"("order_code");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "payment_transactions_sepay_id_key" ON "payment_transactions"("sepay_id");
+
+-- CreateIndex
+CREATE INDEX "idx_payment_trx_order" ON "payment_transactions"("order_id");
+
+-- CreateIndex
+CREATE INDEX "idx_payment_trx_sepay" ON "payment_transactions"("sepay_id");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "product_preorder_configs_variant_id_key" ON "product_preorder_configs"("variant_id");
@@ -806,28 +936,19 @@ CREATE UNIQUE INDEX "users_email_key" ON "users"("email");
 CREATE UNIQUE INDEX "users_google_id_key" ON "users"("google_id");
 
 -- CreateIndex
+CREATE UNIQUE INDEX "auctions_variant_id_key" ON "auctions"("variant_id");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "auction_participants_auction_id_user_id_key" ON "auction_participants"("auction_id", "user_id");
+
+-- CreateIndex
 CREATE UNIQUE INDEX "wallets_user_id_key" ON "wallets"("user_id");
+
+-- CreateIndex
+CREATE INDEX "salary_change_histories_user_id_effective_date_idx" ON "salary_change_histories"("user_id", "effective_date");
 
 -- AddForeignKey
 ALTER TABLE "addresses" ADD CONSTRAINT "addresses_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("user_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE "auction_bids" ADD CONSTRAINT "auction_bids_auction_id_fkey" FOREIGN KEY ("auction_id") REFERENCES "auctions"("auction_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE "auction_bids" ADD CONSTRAINT "auction_bids_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("user_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE "auction_participants" ADD CONSTRAINT "auction_participants_auction_id_fkey" FOREIGN KEY ("auction_id") REFERENCES "auctions"("auction_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE "auction_participants" ADD CONSTRAINT "auction_participants_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("user_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE "auctions" ADD CONSTRAINT "auctions_product_id_fkey" FOREIGN KEY ("product_id") REFERENCES "products"("product_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
-
--- AddForeignKey
-ALTER TABLE "auctions" ADD CONSTRAINT "auctions_winner_id_fkey" FOREIGN KEY ("winner_id") REFERENCES "users"("user_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
 
 -- AddForeignKey
 ALTER TABLE "cart_items" ADD CONSTRAINT "cart_items_cart_id_fkey" FOREIGN KEY ("cart_id") REFERENCES "carts"("cart_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
@@ -896,6 +1017,9 @@ ALTER TABLE "orders" ADD CONSTRAINT "orders_created_by_staff_id_fkey" FOREIGN KE
 ALTER TABLE "orders" ADD CONSTRAINT "orders_promotion_id_fkey" FOREIGN KEY ("promotion_id") REFERENCES "promotions"("promotion_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
 
 -- AddForeignKey
+ALTER TABLE "orders" ADD CONSTRAINT "orders_shipping_promotion_id_fkey" FOREIGN KEY ("shipping_promotion_id") REFERENCES "promotions"("promotion_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
+
+-- AddForeignKey
 ALTER TABLE "orders" ADD CONSTRAINT "orders_session_id_fkey" FOREIGN KEY ("session_id") REFERENCES "pos_sessions"("session_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
 
 -- AddForeignKey
@@ -905,7 +1029,16 @@ ALTER TABLE "orders" ADD CONSTRAINT "orders_shipping_address_id_fkey" FOREIGN KE
 ALTER TABLE "orders" ADD CONSTRAINT "orders_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("user_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
 
 -- AddForeignKey
+ALTER TABLE "payment_transactions" ADD CONSTRAINT "payment_transactions_order_id_fkey" FOREIGN KEY ("order_id") REFERENCES "orders"("order_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
+
+-- AddForeignKey
 ALTER TABLE "payrolls" ADD CONSTRAINT "payrolls_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "employees"("user_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
+
+-- AddForeignKey
+ALTER TABLE "payrolls" ADD CONSTRAINT "payrolls_reviewer_id_fkey" FOREIGN KEY ("reviewer_id") REFERENCES "employees"("user_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
+
+-- AddForeignKey
+ALTER TABLE "payrolls" ADD CONSTRAINT "payrolls_approver_id_fkey" FOREIGN KEY ("approver_id") REFERENCES "employees"("user_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
 
 -- AddForeignKey
 ALTER TABLE "pos_sessions" ADD CONSTRAINT "pos_sessions_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "employees"("user_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
@@ -983,7 +1116,55 @@ ALTER TABLE "user_vouchers" ADD CONSTRAINT "user_vouchers_user_id_fkey" FOREIGN 
 ALTER TABLE "wallet_transactions" ADD CONSTRAINT "wallet_transactions_wallet_id_fkey" FOREIGN KEY ("wallet_id") REFERENCES "wallets"("wallet_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
 
 -- AddForeignKey
+ALTER TABLE "auctions" ADD CONSTRAINT "auctions_variant_id_fkey" FOREIGN KEY ("variant_id") REFERENCES "product_variants"("variant_id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "auctions" ADD CONSTRAINT "auctions_winner_id_fkey" FOREIGN KEY ("winner_id") REFERENCES "users"("user_id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "auction_participants" ADD CONSTRAINT "auction_participants_auction_id_fkey" FOREIGN KEY ("auction_id") REFERENCES "auctions"("auction_id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "auction_participants" ADD CONSTRAINT "auction_participants_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("user_id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "auction_bids" ADD CONSTRAINT "auction_bids_auction_id_fkey" FOREIGN KEY ("auction_id") REFERENCES "auctions"("auction_id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "auction_bids" ADD CONSTRAINT "auction_bids_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("user_id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE "wallets" ADD CONSTRAINT "wallets_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("user_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
 
 -- AddForeignKey
 ALTER TABLE "work_schedules" ADD CONSTRAINT "work_schedules_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "employees"("user_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
+
+-- AddForeignKey
+ALTER TABLE "employee_salary_configs" ADD CONSTRAINT "employee_salary_configs_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "employees"("user_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
+
+-- AddForeignKey
+ALTER TABLE "salary_change_histories" ADD CONSTRAINT "salary_change_histories_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "employees"("user_id") ON DELETE CASCADE ON UPDATE NO ACTION;
+
+-- AddForeignKey
+ALTER TABLE "salary_change_histories" ADD CONSTRAINT "salary_change_histories_changed_by_id_fkey" FOREIGN KEY ("changed_by_id") REFERENCES "users"("user_id") ON DELETE SET NULL ON UPDATE NO ACTION;
+
+-- AddForeignKey
+ALTER TABLE "payroll_items" ADD CONSTRAINT "payroll_items_payroll_id_fkey" FOREIGN KEY ("payroll_id") REFERENCES "payrolls"("payroll_id") ON DELETE CASCADE ON UPDATE NO ACTION;
+
+-- AddForeignKey
+ALTER TABLE "leave_requests" ADD CONSTRAINT "leave_requests_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "employees"("user_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
+
+-- AddForeignKey
+ALTER TABLE "payroll_disputes" ADD CONSTRAINT "payroll_disputes_payroll_id_fkey" FOREIGN KEY ("payroll_id") REFERENCES "payrolls"("payroll_id") ON DELETE CASCADE ON UPDATE NO ACTION;
+
+-- AddForeignKey
+ALTER TABLE "payroll_disputes" ADD CONSTRAINT "payroll_disputes_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "employees"("user_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
+
+-- AddForeignKey
+ALTER TABLE "timesheet_corrections" ADD CONSTRAINT "timesheet_corrections_timesheet_id_fkey" FOREIGN KEY ("timesheet_id") REFERENCES "timesheets"("timesheet_id") ON DELETE CASCADE ON UPDATE NO ACTION;
+
+-- AddForeignKey
+ALTER TABLE "timesheet_corrections" ADD CONSTRAINT "timesheet_corrections_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "employees"("user_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
+
+-- AddForeignKey
+ALTER TABLE "timesheet_corrections" ADD CONSTRAINT "timesheet_corrections_reviewer_id_fkey" FOREIGN KEY ("reviewer_id") REFERENCES "employees"("user_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
