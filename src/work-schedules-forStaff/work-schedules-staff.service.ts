@@ -2,6 +2,13 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { GetSchedulesFilterDto } from './dto/get-schedules-filter.dto';
 import { Prisma } from '@prisma/client';
+import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc';
+import timezone from 'dayjs/plugin/timezone';
+
+dayjs.extend(utc);
+dayjs.extend(timezone);
+dayjs.tz.setDefault('Asia/Ho_Chi_Minh');
 
 @Injectable()
 export class WorkSchedulesStaffService {
@@ -32,8 +39,8 @@ export class WorkSchedulesStaffService {
 
         if (filter.from && filter.to) {
             where.date = {
-                gte: new Date(filter.from),
-                lte: new Date(filter.to),
+                gte: dayjs.tz(filter.from, 'Asia/Ho_Chi_Minh').startOf('day').toDate(),
+                lte: dayjs.tz(filter.to, 'Asia/Ho_Chi_Minh').endOf('day').toDate(),
             };
         }
 
