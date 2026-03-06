@@ -1,11 +1,17 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, NotFoundException, Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
 import { CreateAuctionDto } from './dto/create-auction.dto';
 import { UpdateAuctionDto } from './dto/update-auction.dto';
 import { PrismaService } from '../prisma/prisma.service';
+import { AuctionsGateway } from './auctions.gateway';
 
 @Injectable()
 export class AuctionsService {
-  constructor(private prisma: PrismaService) { }
+  private readonly logger = new Logger(AuctionsService.name);
+
+  constructor(
+    private prisma: PrismaService,
+    @Inject(forwardRef(() => AuctionsGateway)) private auctionsGateway: AuctionsGateway
+  ) { }
 
   async create(createAuctionDto: CreateAuctionDto) {
     // 1. Verify that the product variant exists and belongs to an AUCTION product type
@@ -222,6 +228,882 @@ export class AuctionsService {
         message: 'Successfully joined the auction room',
         participant,
         newBalance: updatedWallet.balance_available
+      };
+    });
+  }
+
+  async getMyStatus(auctionId: number, userId: number) {
+    const participant = await this.prisma.auction_participants.findUnique({
+      where: {
+        auction_id_user_id: {
+          auction_id: auctionId,
+          user_id: userId
+        }
+      }
+    });
+
+    return {
+      is_joined: !!participant,
+      participant
+    };
+  }
+
+  async checkout(auctionId: number, userId: number, shippingFee: number = 0) {
+    const auction = await this.prisma.auctions.findUnique({
+      where: { auction_id: auctionId },
+      include: {
+        product_variants: true,
+        auction_participants: {
+          where: { user_id: userId }
+        },
+        auction_bids: {
+          where: { user_id: userId },
+          orderBy: { bid_amount: 'desc' },
+          take: 1
+        }
+      }
+    });
+
+    if (!auction) {
+      throw new NotFoundException('Auction not found');
+    }
+
+    if (auction.status_code !== 'AWAITING_PAYMENT') {
+      throw new BadRequestException('Auction is not in AWAITING_PAYMENT state');
+    }
+
+    const participant = auction.auction_participants[0];
+    // [Gap 4] Chỉ WINNER mới được checkout, STANDBY_WINNER đã được hoàn cọc rồi
+    if (!participant || participant.status !== 'WINNER') {
+      throw new BadRequestException('Bạn không có quyền thanh toán cho phiên đấu giá này');
+    }
+
+    // [Gap 4] Giá thắng = highest bid của chính winner
+    const winnerTopBid = auction.auction_bids.length > 0
+      ? Number(auction.auction_bids[0].bid_amount)
+      : Number(auction.final_price ?? auction.start_price);
+
+    const depositAmount = Number(participant.deposit_amount);
+    const shippingFeeAmount = Number(shippingFee) || 0;
+
+    // Công thức: phại trả = giá bid - tiền cọc đã khóa + phí ship
+    const remainingBalance = winnerTopBid - depositAmount + shippingFeeAmount;
+    const totalOrderAmount = winnerTopBid + shippingFeeAmount;
+
+    if (remainingBalance < 0) {
+      throw new BadRequestException('Tính toán lỗi: Tiền cọc vượt quá giá bid');
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const wallet = await tx.wallets.findUnique({ where: { user_id: userId } });
+      if (!wallet) throw new BadRequestException('Wallet not found for this user');
+
+      if (Number(wallet.balance_available) < remainingBalance) {
+        throw new BadRequestException('Số dư ví không đủ, vui lòng nạp thêm tiền');
+      }
+
+      // Trừ số tiền còn lại (bid - deposit + ship) và unlock deposit
+      await tx.wallets.update({
+        where: { wallet_id: wallet.wallet_id },
+        data: {
+          balance_available: { decrement: remainingBalance },
+          balance_locked: { decrement: depositAmount }
+        }
+      });
+
+      // Log: Phần tiền còn lại (bao gồm ship)
+      if (remainingBalance > 0) {
+        await tx.wallet_transactions.create({
+          data: {
+            wallet_id: wallet.wallet_id,
+            type_code: 'PAYMENT',
+            amount: -remainingBalance,
+            reference_code: `AUC_PAY_${auctionId}`,
+            description: `Thanh toán đấu giá #${auctionId}: bid=${winnerTopBid}, ship=${shippingFeeAmount}, đã cỌ=${depositAmount}`
+          }
+        });
+      }
+
+      // Log: Tiền cọc được dùng làm thanh toán một phần
+      await tx.wallet_transactions.create({
+        data: {
+          wallet_id: wallet.wallet_id,
+          type_code: 'DEPOSIT_CONSUMED',
+          amount: -depositAmount,
+          reference_code: `AUC_DEP_CONS_${auctionId}`,
+          description: `Tiền cọc dùng thanh toán Auction #${auctionId}`
+        }
+      });
+
+      const orderCode = `AUC-${Date.now()}-${userId}`;
+
+      const newOrder = await tx.orders.create({
+        data: {
+          user_id: userId,
+          order_code: orderCode,
+          total_amount: totalOrderAmount,
+          paid_amount: totalOrderAmount,
+          shipping_fee: shippingFeeAmount,
+          channel_code: 'AUCTION',
+          payment_method_code: 'WALLET',
+          status_code: 'PROCESSING',
+          note: `Thắng Auction #${auctionId} với giá ${winnerTopBid}`,
+          order_items: {
+            create: {
+              variant_id: auction.variant_id,
+              quantity: 1,
+              unit_price: winnerTopBid,
+              total_price: winnerTopBid
+            }
+          },
+          order_status_history: {
+            create: { new_status: 'PROCESSING', note: 'Auction Checkout Completed' }
+          }
+        }
+      });
+
+      // Cập nhật participant đã thanh toán xong
+      await tx.auction_participants.update({
+        where: { auction_id_user_id: { auction_id: auctionId, user_id: userId } },
+        data: { status: 'COMPLETED_PAYMENT' }
+      });
+
+      // Đánh dấu auction COMPLETED
+      await tx.auctions.update({
+        where: { auction_id: auctionId },
+        data: { status_code: 'COMPLETED' }
+      });
+
+      return {
+        success: true,
+        message: 'Thanh toán thành công',
+        order: newOrder,
+        breakdown: {
+          winningBid: winnerTopBid,
+          depositApplied: depositAmount,
+          shippingFee: shippingFeeAmount,
+          totalPaid: totalOrderAmount,
+          walletDebited: remainingBalance
+        }
+      };
+    });
+  }
+
+  async forceEnd(auctionId: number) {
+    const auction = await this.prisma.auctions.findUnique({
+      where: { auction_id: auctionId },
+      include: {
+        auction_participants: true
+      }
+    });
+
+    if (!auction) throw new NotFoundException('Auction not found');
+    if (auction.status_code !== 'ACTIVE') {
+      throw new BadRequestException('Can only force end ACTIVE auctions');
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      // 1. Mark auction as completed
+      const updatedAuction = await tx.auctions.update({
+        where: { auction_id: auctionId },
+        data: { status_code: 'COMPLETED' }
+      });
+
+      // 2. Refund all participants (Simple refund for force end)
+      // For a real end with a winner, logic would be different
+      for (const p of auction.auction_participants) {
+        if (p.status === 'JOINED' || p.status === 'ACTIVE') {
+          // Find wallet
+          const wallet = await tx.wallets.findUnique({ where: { user_id: p.user_id } });
+          if (wallet) {
+            await tx.wallets.update({
+              where: { wallet_id: wallet.wallet_id },
+              data: {
+                balance_available: { increment: p.deposit_amount },
+                balance_locked: { decrement: p.deposit_amount }
+              }
+            });
+
+            await tx.wallet_transactions.create({
+              data: {
+                wallet_id: wallet.wallet_id,
+                type_code: 'DEPOSIT_UNLOCK',
+                amount: p.deposit_amount,
+                reference_code: `FORCE_END_${auctionId}`,
+                description: `Refunded deposit due to forced end of Auction #${auctionId}`
+              }
+            });
+
+            await tx.auction_participants.update({
+              where: { auction_id_user_id: { auction_id: auctionId, user_id: p.user_id } },
+              data: { status: 'REFUNDED' }
+            });
+          }
+        }
+      }
+
+      return {
+        success: true,
+        message: 'Auction forcefully ended and deposits refunded.',
+        auction: updatedAuction
+      };
+    });
+  }
+
+  async endAuction(auctionId: number) {
+    const auction = await this.prisma.auctions.findUnique({
+      where: { auction_id: auctionId },
+      include: {
+        auction_participants: true,
+        auction_bids: {
+          orderBy: { bid_amount: 'desc' }
+        }
+      }
+    });
+
+    if (!auction) throw new NotFoundException('Auction not found');
+    if (auction.status_code !== 'ACTIVE') {
+      throw new BadRequestException('Auction is not ACTIVE');
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      // Find top 2 distinct users
+      const distinctUserIds = [...new Set(auction.auction_bids.map(b => b.user_id))];
+      const winnerId = distinctUserIds.length > 0 ? distinctUserIds[0] : null;
+      const standbyId = distinctUserIds.length > 1 ? distinctUserIds[1] : null;
+
+      // 1. Mark auction as AWAITING_PAYMENT, set winner & payment deadline (+24h)
+      const paymentDeadline = new Date(Date.now() + 24 * 60 * 60 * 1000);
+      const updatedAuction = await tx.auctions.update({
+        where: { auction_id: auctionId },
+        data: {
+          // If no bids at all → FAILED_NO_BUYER, otherwise wait for winner to pay
+          status_code: winnerId ? 'AWAITING_PAYMENT' : 'FAILED_NO_BUYER',
+          winner_id: winnerId,
+          final_price: winnerId && auction.auction_bids.length > 0
+            ? auction.auction_bids[0].bid_amount
+            : null,
+          payment_deadline: winnerId ? paymentDeadline : null,
+        }
+      });
+
+      // 2. Refund losers and update statuses
+      for (const p of auction.auction_participants) {
+        if (p.status === 'JOINED' || p.status === 'ACTIVE') {
+          if (winnerId && p.user_id === winnerId) {
+            // Winner: Create Order and deduct deposit automatically
+            const wallet = await tx.wallets.findUnique({ where: { user_id: p.user_id } });
+            if (wallet) {
+              await tx.wallets.update({
+                where: { wallet_id: wallet.wallet_id },
+                data: {
+                  balance_locked: { decrement: p.deposit_amount } // Fully deduct deposit
+                }
+              });
+
+              await tx.wallet_transactions.create({
+                data: {
+                  wallet_id: wallet.wallet_id,
+                  type_code: 'PAYMENT',
+                  amount: -p.deposit_amount,
+                  reference_code: `AUC_DEPOSIT_${auctionId}`,
+                  description: `Deducted deposit for winning Auction #${auctionId}`
+                }
+              });
+            }
+
+            const paymentRefCode = `PAY${Date.now()}${Math.floor(Math.random() * 1000)}`;
+            const orderCode = `AUC-${auctionId}-${Date.now()}`;
+            const shippingFee = 30000;
+            const remainingPayable = Number(updatedAuction.final_price) - Number(p.deposit_amount) + shippingFee;
+
+            const userAddress = await tx.addresses.findFirst({
+              where: { user_id: p.user_id, is_default: true, deleted_at: null }
+            });
+
+            await tx.orders.create({
+              data: {
+                user_id: p.user_id,
+                order_code: orderCode,
+                total_amount: Math.max(0, remainingPayable),
+                shipping_fee: shippingFee,
+                original_shipping_fee: shippingFee,
+                payment_ref_code: paymentRefCode,
+                status_code: 'PENDING_PAYMENT',
+                payment_deadline: paymentDeadline,
+                channel_code: 'WEB',
+                shipping_address_id: userAddress?.address_id || null, // Will ask user to update Address on Checkout page
+                order_items: {
+                  create: [
+                    {
+                      variant_id: auction.variant_id,
+                      quantity: 1,
+                      unit_price: Number(updatedAuction.final_price),
+                      total_price: Number(updatedAuction.final_price)
+                    }
+                  ]
+                },
+                order_status_history: {
+                  create: {
+                    new_status: 'PENDING_PAYMENT',
+                    note: 'Auction Winner Checkout Created'
+                  }
+                }
+              }
+            });
+
+            await tx.product_variants.update({
+              where: { variant_id: auction.variant_id },
+              data: { stock_available: { decrement: 1 } } // Deduct stock
+            });
+
+            // Set WINNER status
+            await tx.auction_participants.update({
+              where: { auction_id_user_id: { auction_id: auctionId, user_id: p.user_id } },
+              data: { status: 'WINNER' }
+            });
+          } else if (standbyId && p.user_id === standbyId) {
+            // [Gap 3] Standby (Top 2): Refund deposit IMMEDIATELY
+            // They just get a notification, no money kept. If top 1 forfeits, top 2 can buy.
+            const standbyWallet = await tx.wallets.findUnique({ where: { user_id: p.user_id } });
+            if (standbyWallet) {
+              await tx.wallets.update({
+                where: { wallet_id: standbyWallet.wallet_id },
+                data: {
+                  balance_available: { increment: p.deposit_amount },
+                  balance_locked: { decrement: p.deposit_amount },
+                }
+              });
+              await tx.wallet_transactions.create({
+                data: {
+                  wallet_id: standbyWallet.wallet_id,
+                  type_code: 'DEPOSIT_UNLOCK',
+                  amount: p.deposit_amount,
+                  reference_code: `AUCTION_END_${auctionId}`,
+                  description: `Refunded deposit: You are #2 in Auction #${auctionId}. Await notification if winner forfeits.`
+                }
+              });
+            }
+            await tx.auction_participants.update({
+              where: { auction_id_user_id: { auction_id: auctionId, user_id: p.user_id } },
+              data: { status: 'STANDBY_WINNER' }
+            });
+          } else {
+            // Loser: Refund deposit
+            const wallet = await tx.wallets.findUnique({ where: { user_id: p.user_id } });
+            if (wallet) {
+              await tx.wallets.update({
+                where: { wallet_id: wallet.wallet_id },
+                data: {
+                  balance_available: { increment: p.deposit_amount },
+                  balance_locked: { decrement: p.deposit_amount }
+                }
+              });
+
+              await tx.wallet_transactions.create({
+                data: {
+                  wallet_id: wallet.wallet_id,
+                  type_code: 'DEPOSIT_UNLOCK',
+                  amount: p.deposit_amount,
+                  reference_code: `AUCTION_END_${auctionId}`,
+                  description: `Refunded deposit: Did not win Auction #${auctionId}`
+                }
+              });
+
+              await tx.auction_participants.update({
+                where: { auction_id_user_id: { auction_id: auctionId, user_id: p.user_id } },
+                data: { status: 'REFUNDED' }
+              });
+            }
+          }
+        }
+      }
+
+      return {
+        success: true,
+        message: 'Auction ended successfully.',
+        auction: updatedAuction,
+        winnerId
+      };
+    });
+  }
+
+  async checkExpiredAuctions() {
+    const expiredAuctions = await this.prisma.auctions.findMany({
+      where: {
+        status_code: 'ACTIVE',
+        end_time: { lte: new Date() }
+      }
+    });
+
+    for (const auction of expiredAuctions) {
+      this.logger.log(`Auction #${auction.auction_id} has expired. Triggering automated closure...`);
+      try {
+        await this.endAuction(auction.auction_id);
+        this.logger.log(`Auction #${auction.auction_id} closed successfully.`);
+      } catch (error) {
+        this.logger.error(`Failed to close Auction #${auction.auction_id}:`, error);
+      }
+    }
+  }
+
+  async forfeitWinner(auctionId: number) {
+    const auction = await this.prisma.auctions.findUnique({
+      where: { auction_id: auctionId },
+      include: {
+        auction_participants: {
+          include: { users: { select: { user_id: true, full_name: true } } }
+        },
+        auction_bids: { orderBy: { bid_amount: 'desc' } },
+        product_variants: { include: { products: true } }
+      }
+    });
+
+    if (!auction) throw new NotFoundException('Auction not found');
+    if (auction.status_code !== 'AWAITING_PAYMENT') {
+      throw new BadRequestException('Chỉ có thể forfeit auction ở trạng thái AWAITING_PAYMENT');
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const winner = auction.auction_participants.find(p => p.status === 'WINNER');
+      if (!winner) {
+        throw new BadRequestException('Không tìm thấy winner để forfeit');
+      }
+
+      // 1. Slash (tịch thu) tiền cọc của Top 1 — PENALTY
+      const winnerWallet = await tx.wallets.findUnique({ where: { user_id: winner.user_id } });
+      if (winnerWallet) {
+        await tx.wallets.update({
+          where: { wallet_id: winnerWallet.wallet_id },
+          data: { balance_locked: { decrement: winner.deposit_amount } }
+        });
+        await tx.wallet_transactions.create({
+          data: {
+            wallet_id: winnerWallet.wallet_id,
+            type_code: 'PENALTY_FORFEIT',
+            amount: -winner.deposit_amount,
+            reference_code: `FORFEIT_${auctionId}`,
+            description: `Tiền cọc bị tịch thu do không thanh toán Auction #${auctionId}`
+          }
+        });
+      }
+
+      // 1.5 Cập nhật / Hủy Order của Top 1 đã tạo trước đó
+      const winnerOrder = await tx.orders.findFirst({
+        where: { order_code: { startsWith: `AUC-${auctionId}-` }, user_id: winner.user_id, status_code: 'PENDING_PAYMENT' }
+      });
+      if (winnerOrder) {
+        await tx.orders.update({
+          where: { order_id: winnerOrder.order_id },
+          data: { status_code: 'CANCELLED' }
+        });
+        // Hoàn kho
+        await tx.product_variants.update({
+          where: { variant_id: auction.variant_id },
+          data: { stock_available: { increment: 1 } }
+        });
+      }
+
+      // 2. Đánh dấu Top 1 là FORFEITED
+      await tx.auction_participants.update({
+        where: { auction_id_user_id: { auction_id: auctionId, user_id: winner.user_id } },
+        data: { status: 'FORFEITED' }
+      });
+
+      // 3. [Gap 7] Tìm top 2 (STANDBY_WINNER) và tạo Order mới cho họ
+      const standby = auction.auction_participants.find(p => p.status === 'STANDBY_WINNER');
+      let newWinnerId: number | null = null;
+      const productName = auction.product_variants?.products?.name || `Sản phẩm #${auction.variant_id}`;
+      const newPaymentDeadline = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
+      if (standby) {
+        // Tìm giá bid cao nhất của standby (giá của chính top 2 đặt ra)
+        const standbyTopBid = auction.auction_bids.find(b => b.user_id === standby.user_id);
+        const standbyPrice = standbyTopBid ? Number(standbyTopBid.bid_amount) : 0;
+
+        // Promote standby lên WINNER
+        await tx.auction_participants.update({
+          where: { auction_id_user_id: { auction_id: auctionId, user_id: standby.user_id } },
+          data: { status: 'WINNER' }
+        });
+        newWinnerId = standby.user_id;
+
+        // Auto-create Order for Standby (No deposit subtracted because it was refunded)
+        const paymentRefCode = `PAY${Date.now()}${Math.floor(Math.random() * 1000)}`;
+        const orderCode = `AUC-${auctionId}-${Date.now()}`;
+        const shippingFee = 30000;
+        const remainingPayable = standbyPrice + shippingFee;
+
+        const userAddress = await tx.addresses.findFirst({
+          where: { user_id: standby.user_id, is_default: true, deleted_at: null }
+        });
+
+        await tx.orders.create({
+          data: {
+            user_id: standby.user_id,
+            order_code: orderCode,
+            total_amount: Math.max(0, remainingPayable),
+            shipping_fee: shippingFee,
+            original_shipping_fee: shippingFee,
+            payment_ref_code: paymentRefCode,
+            status_code: 'PENDING_PAYMENT',
+            payment_deadline: newPaymentDeadline,
+            channel_code: 'WEB',
+            shipping_address_id: userAddress?.address_id || null,
+            order_items: {
+              create: [
+                {
+                  variant_id: auction.variant_id,
+                  quantity: 1,
+                  unit_price: standbyPrice,
+                  total_price: standbyPrice
+                }
+              ]
+            },
+            order_status_history: {
+              create: {
+                new_status: 'PENDING_PAYMENT',
+                note: 'Auction Standby Checkout Created'
+              }
+            }
+          }
+        });
+
+        // Trừ kho lại cho hóa đơn của Standby
+        await tx.product_variants.update({
+          where: { variant_id: auction.variant_id },
+          data: { stock_available: { decrement: 1 } }
+        });
+
+        // [Gap 7] Gửi notification cho top 2 với giá của chính họ
+        await tx.notifications.create({
+          data: {
+            user_id: standby.user_id,
+            title: `✨ Cơ hội mua ${productName}!`,
+            content: `Người thắng trước đã không thanh toán. Bạn có thể mua VỚI GIÁ CỦA BẠN: ${standbyPrice.toLocaleString('vi-VN')}₫. Hệ thống đã tạo đơn hàng tự động, bạn có thể thanh toán hoặc Hủy trong 24h.`,
+          }
+        });
+      }
+
+      // 4. Cập nhật auction — nếu có standby thì tiếp tục AWAITING_PAYMENT với deadline mới
+      const updatedAuction = await tx.auctions.update({
+        where: { auction_id: auctionId },
+        data: {
+          winner_id: newWinnerId,
+          status_code: newWinnerId ? 'AWAITING_PAYMENT' : 'FAILED_NO_BUYER',
+          payment_deadline: newWinnerId ? newPaymentDeadline : null,
+        }
+      });
+
+      return {
+        success: true,
+        message: standby
+          ? `Top 1 bị forfeit. Top 2 được thông báo mua theo giá của họ.`
+          : 'Top 1 bị forfeit. Không có standby, auction kết thúc.',
+        auction: updatedAuction,
+        newWinnerId
+      };
+    });
+  }
+
+  // Called from OrdersService when Winner actively cancels their order
+  async manualForfeitAuction(auctionId: number, userId: number) {
+    const auction = await this.prisma.auctions.findUnique({
+      where: { auction_id: auctionId },
+      include: {
+        auction_participants: {
+          include: { users: { select: { user_id: true, full_name: true } } }
+        },
+        auction_bids: { orderBy: { bid_amount: 'desc' } },
+        product_variants: { include: { products: true } }
+      }
+    });
+
+    if (!auction) throw new NotFoundException('Auction not found');
+    if (auction.status_code !== 'AWAITING_PAYMENT') {
+      throw new BadRequestException('Auction is not AWAITING_PAYMENT');
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const winner = auction.auction_participants.find(p => p.user_id === userId && p.status === 'WINNER');
+      if (!winner) {
+        throw new BadRequestException('User is not the active winner of this auction');
+      }
+
+      // 1. Tịch thu tiền cọc (PENALTY_FORFEIT)
+      const winnerWallet = await tx.wallets.findUnique({ where: { user_id: winner.user_id } });
+      if (winnerWallet) {
+        // Tùy theo logic kế toán, có thể trừ tiếp hoặc không, nhưng logic cũ trong forfeitWinner là trừ tiếp balance_locked
+        await tx.wallets.update({
+          where: { wallet_id: winnerWallet.wallet_id },
+          data: { balance_locked: { decrement: winner.deposit_amount } }
+        });
+        await tx.wallet_transactions.create({
+          data: {
+            wallet_id: winnerWallet.wallet_id,
+            type_code: 'PENALTY_FORFEIT',
+            amount: -winner.deposit_amount,
+            reference_code: `FORFEIT_${auctionId}_MANUAL`,
+            description: `Tiền cọc bị tịch thu do hủy đơn thanh toán Auction #${auctionId}`
+          }
+        });
+      }
+
+      // Đơn hàng của Top 1 đã được status CANCELLED ở OrdersService nên không cần hủy ở đây
+
+      // 2. Mark Top 1 as FORFEITED
+      await tx.auction_participants.update({
+        where: { auction_id_user_id: { auction_id: auctionId, user_id: winner.user_id } },
+        data: { status: 'FORFEITED' }
+      });
+
+      // 3. Promote Top 2 (Standby)
+      const standby = auction.auction_participants.find(p => p.status === 'STANDBY_WINNER');
+      let newWinnerId: number | null = null;
+      const productName = auction.product_variants?.products?.name || `Sản phẩm #${auction.variant_id}`;
+      const newPaymentDeadline = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
+      if (standby) {
+        const standbyTopBid = auction.auction_bids.find(b => b.user_id === standby.user_id);
+        const standbyPrice = standbyTopBid ? Number(standbyTopBid.bid_amount) : 0;
+
+        await tx.auction_participants.update({
+          where: { auction_id_user_id: { auction_id: auctionId, user_id: standby.user_id } },
+          data: { status: 'WINNER' }
+        });
+        newWinnerId = standby.user_id;
+
+        const paymentRefCode = `PAY${Date.now()}${Math.floor(Math.random() * 1000)}`;
+        const orderCode = `AUC-${auctionId}-${Date.now()}`;
+        const shippingFee = 30000;
+        const remainingPayable = standbyPrice + shippingFee;
+
+        const userAddress = await tx.addresses.findFirst({
+          where: { user_id: standby.user_id, is_default: true, deleted_at: null }
+        });
+
+        await tx.orders.create({
+          data: {
+            user_id: standby.user_id,
+            order_code: orderCode,
+            total_amount: Math.max(0, remainingPayable),
+            shipping_fee: shippingFee,
+            original_shipping_fee: shippingFee,
+            payment_ref_code: paymentRefCode,
+            status_code: 'PENDING_PAYMENT',
+            payment_deadline: newPaymentDeadline,
+            channel_code: 'WEB',
+            shipping_address_id: userAddress?.address_id || null,
+            order_items: {
+              create: [{
+                variant_id: auction.variant_id,
+                quantity: 1,
+                unit_price: standbyPrice,
+                total_price: standbyPrice
+              }]
+            },
+            order_status_history: {
+              create: {
+                new_status: 'PENDING_PAYMENT',
+                note: 'Auction Standby Checkout Created (Top 1 Cancelled)'
+              }
+            }
+          }
+        });
+
+        // Notifications
+        await tx.notifications.create({
+          data: {
+            user_id: standby.user_id,
+            title: `✨ Cơ hội mua ${productName}!`,
+            content: `Người thắng trước đã hủy đơn hàng. Bạn có thể mua VỚI GIÁ CỦA BẠN: ${standbyPrice.toLocaleString('vi-VN')}₫. Hệ thống đã tạo đơn hàng tự động, bạn có thể thanh toán hoặc Hủy trong 24h.`,
+          }
+        });
+      }
+
+      await tx.auctions.update({
+        where: { auction_id: auctionId },
+        data: {
+          winner_id: newWinnerId,
+          status_code: newWinnerId ? 'AWAITING_PAYMENT' : 'FAILED_NO_BUYER',
+          payment_deadline: newWinnerId ? newPaymentDeadline : null,
+        }
+      });
+
+      // Emit socket event to room
+      const roomName = `auction_${auctionId}`;
+      this.auctionsGateway.server.to(roomName).emit('winner_forfeited', {
+        auctionId: auctionId,
+        newWinnerId: newWinnerId,
+        status: newWinnerId ? 'AWAITING_PAYMENT' : 'FAILED_NO_BUYER'
+      });
+
+      return {
+        success: true,
+        newWinnerId,
+      };
+    });
+  }
+
+  // [Gap 6] Top 2 từ chối mua sau khi được promote
+  async declineByStandby(auctionId: number, userId: number) {
+    const auction = await this.prisma.auctions.findUnique({
+      where: { auction_id: auctionId },
+      include: {
+        auction_participants: { where: { user_id: userId } },
+      }
+    });
+
+    if (!auction) throw new NotFoundException('Auction not found');
+    if (auction.status_code !== 'AWAITING_PAYMENT') {
+      throw new BadRequestException('Auction không ở trạng thái chờ thanh toán');
+    }
+
+    const participant = auction.auction_participants[0];
+    if (!participant || participant.status !== 'WINNER') {
+      throw new BadRequestException('Bạn không phải người được mời mua hoặc đã từ chối trước đó');
+    }
+
+    // Top 2 từ chối: họ đã được hoàn cọc từ trước (bước endAuction) nên không cần hoàn lại
+    return this.prisma.$transaction(async (tx) => {
+      await tx.auction_participants.update({
+        where: { auction_id_user_id: { auction_id: auctionId, user_id: userId } },
+        data: { status: 'DECLINED' }
+      });
+
+      // 1.5 Cập nhật / Hủy Order đã tạo cho Top 2
+      const standbyOrder = await tx.orders.findFirst({
+        where: { order_code: { startsWith: `AUC-${auctionId}-` }, user_id: userId, status_code: 'PENDING_PAYMENT' }
+      });
+      if (standbyOrder) {
+        await tx.orders.update({
+          where: { order_id: standbyOrder.order_id },
+          data: { status_code: 'CANCELLED' }
+        });
+        // Hoàn kho
+        await tx.product_variants.update({
+          where: { variant_id: auction.variant_id },
+          data: { stock_available: { increment: 1 } }
+        });
+      }
+
+      // Auction kết thúc hẳn — không có người mua
+      const updatedAuction = await tx.auctions.update({
+        where: { auction_id: auctionId },
+        data: {
+          status_code: 'FAILED_NO_BUYER',
+          winner_id: null,
+          payment_deadline: null
+        }
+      });
+
+      return {
+        success: true,
+        message: 'Bạn đã từ chối. Phiên đấu giá kết thúc.',
+        auction: updatedAuction
+      };
+    });
+  }
+
+  async kickParticipant(auctionId: number, userId: number) {
+    const auction = await this.prisma.auctions.findUnique({
+      where: { auction_id: auctionId },
+    });
+
+    if (!auction) throw new NotFoundException('Auction not found');
+    if (auction.status_code === 'COMPLETED') {
+      throw new BadRequestException('Cannot kick user from a completed auction');
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const participant = await tx.auction_participants.findUnique({
+        where: { auction_id_user_id: { auction_id: auctionId, user_id: userId } }
+      });
+
+      if (!participant || (participant.status !== 'JOINED' && participant.status !== 'ACTIVE')) {
+        throw new BadRequestException('User is not an active participant in this auction');
+      }
+
+      const wallet = await tx.wallets.findUnique({ where: { user_id: userId } });
+      if (wallet) {
+        await tx.wallets.update({
+          where: { wallet_id: wallet.wallet_id },
+          data: {
+            balance_available: { increment: participant.deposit_amount },
+            balance_locked: { decrement: participant.deposit_amount }
+          }
+        });
+
+        await tx.wallet_transactions.create({
+          data: {
+            wallet_id: wallet.wallet_id,
+            type_code: 'DEPOSIT_UNLOCK',
+            amount: participant.deposit_amount,
+            reference_code: `KICK_${auctionId}_${userId}`,
+            description: `Refunded deposit: Kicked from Auction #${auctionId}`
+          }
+        });
+      }
+
+      await tx.auction_participants.update({
+        where: { auction_id_user_id: { auction_id: auctionId, user_id: userId } },
+        data: { status: 'BANNED' }
+      });
+
+      return { success: true, message: 'User kicked out and deposit refunded.' };
+    });
+  }
+
+  async cancelResult(auctionId: number) {
+    const auction = await this.prisma.auctions.findUnique({
+      where: { auction_id: auctionId },
+      include: {
+        auction_participants: true
+      }
+    });
+
+    if (!auction) throw new NotFoundException('Auction not found');
+
+    return this.prisma.$transaction(async (tx) => {
+      // Find anyone holding a locked deposit (WINNER, STANDBY_WINNER) or ACTIVE
+      const unrefunded = auction.auction_participants.filter(p => ['WINNER', 'STANDBY_WINNER', 'JOINED', 'ACTIVE'].includes(p.status));
+
+      for (const p of unrefunded) {
+        const wallet = await tx.wallets.findUnique({ where: { user_id: p.user_id } });
+        if (wallet) {
+          await tx.wallets.update({
+            where: { wallet_id: wallet.wallet_id },
+            data: {
+              balance_available: { increment: p.deposit_amount },
+              balance_locked: { decrement: p.deposit_amount }
+            }
+          });
+
+          await tx.wallet_transactions.create({
+            data: {
+              wallet_id: wallet.wallet_id,
+              type_code: 'DEPOSIT_UNLOCK',
+              amount: p.deposit_amount,
+              reference_code: `CANCEL_AUC_${auctionId}_${p.user_id}`,
+              description: `Refunded deposit: Auction #${auctionId} was cancelled`
+            }
+          });
+        }
+      }
+
+      // Instead of CANCELED, just reset to DRAFT so admin can rethink 
+      const updatedAuction = await tx.auctions.update({
+        where: { auction_id: auctionId },
+        data: {
+          status_code: 'DRAFT',
+          winner_id: null
+        }
+      });
+
+      return {
+        success: true,
+        message: 'Auction cancelled. All active deposits refunded and status reset to DRAFT.',
+        auction: updatedAuction
       };
     });
   }
