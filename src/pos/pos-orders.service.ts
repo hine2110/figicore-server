@@ -229,6 +229,37 @@ export class PosOrdersService {
         });
     }
 
+    async getOrderById(staffId: number, orderId: number) {
+        const order = await this.prisma.orders.findUnique({
+            where: { order_id: orderId },
+            include: {
+                order_items: {
+                    include: {
+                        product_variants: { include: { products: true } },
+                    },
+                },
+                users: {
+                    include: {
+                        customers: true
+                    }
+                },
+                employees: {
+                    include: {
+                        users: {
+                            select: { full_name: true }
+                        }
+                    }
+                }
+            },
+        });
+
+        if (!order) {
+            throw new NotFoundException('Không tìm thấy đơn hàng');
+        }
+
+        return { success: true, message: 'Lấy chi tiết đơn hàng thành công', data: order };
+    }
+
     async getOrdersByStaff(staffId: number, query: GetPosOrdersDto) {
         const page = Number(query.page) || 1;
         const limit = Number(query.limit) || 12;
@@ -586,5 +617,171 @@ export class PosOrdersService {
                 include: { order_items: true }
             });
         });
+    }
+
+    /**
+     * Tạo đơn hàng POS chờ thanh toán QR (PENDING_PAYMENT)
+     * Chỉ tạo đơn với trạng thái PENDING_PAYMENT, chưa COMPLETED.
+     * Đơn sẽ được chuyển sang COMPLETED sau khi webhook SePay xác nhận.
+     */
+    async createPendingQrOrder(staffId: number, dto: CreatePosOrderDto) {
+        const activeSession = await this.prisma.pos_sessions.findFirst({
+            where: { user_id: staffId, status_code: 'OPEN', deleted_at: null },
+        });
+
+        if (!activeSession) {
+            throw new BadRequestException('Không có ca làm việc đang mở. Vui lòng mở ca trước khi tạo đơn.');
+        }
+
+        const variantIds = dto.items.map(item => item.variant_id);
+        const variants = await this.prisma.product_variants.findMany({
+            where: { variant_id: { in: variantIds }, deleted_at: null },
+            include: { products: true },
+        });
+
+        let totalAmount = 0;
+        let totalTax = 0;
+        const orderItems = dto.items.map(item => {
+            const variant = variants.find(v => v.variant_id === item.variant_id);
+            if (!variant) throw new BadRequestException('Sản phẩm không tồn tại');
+            const unitPrice = Number(variant.price);
+            const totalPrice = unitPrice * item.quantity;
+            const taxRate = Number(variant.tax_rate || 0);
+            const taxAmount = (totalPrice * taxRate) / 100;
+            totalAmount += totalPrice;
+            totalTax += taxAmount;
+            return { variant_id: variant.variant_id, quantity: item.quantity, unit_price: unitPrice, total_price: totalPrice, tax_rate: taxRate, tax_amount: taxAmount };
+        });
+
+        const discountAmount = dto.discount_amount || 0;
+        const finalAmount = totalAmount + totalTax - discountAmount;
+        const paymentRefCode = this.generatePosQrRef();
+        const orderCode = this.generateOrderCode();
+
+        const order = await this.prisma.$transaction(async (tx) => {
+            // 1. Kiểm tra đơn hàng PENDING từ sync (nếu có)
+            const existingPending = await tx.orders.findFirst({
+                where: {
+                    session_id: activeSession.session_id,
+                    created_by_staff_id: staffId,
+                    status_code: 'PENDING',
+                    channel_code: 'POS',
+                    deleted_at: null
+                },
+                include: { order_items: true }
+            });
+
+            // 2. Hủy đơn PENDING QR cũ (nếu có - trường hợp nhấn nút thanh toán QR nhiều lần)
+            const oldPendingQr = await tx.orders.findFirst({
+                where: {
+                    session_id: activeSession.session_id,
+                    created_by_staff_id: staffId,
+                    status_code: 'PENDING_PAYMENT',
+                    channel_code: 'POS',
+                    deleted_at: null
+                },
+                include: { order_items: true }
+            });
+
+            if (oldPendingQr) {
+                for (const item of oldPendingQr.order_items) {
+                    await tx.product_variants.update({ where: { variant_id: item.variant_id }, data: { stock_available: { increment: item.quantity } } });
+                }
+                await tx.orders.update({ where: { order_id: oldPendingQr.order_id }, data: { status_code: 'CANCELLED', deleted_at: new Date() } });
+            }
+
+            let newOrder;
+            if (existingPending) {
+                // Tái sử dụng đơn PENDING từ sync: Cập nhật status và payment_ref
+                newOrder = await (tx.orders as any).update({
+                    where: { order_id: existingPending.order_id },
+                    data: {
+                        user_id: dto.user_id || null,
+                        payment_method_code: 'VIETQR',
+                        payment_ref_code: paymentRefCode,
+                        total_amount: finalAmount,
+                        total_tax: totalTax,
+                        paid_amount: 0,
+                        discount_amount: discountAmount,
+                        status_code: 'PENDING_PAYMENT',
+                        note: dto.note,
+                        updated_at: new Date(),
+                        is_vat_export: dto.is_vat_export || false,
+                        vat_tax_number: dto.vat_tax_number || null,
+                        vat_company_name: dto.vat_company_name || null,
+                        vat_company_address: dto.vat_company_address || null,
+                        vat_invoice_email: dto.vat_invoice_email || null,
+                    } as any,
+                });
+
+                // Lưu ý: Stock đã được trừ trong quá trình sync rồi, không cần trừ lại.
+            } else {
+                // Tạo mới hoàn toàn (nếu skip sync)
+                newOrder = await (tx.orders as any).create({
+                    data: {
+                        order_code: orderCode,
+                        user_id: dto.user_id || null,
+                        session_id: activeSession.session_id,
+                        created_by_staff_id: staffId,
+                        channel_code: 'POS',
+                        payment_method_code: 'VIETQR',
+                        payment_ref_code: paymentRefCode,
+                        total_amount: finalAmount,
+                        total_tax: totalTax,
+                        paid_amount: 0,
+                        discount_amount: discountAmount,
+                        shipping_fee: 0,
+                        status_code: 'PENDING_PAYMENT',
+                        note: dto.note,
+                        is_vat_export: dto.is_vat_export || false,
+                        vat_tax_number: dto.vat_tax_number || null,
+                        vat_company_name: dto.vat_company_name || null,
+                        vat_company_address: dto.vat_company_address || null,
+                        vat_invoice_email: dto.vat_invoice_email || null,
+                    } as any,
+                });
+
+                for (const item of orderItems) {
+                    await tx.order_items.create({
+                        data: {
+                            order_id: newOrder.order_id,
+                            variant_id: item.variant_id,
+                            quantity: item.quantity,
+                            unit_price: item.unit_price,
+                            total_price: item.total_price,
+                            tax_rate: item.tax_rate,
+                            tax_amount: item.tax_amount,
+                        },
+                    });
+                    await tx.product_variants.update({
+                        where: { variant_id: item.variant_id },
+                        data: { stock_available: { decrement: item.quantity } },
+                    });
+                }
+            }
+
+            return newOrder;
+        });
+
+        const finalOrder = await this.prisma.orders.findUnique({
+            where: { order_id: order.order_id },
+            include: {
+                order_items: { include: { product_variants: { include: { products: true } } } },
+                users: { include: { customers: true } },
+            },
+        });
+
+        return {
+            success: true,
+            message: 'Đơn hàng QR đã được tạo, đang chờ thanh toán.',
+            data: { ...finalOrder, payment_ref_code: paymentRefCode },
+        };
+    }
+
+    private generatePosQrRef(): string {
+        const date = new Date();
+        const dateStr = date.toISOString().slice(0, 10).replace(/-/g, '');
+        const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
+        return `POS-${dateStr}-${random}`;
     }
 }
