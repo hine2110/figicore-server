@@ -67,6 +67,12 @@ export class OrdersService {
       });
       if (!address) throw new BadRequestException("Address not found");
 
+      // --- Calculate Initial Total Amount for Validation ---
+      let cartTotalAmount = 0;
+      for (const item of items) {
+         cartTotalAmount += Number(item.price) * item.quantity;
+      }
+
       // Check Discount Voucher Validity
       let appliedDiscountVoucherCode: string | null = null;
       let usedDiscountPromotionId: number | null = null;
@@ -82,10 +88,13 @@ export class OrdersService {
         });
         
         if (userDiscountVoucher && (!userDiscountVoucher.promotions.end_date || userDiscountVoucher.promotions.end_date > new Date())) {
+          if (userDiscountVoucher.promotions.min_order_value && cartTotalAmount < Number(userDiscountVoucher.promotions.min_order_value)) {
+            throw new BadRequestException("Giá trị đơn hàng chưa đạt mức tối thiểu để sử dụng mã giảm giá này.");
+          }
           appliedDiscountVoucherCode = discountVoucherCode;
           usedDiscountPromotionId = userDiscountVoucher.promotion_id;
         } else {
-          throw new BadRequestException("Mã giảm giá không hợp lệ hoặc bạn chưa thu thập mã này.");
+          throw new BadRequestException("Mã giảm giá không hợp lệ, đã hết hạn hoặc bạn chưa thu thập mã này.");
         }
       }
 
@@ -105,11 +114,14 @@ export class OrdersService {
         });
         
         if (userFreeShipVoucher && (!userFreeShipVoucher.promotions.end_date || userFreeShipVoucher.promotions.end_date > new Date())) {
+          if (userFreeShipVoucher.promotions.min_order_value && cartTotalAmount < Number(userFreeShipVoucher.promotions.min_order_value)) {
+             throw new BadRequestException("Giá trị đơn hàng chưa đạt mức tối thiểu để sử dụng mã miễn phí vận chuyển này.");
+          }
           appliedFreeShipVoucherCode = freeShipVoucherCode;
           usedFreeShipPromotionId = userFreeShipVoucher.promotion_id;
           isVoucherFreeShip = true;
         } else {
-           throw new BadRequestException("Mã miễn phí vận chuyển không hợp lệ hoặc bạn chưa thu thập mã này.");
+           throw new BadRequestException("Mã miễn phí vận chuyển không hợp lệ, đã hết hạn hoặc bạn chưa thu thập mã này.");
         }
       }
 
@@ -713,7 +725,9 @@ export class OrdersService {
     return this.prisma.$transaction(async (tx) => {
       const order = await tx.orders.findUnique({
         where: { order_id: orderId },
-        include: { order_items: true }
+        include: { 
+          order_items: true
+        }
       });
 
       if (!order) throw new BadRequestException(`Order #${orderId} not found`);
@@ -778,6 +792,31 @@ export class OrdersService {
       } catch (err) {
         console.error("Failed to restore items to cart", err);
         // We don't block cancellation if this fails, just log it
+      }
+
+      // 2.5 Restore Vouchers (If any were applied)
+      const usedPromotions = [order.promotion_id, order.shipping_promotion_id].filter(Boolean) as number[];
+      if (order.user_id && usedPromotions.length > 0) {
+        for (const promoId of usedPromotions) {
+          // Find the user_voucher record and set is_used back to false
+          const usedVoucher = await tx.user_vouchers.findFirst({
+            where: {
+              user_id: order.user_id,
+              promotion_id: promoId,
+              is_used: true
+            },
+            orderBy: {
+              updated_at: 'desc' // Try to get the one most recently used
+            }
+          });
+
+          if (usedVoucher) {
+            await tx.user_vouchers.update({
+              where: { id: usedVoucher.id },
+              data: { is_used: false }
+            });
+          }
+        }
       }
 
       // 3. Update Status
@@ -1157,6 +1196,30 @@ export class OrdersService {
         }
       } catch (err) {
         console.error("Failed to restore items to cart", err);
+      }
+
+      // 2.5 Restore Vouchers
+      const usedPromotions = [order.promotion_id, order.shipping_promotion_id].filter(Boolean) as number[];
+      if (order.user_id && usedPromotions.length > 0) {
+        for (const promoId of usedPromotions) {
+          const usedVoucher = await tx.user_vouchers.findFirst({
+            where: {
+              user_id: order.user_id,
+              promotion_id: promoId,
+              is_used: true
+            },
+            orderBy: {
+              updated_at: 'desc'
+            }
+          });
+
+          if (usedVoucher) {
+            await tx.user_vouchers.update({
+              where: { id: usedVoucher.id },
+              data: { is_used: false }
+            });
+          }
+        }
       }
 
       // 3. Update Order Status
