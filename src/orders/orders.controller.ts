@@ -71,7 +71,17 @@ export class OrdersController {
     });
   }
 
+  @Post('mock-pay-group')
+  @UseGuards(AuthGuard('jwt'))
+  mockPayGroup(@Req() req, @Body() body: { payment_ref_code: string }) {
+    return this.ordersService.mockPayGroup(body.payment_ref_code, req.user.user_id);
+  }
 
+  @Post('pay-with-wallet')
+  @UseGuards(AuthGuard('jwt'))
+  payWithWallet(@Req() req, @Body() body: { payment_ref_code: string }) {
+    return this.ordersService.payWithWallet(body.payment_ref_code, req.user.user_id);
+  }
 
   @Get('contracts/my-contracts') // Matches the route Frontend is calling
   @UseGuards(AuthGuard('jwt'))
@@ -96,6 +106,20 @@ export class OrdersController {
     return this.ordersService.findAllByUser(req.user.user_id);
   }
 
+  // NOTE: Named routes MUST be declared BEFORE the generic @Get(':id') route
+  // to prevent NestJS from swallowing them as wildcard :id matches.
+  @Get('by-ref/:ref')
+  @UseGuards(AuthGuard('jwt'))
+  getOrdersByRef(@Req() req, @Param('ref') ref: string) {
+    return this.ordersService.getOrdersByRef(ref, req.user.user_id);
+  }
+
+  @Get('by-code/:code')
+  @UseGuards(AuthGuard('jwt'))
+  getOrderByCode(@Req() req, @Param('code') code: string) {
+    return this.ordersService.getOrderByCode(code, req.user.user_id);
+  }
+
   @Get(':id')
   findOne(@Param('id') id: string, @Req() req) {
     return this.ordersService.findOne(+id, req?.user);
@@ -106,26 +130,9 @@ export class OrdersController {
     return this.ordersService.update(+id, updateOrderDto);
   }
 
-  @Post('mock-pay-group')
-  @UseGuards(AuthGuard('jwt'))
-  mockPayGroup(@Req() req, @Body() body: { payment_ref_code: string }) {
-    return this.ordersService.mockPayGroup(body.payment_ref_code, req.user.user_id);
-  }
-
-  @Post('pay-with-wallet')
-  @UseGuards(AuthGuard('jwt'))
-  payWithWallet(@Req() req, @Body() body: { payment_ref_code: string }) {
-    return this.ordersService.payWithWallet(body.payment_ref_code, req.user.user_id);
-  }
-
-  @Get('by-ref/:ref')
-  @UseGuards(AuthGuard('jwt'))
-  getOrdersByRef(@Req() req, @Param('ref') ref: string) {
-    return this.ordersService.getOrdersByRef(ref, req.user.user_id);
-  }
-
   @Delete(':id')
   remove(@Param('id') id: string) {
     return this.ordersService.remove(+id);
   }
 }
+

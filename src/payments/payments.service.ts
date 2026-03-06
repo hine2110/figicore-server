@@ -282,6 +282,20 @@ export class PaymentsService {
                             }
                         }
 
+                        // --- NEW: Sync Auction Status on Webhook Success ---
+                        if (order.order_code && order.order_code.startsWith('AUC-')) {
+                            try {
+                                const auctionId = parseInt(order.order_code.split('-')[1], 10);
+                                await tx.auctions.update({
+                                    where: { auction_id: auctionId },
+                                    data: { status_code: 'COMPLETED' }
+                                });
+                                this.logger.log(`Synced Auction #${auctionId} to COMPLETED via SePay webhook`);
+                            } catch (err) {
+                                this.logger.error(`Failed to sync auction status for order ${order.order_code} via webhook:`, err);
+                            }
+                        }
+
                         this.logger.log(`Order ${order.order_id} successfully marked as ${newStatus}.`);
 
                         // --- NEW: Trigger Email & Admin Notifications ---
