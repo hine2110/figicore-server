@@ -779,7 +779,7 @@ model wallet_transactions {
 
 model auctions {
   auction_id      Int       @id @default(autoincrement())
-  variant_id      Int       @unique 
+  variant_id      Int
   start_price     Decimal   @db.Decimal(15, 2)
   step_price      Decimal   @db.Decimal(15, 2)
   deposit_fee     Decimal   @db.Decimal(15, 2) // Phí giữ chỗ (Khóa ví)
