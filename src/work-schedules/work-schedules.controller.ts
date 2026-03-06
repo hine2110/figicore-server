@@ -47,9 +47,9 @@ export class WorkSchedulesController {
         return this.workSchedulesService.findAll(filter);
     }
 
-    @Get('summary')
+    @Get('attendance-report')
     @AllowAnyIp()
-    getSummary(@Query() filter: GetSchedulesFilterDto) {
-        return this.workSchedulesService.getSummary(filter);
+    getAttendanceReport(@Query() filter: GetSchedulesFilterDto) {
+        return this.workSchedulesService.getAttendanceReport(filter);
     }
 }

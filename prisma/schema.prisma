@@ -143,6 +143,15 @@ model employees {
   pos_sessions       pos_sessions[]
   store_expenses     store_expenses[]
   work_schedules     work_schedules[]
+
+  employee_salary_configs employee_salary_configs[]
+  salary_change_histories salary_change_histories[] @relation("EmployeeSalaryHistory")
+  leave_requests          leave_requests[]
+  payroll_disputes        payroll_disputes[]
+  reviewed_payrolls       payrolls[]                @relation("PayrollReviewer")
+  approved_payrolls       payrolls[]                @relation("PayrollApprover")
+  timesheet_corrections   timesheet_corrections[]   @relation("CorrectionRequester")
+  reviewed_corrections    timesheet_corrections[]   @relation("CorrectionReviewer")
 }
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
@@ -251,7 +260,7 @@ model order_status_history {
   orders             orders    @relation(fields: [order_id], references: [order_id], onDelete: Cascade, onUpdate: NoAction)
 }
 
-model orders {
+model orders {           
   order_id              Int                    @id @default(autoincrement())
   order_code            String                 @unique @db.VarChar(50)
   user_id               Int?
@@ -322,17 +331,24 @@ model payment_transactions {
 }
 
 model payrolls {
-  payroll_id       Int       @id @default(autoincrement())
+  payroll_id       Int        @id @default(autoincrement())
   user_id          Int
   month            Int
   year             Int
-  total_work_hours Float?    @default(0)
-  final_salary     Decimal?  @default(0) @db.Decimal(15, 2)
-  status_code      String?   @default("DRAFT") @db.VarChar(20)
-  created_at       DateTime? @default(now()) @db.Timestamp(6)
-  updated_at       DateTime? @default(now()) @db.Timestamp(6)
-  deleted_at       DateTime? @db.Timestamp(6)
-  employees        employees @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  total_work_hours Float?     @default(0)
+  final_salary     Decimal?   @default(0) @db.Decimal(15, 2)
+  status_code      String?    @default("DRAFT") @db.VarChar(20)
+  reviewer_id      Int?
+  approver_id      Int?
+  created_at       DateTime?  @default(now()) @db.Timestamp(6)
+  updated_at       DateTime?  @default(now()) @db.Timestamp(6)
+  deleted_at       DateTime?  @db.Timestamp(6)
+  employees        employees  @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  reviewer         employees? @relation("PayrollReviewer", fields: [reviewer_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  approver         employees? @relation("PayrollApprover", fields: [approver_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+
+  payroll_items    payroll_items[]
+  payroll_disputes payroll_disputes[]
 }
 
 model pos_sessions {
@@ -668,10 +684,11 @@ model timesheets {
   check_out_img_url String? @db.Text
   check_out_score   Float?
 
-  created_at     DateTime?       @default(now()) @db.Timestamp(6)
-  updated_at     DateTime?       @default(now()) @db.Timestamp(6)
-  deleted_at     DateTime?       @db.Timestamp(6)
-  work_schedules work_schedules? @relation(fields: [schedule_id], references: [schedule_id], onDelete: NoAction, onUpdate: NoAction)
+  created_at            DateTime?               @default(now()) @db.Timestamp(6)
+  updated_at            DateTime?               @default(now()) @db.Timestamp(6)
+  deleted_at            DateTime?               @db.Timestamp(6)
+  work_schedules        work_schedules?         @relation(fields: [schedule_id], references: [schedule_id], onDelete: NoAction, onUpdate: NoAction)
+  timesheet_corrections timesheet_corrections[]
 }
 
 model user_login_logs {
@@ -739,6 +756,7 @@ model users {
   user_login_logs         user_login_logs[]
   user_vouchers           user_vouchers[]
   preorder_contracts      preorder_contracts[]
+  changed_salary_histories salary_change_histories[] @relation("SalaryChanger")
   wallets                 wallets?
 }
 
@@ -840,4 +858,91 @@ model work_schedules {
   deleted_at     DateTime?    @db.Timestamp(6)
   timesheets     timesheets[]
   employees      employees    @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model employee_salary_configs {
+  config_id    Int       @id @default(autoincrement())
+  user_id      Int
+  type_code    String    @db.VarChar(50)
+  name         String    @db.VarChar(255)
+  amount       Decimal   @db.Decimal(15, 2)
+  is_recurring Boolean?  @default(true)
+  effective_from DateTime? @default(now()) @db.Timestamp(6)
+  effective_to   DateTime? @db.Timestamp(6)
+  created_at   DateTime? @default(now()) @db.Timestamp(6)
+  updated_at   DateTime? @default(now()) @db.Timestamp(6)
+
+  employees employees @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model salary_change_histories {
+  history_id     Int       @id @default(autoincrement())
+  user_id        Int
+  changed_by_id  Int?
+  old_salary     Decimal   @db.Decimal(15, 2)
+  new_salary     Decimal   @db.Decimal(15, 2)
+  effective_date DateTime  @db.Date
+  reason         String?   @db.VarChar(255)
+  note           String?   @db.Text
+  created_at     DateTime? @default(now()) @db.Timestamp(6)
+
+  employees      employees @relation("EmployeeSalaryHistory", fields: [user_id], references: [user_id], onDelete: Cascade, onUpdate: NoAction)
+  users          users?    @relation("SalaryChanger", fields: [changed_by_id], references: [user_id], onDelete: SetNull, onUpdate: NoAction)
+
+  @@index([user_id, effective_date])
+}
+
+model payroll_items {
+  item_id     Int      @id @default(autoincrement())
+  payroll_id  Int
+  title       String   @db.VarChar(255)
+  amount      Decimal  @db.Decimal(15, 2)
+  is_addition Boolean? @default(true)
+
+  payrolls payrolls @relation(fields: [payroll_id], references: [payroll_id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+model leave_requests {
+  request_id  Int       @id @default(autoincrement())
+  user_id     Int
+  type_code   String    @db.VarChar(50)
+  start_date  DateTime  @db.Timestamp(6)
+  end_date    DateTime  @db.Timestamp(6)
+  reason      String?   @db.Text
+  status_code String?   @default("PENDING") @db.VarChar(50)
+  created_at  DateTime? @default(now()) @db.Timestamp(6)
+  updated_at  DateTime? @default(now()) @db.Timestamp(6)
+
+  employees employees @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model payroll_disputes {
+  dispute_id  Int       @id @default(autoincrement())
+  payroll_id  Int
+  user_id     Int
+  content     String    @db.Text
+  response    String?   @db.Text
+  status_code String?   @default("OPEN") @db.VarChar(50)
+  created_at  DateTime? @default(now()) @db.Timestamp(6)
+  updated_at  DateTime? @default(now()) @db.Timestamp(6)
+
+  payrolls  payrolls  @relation(fields: [payroll_id], references: [payroll_id], onDelete: Cascade, onUpdate: NoAction)
+  employees employees @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model timesheet_corrections {
+  correction_id Int       @id @default(autoincrement())
+  timesheet_id  Int
+  user_id       Int
+  reason        String    @db.Text
+  evidence_url  String?   @db.Text
+  status_code   String?   @default("PENDING") @db.VarChar(50)
+  manager_note  String?   @db.Text
+  reviewer_id   Int?
+  created_at    DateTime? @default(now()) @db.Timestamp(6)
+  updated_at    DateTime? @default(now()) @db.Timestamp(6)
+
+  timesheets timesheets @relation(fields: [timesheet_id], references: [timesheet_id], onDelete: Cascade, onUpdate: NoAction)
+  employees  employees  @relation("CorrectionRequester", fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  reviewer   employees? @relation("CorrectionReviewer", fields: [reviewer_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
 }
