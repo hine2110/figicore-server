@@ -45,6 +45,7 @@ import { KiotVietModule } from './kiotviet/kiotviet.module';
 import { PromotionsModule } from './promotions/promotions.module';
 import { PaymentsModule } from './payments/payments.module';
 import { ReturnsModule } from './returns/returns.module';
+import { PayrollModule } from './payroll/payroll.module';
 
 
 @Module({
@@ -94,7 +95,8 @@ import { ReturnsModule } from './returns/returns.module';
 
     PromotionsModule,
     PaymentsModule,
-    ReturnsModule
+    ReturnsModule,
+    PayrollModule
 
   ],
 

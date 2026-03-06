@@ -145,6 +145,7 @@ model employees {
   work_schedules     work_schedules[]
 
   employee_salary_configs employee_salary_configs[]
+  salary_change_histories salary_change_histories[] @relation("EmployeeSalaryHistory")
   leave_requests          leave_requests[]
   payroll_disputes        payroll_disputes[]
   reviewed_payrolls       payrolls[]                @relation("PayrollReviewer")
@@ -259,48 +260,7 @@ model order_status_history {
   orders             orders    @relation(fields: [order_id], references: [order_id], onDelete: Cascade, onUpdate: NoAction)
 }
 
-model orders {
-  order_id             Int                    @id @default(autoincrement())
-  order_code           String                 @unique @db.VarChar(50)
-  user_id              Int?
-  session_id           Int?
-  created_by_staff_id  Int?
-  shipping_address_id  Int?
-  promotion_id         Int?
-  total_amount         Decimal                @db.Decimal(15, 2)
-  paid_amount          Decimal?               @default(0) @db.Decimal(15, 2)
-  discount_amount      Decimal?               @default(0) @db.Decimal(15, 2)
-  shipping_fee         Decimal?               @default(0) @db.Decimal(15, 2)
-  total_tax            Decimal?               @default(0) @db.Decimal(15, 2)
-  original_shipping_fee Decimal?              @default(0) @db.Decimal(15, 2)
-  payment_deadline     DateTime?              @db.Timestamp(6)
-  channel_code         String                 @db.VarChar(20)
-  payment_method_code  String?                @db.VarChar(20)
-  payment_ref_code     String?                @db.VarChar(50) // NEW: Group Payment Reference
-  status_code          String?                @default("PENDING") @db.VarChar(50)
-  packing_video_urls   Json?
-  packed_at            DateTime?              @db.Timestamp(6)
-  note                 String?
-  is_vat_export        Boolean?               @default(false)
-  vat_tax_number       String?                @db.VarChar(50)
-  vat_company_name     String?                @db.VarChar(255)
-  vat_company_address  String?                @db.VarChar(500)
-  vat_invoice_email    String?                @db.VarChar(100)
-  cash_received        Decimal?               @db.Decimal(15, 2)
-  cash_change          Decimal?               @db.Decimal(15, 2)
-  created_at           DateTime?              @default(now()) @db.Timestamp(6)
-  updated_at           DateTime?              @default(now()) @db.Timestamp(6)
-  deleted_at           DateTime?              @db.Timestamp(6)
-  feedbacks            feedbacks[]
-  order_items          order_items[]
-  order_status_history order_status_history[]
-  employees            employees?             @relation(fields: [created_by_staff_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
-  promotions           promotions?            @relation(fields: [promotion_id], references: [promotion_id], onDelete: NoAction, onUpdate: NoAction)
-  pos_sessions         pos_sessions?          @relation(fields: [session_id], references: [session_id], onDelete: NoAction, onUpdate: NoAction)
-  addresses            addresses?             @relation(fields: [shipping_address_id], references: [address_id], onDelete: NoAction, onUpdate: NoAction)
-  users                users?                 @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
-  return_requests      return_requests[]
-  shipments            shipments?
+model orders {           
   order_id              Int                    @id @default(autoincrement())
   order_code            String                 @unique @db.VarChar(50)
   user_id               Int?
@@ -794,6 +754,7 @@ model users {
   user_login_logs         user_login_logs[]
   user_vouchers           user_vouchers[]
   preorder_contracts      preorder_contracts[]
+  changed_salary_histories salary_change_histories[] @relation("SalaryChanger")
   wallets                 wallets?
 }
 
@@ -904,10 +865,29 @@ model employee_salary_configs {
   name         String    @db.VarChar(255)
   amount       Decimal   @db.Decimal(15, 2)
   is_recurring Boolean?  @default(true)
+  effective_from DateTime? @default(now()) @db.Timestamp(6)
+  effective_to   DateTime? @db.Timestamp(6)
   created_at   DateTime? @default(now()) @db.Timestamp(6)
   updated_at   DateTime? @default(now()) @db.Timestamp(6)
 
   employees employees @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model salary_change_histories {
+  history_id     Int       @id @default(autoincrement())
+  user_id        Int
+  changed_by_id  Int?
+  old_salary     Decimal   @db.Decimal(15, 2)
+  new_salary     Decimal   @db.Decimal(15, 2)
+  effective_date DateTime  @db.Date
+  reason         String?   @db.VarChar(255)
+  note           String?   @db.Text
+  created_at     DateTime? @default(now()) @db.Timestamp(6)
+
+  employees      employees @relation("EmployeeSalaryHistory", fields: [user_id], references: [user_id], onDelete: Cascade, onUpdate: NoAction)
+  users          users?    @relation("SalaryChanger", fields: [changed_by_id], references: [user_id], onDelete: SetNull, onUpdate: NoAction)
+
+  @@index([user_id, effective_date])
 }
 
 model payroll_items {
