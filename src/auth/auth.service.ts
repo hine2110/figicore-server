@@ -321,6 +321,7 @@ export class AuthService {
         password_hash: newHash,
         status_code: 'ACTIVE',
         is_verified: true,
+        ...(data.avatarUrl && { avatar_url: data.avatarUrl }),
       });
 
       return { message: 'Account activated successfully. Please login.' };
@@ -331,5 +332,28 @@ export class AuthService {
       }
       throw error;
     }
+  }
+
+  async updatePassword(userId: number, dto: import('./dto/update-password.dto').UpdatePasswordDto) {
+    const user = await this.usersService.findOne(userId);
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    if (!user.password_hash) {
+      throw new BadRequestException('This account does not have a password set up.');
+    }
+
+    const isMatch = await bcrypt.compare(dto.oldPassword, user.password_hash);
+    if (!isMatch) {
+      throw new UnauthorizedException('Incorrect old password');
+    }
+
+    const newHash = await bcrypt.hash(dto.newPassword, 10);
+    await this.usersService.update(userId, {
+      password_hash: newHash,
+    });
+
+    return { message: 'Password updated successfully' };
   }
 }
