@@ -269,6 +269,16 @@ async function main() {
     await upsertLookup('CORRECTION_STATUS', 'APPROVED', 'Đã duyệt', 2);
     await upsertLookup('CORRECTION_STATUS', 'REJECTED', 'Từ chối', 3);
 
+    // ==========================================
+    // LÝ DO THAY ĐỔI LƯƠNG (SALARY CHANGE REASONS)
+    // ==========================================
+    console.log('--- Seeding Salary Change Reasons ---');
+
+    await upsertLookup('SALARY_CHANGE_REASON', 'ANNUAL_REVIEW', 'Đánh giá định kỳ (Review hàng năm)', 1);
+    await upsertLookup('SALARY_CHANGE_REASON', 'PROMOTION', 'Thăng tiến/Lên cấp', 2);
+    await upsertLookup('SALARY_CHANGE_REASON', 'DEMOTION', 'Giáng chức/Hạ cấp', 3);
+    await upsertLookup('SALARY_CHANGE_REASON', 'CORRECTION', 'Điều chỉnh do sai sót dữ liệu', 4);
+
     console.log('🎉 SEEDING HOÀN TẤT! Hệ thống đã sẵn sàng định danh.');
 }
 
