@@ -25,9 +25,9 @@ export class AuctionsGateway implements OnGatewayConnection, OnGatewayDisconnect
 
     private readonly logger = new Logger(AuctionsGateway.name);
 
-    // Chống Spam và Race Condition
-    private bidLocks: Map<number, boolean> = new Map(); // Khóa phòng đấu giá khi đang xử lý bid
-    private userLastBidTime: Map<string, number> = new Map(); // Lưu thời điểm bid cuối của user {auctionId_userId}
+    // Anti-Spam and Race Condition protection
+    private bidLocks: Map<number, boolean> = new Map(); // Lock room during bid processing
+    private userLastBidTime: Map<string, number> = new Map(); // Store user's last bid time {auctionId_userId}
 
     constructor(
         private prisma: PrismaService,
@@ -71,6 +71,16 @@ export class AuctionsGateway implements OnGatewayConnection, OnGatewayDisconnect
                 status: auction.status_code,
                 endTime: auction.end_time
             });
+
+            // Send chat history
+            const history = await this.auctionsService.getChatHistory(payload.auctionId);
+            client.emit('chat_history', history.map(h => ({
+                id: h.message_id,
+                userId: h.user_id,
+                name: h.users?.full_name || 'Anonymous',
+                text: h.message,
+                timestamp: h.created_at
+            })));
         }
     }
 
@@ -82,16 +92,16 @@ export class AuctionsGateway implements OnGatewayConnection, OnGatewayDisconnect
         const lockKey = payload.auctionId;
         const userRateKey = `${payload.auctionId}_${payload.userId}`;
 
-        // 0A. Rate Limiting: 1 user chỉ được bid 1 lần mỗi 1 giây trong 1 phòng
+        // 0A. Rate Limiting: 1 user can only bid once per second per room
         const lastBidTime = this.userLastBidTime.get(userRateKey);
         if (lastBidTime && Date.now() - lastBidTime < 1000) {
-            client.emit('bid_error', { message: 'Vui lòng chậm lại! Bạn đang thao tác quá nhanh.' });
+            client.emit('bid_error', { message: 'Slow down! You are bidding too fast.' });
             return;
         }
 
-        // 0B. Mutex Lock cục bộ để chống Race Condition (hai người bid cùng mili-giây)
+        // 0B. Local Mutex Lock to prevent Race Conditions
         if (this.bidLocks.get(lockKey)) {
-            client.emit('bid_error', { message: 'Đang có người khác đặt giá. Hãy thử lại.' });
+            client.emit('bid_error', { message: 'Another bid is being processed. Please try again.' });
             return;
         }
 
@@ -106,7 +116,7 @@ export class AuctionsGateway implements OnGatewayConnection, OnGatewayDisconnect
             });
 
             if (!auction || auction.status_code !== 'ACTIVE') {
-                client.emit('bid_error', { message: 'Phiên đấu giá không trong trạng thái hoạt động.' });
+                client.emit('bid_error', { message: 'Auction is not currently active.' });
                 return;
             }
 
@@ -126,7 +136,7 @@ export class AuctionsGateway implements OnGatewayConnection, OnGatewayDisconnect
                 : Number(auction.start_price);
 
             if (payload.bidAmount < currentHighest + Number(auction.step_price)) {
-                client.emit('bid_error', { message: `Giá đặt phải lớn hơn hoặc bằng ${currentHighest + Number(auction.step_price)}` });
+                client.emit('bid_error', { message: `Bid must be at least ${currentHighest + Number(auction.step_price)}` });
                 return;
             }
 
@@ -153,7 +163,7 @@ export class AuctionsGateway implements OnGatewayConnection, OnGatewayDisconnect
                 bidderName: newBid.users?.full_name || `User ***${String(newBid.user_id).slice(-2)}`
             });
 
-            // [Gap 11] Anti-Snipe: nếu bid trong 60s cuối — gia hạn +60s
+            // [Gap 11] Anti-Snipe: if bid in last 60s -> extend +60s
             const now = new Date();
             const secondsLeft = (new Date(auction.end_time).getTime() - now.getTime()) / 1000;
             if (secondsLeft <= 60 && secondsLeft > 0) {
@@ -172,9 +182,9 @@ export class AuctionsGateway implements OnGatewayConnection, OnGatewayDisconnect
 
         } catch (error: any) {
             console.error('Bid Error:', error);
-            client.emit('bid_error', { message: 'Lỗi hệ thống khi xử lý giá đấu. Vui lòng thử lại.' });
+            client.emit('bid_error', { message: 'System error processing bid. Please try again.' });
         } finally {
-            // Giải phóng khóa sau khi kết thúc xử lý (hoặc lỗi)
+            // Release lock after processing (or error)
             this.bidLocks.delete(lockKey);
         }
     }
@@ -204,6 +214,50 @@ export class AuctionsGateway implements OnGatewayConnection, OnGatewayDisconnect
             emoji: payload.emoji,
             timestamp: new Date()
         });
+    }
+
+    @SubscribeMessage('send_reaction')
+    handleSendReaction(
+        @ConnectedSocket() client: Socket,
+        @MessageBody() payload: { auctionId: number; symbol: string },
+    ) {
+        // Broadcast the flying reaction to everyone in the room
+        const roomName = `auction_${payload.auctionId}`;
+        this.server.to(roomName).emit('reaction_received', {
+            symbol: payload.symbol,
+            timestamp: new Date()
+        });
+    }
+
+    @Cron(CronExpression.EVERY_10_SECONDS)
+    async checkUpcomingAuctions() {
+        const upcomingAuctions = await this.prisma.auctions.findMany({
+            where: {
+                status_code: 'UPCOMING',
+                start_time: { lte: new Date() }
+            }
+        });
+
+        for (const auction of upcomingAuctions) {
+            this.logger.log(`Auction #${auction.auction_id} Start Time Reached. Activating...`);
+            try {
+                await this.prisma.auctions.update({
+                    where: { auction_id: auction.auction_id },
+                    data: { status_code: 'ACTIVE' }
+                });
+
+                // Broadcast activation to all clients in the room
+                const roomName = `auction_${auction.auction_id}`;
+                this.server.to(roomName).emit('room_state', {
+                    auctionId: auction.auction_id,
+                    status: 'ACTIVE'
+                });
+
+                this.logger.log(`Auction #${auction.auction_id} is now LIVE.`);
+            } catch (error) {
+                this.logger.error(`Failed to activate Auction #${auction.auction_id}:`, error);
+            }
+        }
     }
 
     @Cron(CronExpression.EVERY_10_SECONDS)
@@ -239,8 +293,8 @@ export class AuctionsGateway implements OnGatewayConnection, OnGatewayDisconnect
         }
     }
 
-    // [Gap 10] Auto-forfeit sau khi hết payment_deadline
-    @Cron('0 */5 * * * *') // Mỗi 5 phút
+    // [Gap 10] Auto-forfeit after payment_deadline expires
+    @Cron('0 */5 * * * *') // Every 5 minutes
     async checkPaymentDeadlines() {
         const overdueAuctions = await this.prisma.auctions.findMany({
             where: {
@@ -264,5 +318,54 @@ export class AuctionsGateway implements OnGatewayConnection, OnGatewayDisconnect
                 this.logger.error(`Auto-forfeit failed for Auction #${auction.auction_id}:`, error);
             }
         }
+    }
+
+    // Real-time Chat: broadcast message to all participants in the auction room
+    @SubscribeMessage('send_chat')
+    async handleSendChat(
+        @ConnectedSocket() client: Socket,
+        @MessageBody() payload: { auctionId: number; userId: number; name: string; text: string },
+    ) {
+        if (!payload.text?.trim() || !payload.auctionId) return;
+
+        // [Total Lockdown Check]
+        const auction = await this.auctionsService.findOne(payload.auctionId);
+        if (!auction || ['COMPLETED', 'FAILED_NO_BUYER', 'CANCELLED'].includes(auction.status_code)) {
+            client.emit('error', { message: 'Chat is disabled for this archived session.' });
+            return;
+        }
+
+        const roomName = `auction_${payload.auctionId}`;
+        
+        // Save to DB first
+        const savedMsg = await this.auctionsService.saveChatMessage(
+            payload.auctionId,
+            payload.userId,
+            payload.text.trim()
+        );
+
+        // Broadcast to everyone in the room including the sender (for cross-tab consistency)
+        this.server.to(roomName).emit('chat_message', {
+            messageId: savedMsg.message_id,
+            userId: payload.userId,
+            name: savedMsg.users?.full_name || 'Anonymous',
+            text: savedMsg.message,
+            timestamp: savedMsg.created_at
+        });
+    }
+
+    @SubscribeMessage('close_auction_room')
+    async handleCloseAuctionRoom(
+        @ConnectedSocket() client: Socket,
+        @MessageBody() payload: { auctionId: number },
+    ) {
+        const roomName = `auction_${payload.auctionId}`;
+        this.logger.log(`Admin requested to close room: ${roomName}`);
+        
+        // 1. Update DB state permanently
+        await this.auctionsService.closeRoom(payload.auctionId);
+
+        // 2. Broadcast closure signal to all clients
+        this.server.to(roomName).emit('room_closed', { message: 'The auction session has been ended by the Admin.' });
     }
 }
