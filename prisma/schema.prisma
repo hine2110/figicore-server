@@ -774,6 +774,7 @@ model users {
   preorder_contracts      preorder_contracts[]
   changed_salary_histories salary_change_histories[] @relation("SalaryChanger")
   wallets                 wallets?
+  auction_chat_messages   auction_chat_messages[]
 }
 
 model wallet_transactions {
@@ -818,6 +819,7 @@ model auctions {
   users            users?           @relation(fields: [winner_id], references: [user_id])
   auction_bids     auction_bids[]
   auction_participants auction_participants[]
+  auction_chat_messages auction_chat_messages[]
 }
 
 // Bảng Quản Lý Những Người Đã Nộp Cọc Vào Chơi
@@ -844,6 +846,17 @@ model auction_bids {
   bid_amount  Decimal  @db.Decimal(15, 2)
   created_at  DateTime @default(now())
 
+  auctions    auctions @relation(fields: [auction_id], references: [auction_id])
+  users       users    @relation(fields: [user_id], references: [user_id])
+}
+
+model auction_chat_messages {
+  message_id  Int      @id @default(autoincrement())
+  auction_id  Int
+  user_id     Int
+  message     String   @db.Text
+  created_at  DateTime @default(now())
+  
   auctions    auctions @relation(fields: [auction_id], references: [auction_id])
   users       users    @relation(fields: [user_id], references: [user_id])
 }

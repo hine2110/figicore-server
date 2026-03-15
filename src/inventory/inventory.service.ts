@@ -227,7 +227,18 @@ export class InventoryService {
     if (search) {
       where.OR = [
         { note: { contains: search, mode: 'insensitive' } },
-        { employees: { users: { full_name: { contains: search, mode: 'insensitive' } } } }
+        { employees: { users: { full_name: { contains: search, mode: 'insensitive' } } } },
+        {
+          inventory_receipt_items: {
+            some: {
+              product_variants: {
+                products: {
+                  name: { contains: search, mode: 'insensitive' }
+                }
+              }
+            }
+          }
+        }
       ];
     }
 

@@ -56,9 +56,33 @@ export class CartService {
         throw new BadRequestException(`Pre-order slots full. Remaining: ${Math.max(0, limit - currentSold)}`);
       }
     } else if (variant.products.type_code === 'BLINDBOX') {
-      // BLINDBOX: Bypass stock check
-      // Logic: Blindbox "stock" is virtual or determined by the pool at Checkout.
-      // We allow adding to cart even if variant.stock_available is 0.
+      // BLINDBOX: Dynamic Stock Check against the Prize Pool
+      const bbConfig = await this.prisma.product_blindboxes.findFirst({
+        where: { product_id: variant.product_id }
+      });
+
+      if (bbConfig) {
+        const aggregation = await this.prisma.product_variants.aggregate({
+          _sum: {
+            stock_available: true,
+            stock_defect: true
+          },
+          where: {
+            products: { type_code: 'RETAIL', status_code: 'ACTIVE' },
+            price: {
+              gte: Number(bbConfig.min_value),
+              lte: Number(bbConfig.max_value)
+            },
+            deleted_at: null
+          }
+        });
+
+        const dynamicStock = (aggregation._sum.stock_available || 0) + (aggregation._sum.stock_defect || 0);
+
+        if (quantity > dynamicStock) {
+          throw new BadRequestException("Rất tiếc, số lượng vật phẩm trong kho báu này đã cạn kiệt.");
+        }
+      }
     } else {
       // Retail Validation: Check Physical Stock
       if (variant.stock_available < quantity) {
@@ -139,6 +163,26 @@ export class CartService {
 
         if (quantity > availableSlots) {
           throw new BadRequestException(`Cannot add ${quantity} more. Remaining slots: ${availableSlots}`);
+        }
+      } else if (variant.products.type_code === 'BLINDBOX') {
+        const bbConfig = await this.prisma.product_blindboxes.findFirst({
+          where: { product_id: variant.product_id }
+        });
+
+        if (bbConfig) {
+          const aggregation = await this.prisma.product_variants.aggregate({
+            _sum: { stock_available: true, stock_defect: true },
+            where: {
+              products: { type_code: 'RETAIL', status_code: 'ACTIVE' },
+              price: { gte: Number(bbConfig.min_value), lte: Number(bbConfig.max_value) },
+              deleted_at: null
+            }
+          });
+          const dynamicStock = (aggregation._sum.stock_available || 0) + (aggregation._sum.stock_defect || 0);
+
+          if (newQuantity > dynamicStock) {
+            throw new BadRequestException(`Rất tiếc, kho báu chỉ còn tổng cộng ${dynamicStock} sản phẩm. Giỏ hàng của bạn đang có ${existingItem.quantity}.`);
+          }
         }
       } else {
         if (variant.stock_available < newQuantity) {
@@ -307,10 +351,29 @@ export class CartService {
 
     if (!item || item.cart_id !== cart.cart_id) throw new NotFoundException('Item not found');
 
-    // Bypass check for Blindbox
     const isBlindbox = item.product_variants.products.type_code === 'BLINDBOX';
 
-    if (!isBlindbox && item.product_variants.stock_available < quantity) {
+    if (isBlindbox) {
+      const bbConfig = await this.prisma.product_blindboxes.findFirst({
+        where: { product_id: item.product_variants.product_id }
+      });
+
+      if (bbConfig) {
+        const aggregation = await this.prisma.product_variants.aggregate({
+          _sum: { stock_available: true, stock_defect: true },
+          where: {
+            products: { type_code: 'RETAIL', status_code: 'ACTIVE' },
+            price: { gte: Number(bbConfig.min_value), lte: Number(bbConfig.max_value) },
+            deleted_at: null
+          }
+        });
+        const dynamicStock = (aggregation._sum.stock_available || 0) + (aggregation._sum.stock_defect || 0);
+
+        if (quantity > dynamicStock) {
+          throw new BadRequestException(`Rất tiếc, chỉ còn ${dynamicStock} sản phẩm trong kho báu.`);
+        }
+      }
+    } else if (item.product_variants.stock_available < quantity) {
       throw new BadRequestException(`Insufficient stock. Max: ${item.product_variants.stock_available}`);
     }
 

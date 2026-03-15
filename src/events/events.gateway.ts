@@ -66,4 +66,12 @@ export class EventsGateway
         this.server.emit(`customer:notify:${userId}`, { title, content });
         this.logger.log(`🔔 Emitted customer:notify:${userId}`);
     }
+
+    /**
+     * Bắn một sự kiện chung với payload tới một user cụ thể (Dùng cho Notification System)
+     */
+    notifyUser(userId: number, eventName: string, payload: any) {
+        this.server.emit(`user:${userId}:${eventName}`, payload);
+        this.logger.log(`🔔 Emitted user:${userId}:${eventName}`);
+    }
 }
