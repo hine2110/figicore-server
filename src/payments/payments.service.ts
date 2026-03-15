@@ -41,6 +41,7 @@ export class PaymentsService {
         const extractedRef = match[1];
         const isGroupRef = extractedRef.toUpperCase().startsWith('PAY');
         const isTopUpRef = extractedRef.toUpperCase().startsWith('TU');
+        const isPosRef = extractedRef.toUpperCase().startsWith('POS');
 
         try {
             return await this.prisma.$transaction(async (tx) => {
@@ -119,6 +120,78 @@ export class PaymentsService {
                     this.eventsGateway.notifyPaymentSuccess(extractedRef);
 
                     return { success: true, message: 'Top-up processed successfully' };
+                }
+
+                // POS QR PAYMENT FLOW
+                // ----------------------------------------------------
+                if (isPosRef) {
+                    // SePay strips dashes from transfer content.
+                    // e.g. "FIGI POS-20260305-3355" → "FIGI POS202603053355"
+                    // So we normalize both sides (remove dashes) before matching.
+                    const normalizedExtracted = extractedRef.replace(/-/g, '').toUpperCase(); // "POS202603053355"
+
+                    // Fetch recent POS orders in PENDING_PAYMENT status and normalize to find match
+                    const recentPosOrders = await tx.orders.findMany({
+                        where: { channel_code: 'POS', status_code: 'PENDING_PAYMENT', deleted_at: null },
+                        include: { order_items: true },
+                        orderBy: { created_at: 'desc' },
+                        take: 50,
+                    });
+
+                    const posOrder = recentPosOrders.find(o =>
+                        o.payment_ref_code && o.payment_ref_code.replace(/-/g, '').toUpperCase() === normalizedExtracted
+                    );
+
+                    if (!posOrder) {
+                        this.logger.warn(`POS Order with ref ${extractedRef} (normalized: ${normalizedExtracted}) not found.`);
+                        return { success: false, message: 'POS Order not found' };
+                    }
+
+                    if (posOrder.status_code === 'COMPLETED') {
+                        this.logger.log(`POS Order ref ${posOrder.payment_ref_code!} already completed.`);
+                        this.eventsGateway.notifyPaymentSuccess(posOrder.payment_ref_code!);
+                        return { success: true, message: 'Already completed' };
+                    }
+
+                    // Save transaction record
+                    await tx.payment_transactions.create({
+                        data: {
+                            sepay_id: sepayId,
+                            order_id: posOrder.order_id,
+                            amount: amount,
+                            transaction_content: content,
+                            reference_number: referenceNumber,
+                            bank_brand_name: bankBrandName,
+                            account_number: data.accountNumber,
+                            transaction_date: data.transactionDate ? new Date(data.transactionDate) : new Date(),
+                        },
+                    });
+
+                    // Update POS order to COMPLETED
+                    await tx.orders.update({
+                        where: { order_id: posOrder.order_id },
+                        data: {
+                            status_code: 'COMPLETED',
+                            paid_amount: posOrder.total_amount,
+                            payment_method_code: 'VIETQR',
+                        },
+                    });
+
+                    await tx.order_status_history.create({
+                        data: {
+                            order_id: posOrder.order_id,
+                            previous_status: posOrder.status_code,
+                            new_status: 'COMPLETED',
+                            note: `Thanh toán QR POS thành công. Ref: ${extractedRef}`,
+                        }
+                    });
+
+                    this.logger.log(`POS Order ${posOrder.order_id} (ref: ${posOrder.payment_ref_code!}) marked as COMPLETED.`);
+
+                    // Notify frontend to close QR modal (use original ref from DB, not stripped SePay ref)
+                    this.eventsGateway.notifyPaymentSuccess(posOrder.payment_ref_code!);
+
+                    return { success: true, message: 'POS QR payment processed successfully' };
                 }
 
                 // ----------------------------------------------------
@@ -206,6 +279,20 @@ export class PaymentsService {
                                     where: { contract_id: contract.contract_id },
                                     data: { status_code: 'COMPLETED' }
                                 });
+                            }
+                        }
+
+                        // --- NEW: Sync Auction Status on Webhook Success ---
+                        if (order.order_code && order.order_code.startsWith('AUC-')) {
+                            try {
+                                const auctionId = parseInt(order.order_code.split('-')[1], 10);
+                                await tx.auctions.update({
+                                    where: { auction_id: auctionId },
+                                    data: { status_code: 'COMPLETED' }
+                                });
+                                this.logger.log(`Synced Auction #${auctionId} to COMPLETED via SePay webhook`);
+                            } catch (err) {
+                                this.logger.error(`Failed to sync auction status for order ${order.order_code} via webhook:`, err);
                             }
                         }
 
