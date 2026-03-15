@@ -225,4 +225,72 @@ export class MailService {
       console.error(`[MailService] Failed to send pre-order arrival email to ${email}`, error);
     }
   }
+
+  async sendAuctionWinEmail(user: any, auctionId: number, productName: string, paymentLink: string, amount: number) {
+    try {
+      await this.mailerService.sendMail({
+        to: user.email,
+        subject: `Congratulations! You won Auction #${auctionId} - FigiCore`,
+        html: `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #eaeaea; border-radius: 8px; overflow: hidden;">
+                <div style="background-color: #f59e0b; padding: 20px; text-align: center;">
+                    <h2 style="color: white; margin: 0;">You Won the Auction!</h2>
+                </div>
+                <div style="padding: 30px;">
+                    <p>Hello <strong>${user.full_name}</strong>,</p>
+                    <p>Congratulations on winning the auction for <strong>${productName}</strong>!</p>
+                    <p>Total amount due (excluding shipping): <strong style="color: #ef4444; font-size: 18px;">${this.formatCurrency(amount)}</strong></p>
+                    <p>Please complete your payment within <strong>24 hours</strong> to secure your purchase. After this deadline, your deposit will be forfeited and the purchase right will pass to the next highest bidder.</p>
+                    
+                    <div style="text-align: center; margin: 40px 0;">
+                        <a href="${paymentLink}" 
+                           style="background-color: #000; color: white; padding: 14px 40px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 16px;">
+                           Pay Now
+                        </a>
+                    </div>
+                    
+                    <p style="color: #666; font-size: 14px;">Best regards,<br>The FigiCore Team</p>
+                </div>
+            </div>
+        `
+      });
+      console.log(`[MailService] Auction win email sent to ${user.email}`);
+    } catch (error) {
+      console.error(`[MailService] Failed to send auction win email to ${user.email}`, error);
+    }
+  }
+
+  async sendAuctionStandbyWinEmail(user: any, auctionId: number, productName: string, paymentLink: string, amount: number) {
+    try {
+      await this.mailerService.sendMail({
+        to: user.email,
+        subject: `Lucky You: Your Purchase Right for Auction #${auctionId} is Now Available! - FigiCore`,
+        html: `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #eaeaea; border-radius: 8px; overflow: hidden;">
+                <div style="background-color: #3b82f6; padding: 20px; text-align: center;">
+                    <h2 style="color: white; margin: 0;">Fortune Smiles Upon You!</h2>
+                </div>
+                <div style="padding: 30px;">
+                    <p>Hello <strong>${user.full_name}</strong>,</p>
+                    <p>In the auction for <strong>${productName}</strong> that you participated in, the initial winner has declined their purchase right or failed to pay on time.</p>
+                    <p>Per our auction rules, the purchase right has been transferred to you at your highest bid price of: <strong style="color: #ef4444; font-size: 18px;">${this.formatCurrency(amount)}</strong></p>
+                    <p>Please complete your payment within <strong>24 hours</strong> to add this exclusive item to your collection.</p>
+                    
+                    <div style="text-align: center; margin: 40px 0;">
+                        <a href="${paymentLink}" 
+                           style="background-color: #000; color: white; padding: 14px 40px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 16px;">
+                           Pay Now
+                        </a>
+                    </div>
+                    
+                    <p style="color: #666; font-size: 14px;">Best regards,<br>The FigiCore Team</p>
+                </div>
+            </div>
+        `
+      });
+      console.log(`[MailService] Auction standby win email sent to ${user.email}`);
+    } catch (error) {
+      console.error(`[MailService] Failed to send auction standby win email to ${user.email}`, error);
+    }
+  }
 }

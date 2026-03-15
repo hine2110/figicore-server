@@ -3,6 +3,8 @@ import { CreateAuctionDto } from './dto/create-auction.dto';
 import { UpdateAuctionDto } from './dto/update-auction.dto';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuctionsGateway } from './auctions.gateway';
+import { NotificationsService } from '../notifications/notifications.service';
+import { MailService } from '../mail/mail.service';
 
 @Injectable()
 export class AuctionsService {
@@ -10,7 +12,9 @@ export class AuctionsService {
 
   constructor(
     private prisma: PrismaService,
-    @Inject(forwardRef(() => AuctionsGateway)) private auctionsGateway: AuctionsGateway
+    @Inject(forwardRef(() => AuctionsGateway)) private auctionsGateway: AuctionsGateway,
+    private notificationsService: NotificationsService,
+    private mailService: MailService
   ) { }
 
   async create(createAuctionDto: CreateAuctionDto) {
@@ -180,7 +184,7 @@ export class AuctionsService {
     }
 
     // 4. Proceed with Transaction: Check Wallet -> Deduct -> Lock -> Create Participant
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       const wallet = await tx.wallets.findUnique({
         where: { user_id: userId }
       });
@@ -220,6 +224,14 @@ export class AuctionsService {
           user_id: userId,
           deposit_amount: auction.deposit_fee,
           status: 'JOINED' // JOINED
+        },
+        include: {
+          users: {
+            select: {
+              full_name: true,
+              email: true
+            }
+          }
         }
       });
 
@@ -230,6 +242,16 @@ export class AuctionsService {
         newBalance: updatedWallet.balance_available
       };
     });
+
+    // 5. Broadcast participation update via Socket
+    const roomName = `auction_${auctionId}`;
+    this.auctionsGateway.server.to(roomName).emit('participation_updated', {
+      userId: userId,
+      isJoined: true,
+      participant: result.participant
+    });
+
+    return result;
   }
 
   async getMyStatus(auctionId: number, userId: number) {
@@ -268,17 +290,17 @@ export class AuctionsService {
       throw new NotFoundException('Auction not found');
     }
 
-    if (auction.status_code !== 'AWAITING_PAYMENT') {
-      throw new BadRequestException('Auction is not in AWAITING_PAYMENT state');
+    if (!['AWAITING_PAYMENT', 'COMPLETED'].includes(auction.status_code)) {
+      throw new BadRequestException('Auction is not in a valid state for payment');
     }
 
     const participant = auction.auction_participants[0];
-    // [Gap 4] Chỉ WINNER mới được checkout, STANDBY_WINNER đã được hoàn cọc rồi
+    // [Gap 4] Only WINNER can checkout, STANDBY_WINNER was already refunded
     if (!participant || participant.status !== 'WINNER') {
-      throw new BadRequestException('Bạn không có quyền thanh toán cho phiên đấu giá này');
+      throw new BadRequestException('You are not authorized to pay for this auction');
     }
 
-    // [Gap 4] Giá thắng = highest bid của chính winner
+    // [Gap 4] Winner price = winner's highest bid
     const winnerTopBid = auction.auction_bids.length > 0
       ? Number(auction.auction_bids[0].bid_amount)
       : Number(auction.final_price ?? auction.start_price);
@@ -286,12 +308,12 @@ export class AuctionsService {
     const depositAmount = Number(participant.deposit_amount);
     const shippingFeeAmount = Number(shippingFee) || 0;
 
-    // Công thức: phại trả = giá bid - tiền cọc đã khóa + phí ship
+    // Formula: payable = bid - locked deposit + ship
     const remainingBalance = winnerTopBid - depositAmount + shippingFeeAmount;
     const totalOrderAmount = winnerTopBid + shippingFeeAmount;
 
     if (remainingBalance < 0) {
-      throw new BadRequestException('Tính toán lỗi: Tiền cọc vượt quá giá bid');
+      throw new BadRequestException('Calculation error: Deposit exceeds bid amount');
     }
 
     return this.prisma.$transaction(async (tx) => {
@@ -299,10 +321,10 @@ export class AuctionsService {
       if (!wallet) throw new BadRequestException('Wallet not found for this user');
 
       if (Number(wallet.balance_available) < remainingBalance) {
-        throw new BadRequestException('Số dư ví không đủ, vui lòng nạp thêm tiền');
+        throw new BadRequestException('Insufficient wallet balance, please top up');
       }
 
-      // Trừ số tiền còn lại (bid - deposit + ship) và unlock deposit
+      // Deduct remaining balance (bid - deposit + ship) and unlock deposit
       await tx.wallets.update({
         where: { wallet_id: wallet.wallet_id },
         data: {
@@ -311,7 +333,7 @@ export class AuctionsService {
         }
       });
 
-      // Log: Phần tiền còn lại (bao gồm ship)
+      // Log: Remaining balance (including shipping)
       if (remainingBalance > 0) {
         await tx.wallet_transactions.create({
           data: {
@@ -319,19 +341,19 @@ export class AuctionsService {
             type_code: 'PAYMENT',
             amount: -remainingBalance,
             reference_code: `AUC_PAY_${auctionId}`,
-            description: `Thanh toán đấu giá #${auctionId}: bid=${winnerTopBid}, ship=${shippingFeeAmount}, đã cỌ=${depositAmount}`
+            description: `Payment for auction #${auctionId}: bid=${winnerTopBid}, ship=${shippingFeeAmount}, deposit applied=${depositAmount}`
           }
         });
       }
 
-      // Log: Tiền cọc được dùng làm thanh toán một phần
+      // Log: Deposit applied as partial payment
       await tx.wallet_transactions.create({
         data: {
           wallet_id: wallet.wallet_id,
           type_code: 'DEPOSIT_CONSUMED',
           amount: -depositAmount,
           reference_code: `AUC_DEP_CONS_${auctionId}`,
-          description: `Tiền cọc dùng thanh toán Auction #${auctionId}`
+          description: `Deposit applied to Auction #${auctionId} payment`
         }
       });
 
@@ -347,7 +369,7 @@ export class AuctionsService {
           channel_code: 'AUCTION',
           payment_method_code: 'WALLET',
           status_code: 'PROCESSING',
-          note: `Thắng Auction #${auctionId} với giá ${winnerTopBid}`,
+          note: `Won Auction #${auctionId} at price ${winnerTopBid}`,
           order_items: {
             create: {
               variant_id: auction.variant_id,
@@ -362,13 +384,13 @@ export class AuctionsService {
         }
       });
 
-      // Cập nhật participant đã thanh toán xong
+      // Update participant as paid
       await tx.auction_participants.update({
         where: { auction_id_user_id: { auction_id: auctionId, user_id: userId } },
         data: { status: 'COMPLETED_PAYMENT' }
       });
 
-      // Đánh dấu auction COMPLETED
+      // Mark auction as COMPLETED
       await tx.auctions.update({
         where: { auction_id: auctionId },
         data: { status_code: 'COMPLETED' }
@@ -376,7 +398,7 @@ export class AuctionsService {
 
       return {
         success: true,
-        message: 'Thanh toán thành công',
+        message: 'Payment success',
         order: newOrder,
         breakdown: {
           winningBid: winnerTopBid,
@@ -450,6 +472,25 @@ export class AuctionsService {
     });
   }
 
+  async closeRoom(auctionId: number) {
+    const auction = await this.prisma.auctions.findUnique({
+      where: { auction_id: auctionId }
+    });
+
+    if (!auction) throw new NotFoundException('Auction not found');
+
+    // If already COMPLETED or CANCELLED, do nothing
+    if (['COMPLETED', 'CANCELLED'].includes(auction.status_code)) {
+      return auction;
+    }
+
+    // Explicitly transition to COMPLETED when room is closed
+    return this.prisma.auctions.update({
+      where: { auction_id: auctionId },
+      data: { status_code: 'COMPLETED' }
+    });
+  }
+
   async endAuction(auctionId: number) {
     const auction = await this.prisma.auctions.findUnique({
       where: { auction_id: auctionId },
@@ -477,7 +518,7 @@ export class AuctionsService {
       const updatedAuction = await tx.auctions.update({
         where: { auction_id: auctionId },
         data: {
-          // If no bids at all → FAILED_NO_BUYER, otherwise wait for winner to pay
+          // If no bids at all -> FAILED_NO_BUYER, otherwise wait for winner to pay
           status_code: winnerId ? 'AWAITING_PAYMENT' : 'FAILED_NO_BUYER',
           winner_id: winnerId,
           final_price: winnerId && auction.auction_bids.length > 0
@@ -526,6 +567,7 @@ export class AuctionsService {
                 user_id: p.user_id,
                 order_code: orderCode,
                 total_amount: Math.max(0, remainingPayable),
+                paid_amount: p.deposit_amount,
                 shipping_fee: shippingFee,
                 original_shipping_fee: shippingFee,
                 payment_ref_code: paymentRefCode,
@@ -628,6 +670,37 @@ export class AuctionsService {
     });
   }
 
+  async extendTime(auctionId: number, seconds: number) {
+    const auction = await this.prisma.auctions.findUnique({
+      where: { auction_id: auctionId },
+    });
+
+    if (!auction) throw new NotFoundException('Auction not found');
+    if (auction.status_code !== 'ACTIVE') {
+      throw new BadRequestException('Can only extend time for ACTIVE auctions');
+    }
+
+    const newEndTime = new Date(auction.end_time.getTime() + seconds * 1000);
+
+    const updatedAuction = await this.prisma.auctions.update({
+      where: { auction_id: auctionId },
+      data: { end_time: newEndTime },
+    });
+
+    // Notify all participants about the time extension via Socket.io
+    this.auctionsGateway.server.to(`auction_${auctionId}`).emit('end_time_extended', {
+      auctionId,
+      newEndTime,
+      message: `Auction time has been extended by ${seconds} seconds!`,
+    });
+
+    return {
+      success: true,
+      message: `Auction time extended by ${seconds} seconds`,
+      newEndTime,
+    };
+  }
+
   async checkExpiredAuctions() {
     const expiredAuctions = await this.prisma.auctions.findMany({
       where: {
@@ -661,16 +734,16 @@ export class AuctionsService {
 
     if (!auction) throw new NotFoundException('Auction not found');
     if (auction.status_code !== 'AWAITING_PAYMENT') {
-      throw new BadRequestException('Chỉ có thể forfeit auction ở trạng thái AWAITING_PAYMENT');
+      throw new BadRequestException('Can only forfeit an auction in AWAITING_PAYMENT state');
     }
 
     return this.prisma.$transaction(async (tx) => {
       const winner = auction.auction_participants.find(p => p.status === 'WINNER');
       if (!winner) {
-        throw new BadRequestException('Không tìm thấy winner để forfeit');
+        throw new BadRequestException('No active winner found for this auction');
       }
 
-      // 1. Slash (tịch thu) tiền cọc của Top 1 — PENALTY
+      // 1. Slash (confiscate) Top 1 deposit - PENALTY
       const winnerWallet = await tx.wallets.findUnique({ where: { user_id: winner.user_id } });
       if (winnerWallet) {
         await tx.wallets.update({
@@ -683,12 +756,12 @@ export class AuctionsService {
             type_code: 'PENALTY_FORFEIT',
             amount: -winner.deposit_amount,
             reference_code: `FORFEIT_${auctionId}`,
-            description: `Tiền cọc bị tịch thu do không thanh toán Auction #${auctionId}`
+            description: `Deposit confiscated: failed to pay within deadline for Auction #${auctionId}`
           }
         });
       }
 
-      // 1.5 Cập nhật / Hủy Order của Top 1 đã tạo trước đó
+      // 1.5 Update / Cancel previous Top 1 Order
       const winnerOrder = await tx.orders.findFirst({
         where: { order_code: { startsWith: `AUC-${auctionId}-` }, user_id: winner.user_id, status_code: 'PENDING_PAYMENT' }
       });
@@ -697,31 +770,31 @@ export class AuctionsService {
           where: { order_id: winnerOrder.order_id },
           data: { status_code: 'CANCELLED' }
         });
-        // Hoàn kho
+        // Restore product stock
         await tx.product_variants.update({
           where: { variant_id: auction.variant_id },
           data: { stock_available: { increment: 1 } }
         });
       }
 
-      // 2. Đánh dấu Top 1 là FORFEITED
+      // 2. Mark Top 1 as FORFEITED
       await tx.auction_participants.update({
         where: { auction_id_user_id: { auction_id: auctionId, user_id: winner.user_id } },
         data: { status: 'FORFEITED' }
       });
 
-      // 3. [Gap 7] Tìm top 2 (STANDBY_WINNER) và tạo Order mới cho họ
+      // 3. Find Top 2 (STANDBY_WINNER) and create a new order for them
       const standby = auction.auction_participants.find(p => p.status === 'STANDBY_WINNER');
       let newWinnerId: number | null = null;
-      const productName = auction.product_variants?.products?.name || `Sản phẩm #${auction.variant_id}`;
+      const productName = auction.product_variants?.products?.name || `Product #${auction.variant_id}`;
       const newPaymentDeadline = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
       if (standby) {
-        // Tìm giá bid cao nhất của standby (giá của chính top 2 đặt ra)
+        // Find the highest bid from standby (their own bid price)
         const standbyTopBid = auction.auction_bids.find(b => b.user_id === standby.user_id);
         const standbyPrice = standbyTopBid ? Number(standbyTopBid.bid_amount) : 0;
 
-        // Promote standby lên WINNER
+        // Promote standby to WINNER
         await tx.auction_participants.update({
           where: { auction_id_user_id: { auction_id: auctionId, user_id: standby.user_id } },
           data: { status: 'WINNER' }
@@ -743,6 +816,7 @@ export class AuctionsService {
             user_id: standby.user_id,
             order_code: orderCode,
             total_amount: Math.max(0, remainingPayable),
+            paid_amount: 0,
             shipping_fee: shippingFee,
             original_shipping_fee: shippingFee,
             payment_ref_code: paymentRefCode,
@@ -769,23 +843,31 @@ export class AuctionsService {
           }
         });
 
-        // Trừ kho lại cho hóa đơn của Standby
+        // Restore stock for standby order
         await tx.product_variants.update({
           where: { variant_id: auction.variant_id },
           data: { stock_available: { decrement: 1 } }
         });
 
-        // [Gap 7] Gửi notification cho top 2 với giá của chính họ
-        await tx.notifications.create({
-          data: {
-            user_id: standby.user_id,
-            title: `✨ Cơ hội mua ${productName}!`,
-            content: `Người thắng trước đã không thanh toán. Bạn có thể mua VỚI GIÁ CỦA BẠN: ${standbyPrice.toLocaleString('vi-VN')}₫. Hệ thống đã tạo đơn hàng tự động, bạn có thể thanh toán hoặc Hủy trong 24h.`,
-          }
-        });
+        // Notify Top 2 with their own bid price
+        const paymentLink = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/customer/cart`;
+        
+        await this.mailService.sendAuctionStandbyWinEmail(
+          standby.users,
+          auctionId,
+          productName,
+          paymentLink,
+          Number(remainingPayable)
+        );
+
+        await this.notificationsService.create(
+          standby.user_id,
+          `Purchase Opportunity: ${productName}!`,
+          `The previous auction winner failed to pay within the deadline. An order has been auto-created for you at your highest bid price of ${standbyPrice.toLocaleString('en-US')} VND. You have 24 hours to complete payment or cancel the order.`
+        );
       }
 
-      // 4. Cập nhật auction — nếu có standby thì tiếp tục AWAITING_PAYMENT với deadline mới
+      // 4. Update auction - continue with AWAITING_PAYMENT if standby exists, otherwise FAILED_NO_BUYER
       const updatedAuction = await tx.auctions.update({
         where: { auction_id: auctionId },
         data: {
@@ -798,8 +880,8 @@ export class AuctionsService {
       return {
         success: true,
         message: standby
-          ? `Top 1 bị forfeit. Top 2 được thông báo mua theo giá của họ.`
-          : 'Top 1 bị forfeit. Không có standby, auction kết thúc.',
+          ? `Top 1 forfeited. Top 2 notified to purchase at their bid price.`
+          : 'Top 1 forfeited. No standby available, auction concluded.',
         auction: updatedAuction,
         newWinnerId
       };
@@ -830,10 +912,10 @@ export class AuctionsService {
         throw new BadRequestException('User is not the active winner of this auction');
       }
 
-      // 1. Tịch thu tiền cọc (PENALTY_FORFEIT)
+      // 1. Confiscate deposit (PENALTY_FORFEIT)
       const winnerWallet = await tx.wallets.findUnique({ where: { user_id: winner.user_id } });
       if (winnerWallet) {
-        // Tùy theo logic kế toán, có thể trừ tiếp hoặc không, nhưng logic cũ trong forfeitWinner là trừ tiếp balance_locked
+        // Deduct from locked balance
         await tx.wallets.update({
           where: { wallet_id: winnerWallet.wallet_id },
           data: { balance_locked: { decrement: winner.deposit_amount } }
@@ -844,12 +926,12 @@ export class AuctionsService {
             type_code: 'PENALTY_FORFEIT',
             amount: -winner.deposit_amount,
             reference_code: `FORFEIT_${auctionId}_MANUAL`,
-            description: `Tiền cọc bị tịch thu do hủy đơn thanh toán Auction #${auctionId}`
+            description: `Deposit forfeited due to payment cancellation for Auction #${auctionId}`
           }
         });
       }
 
-      // Đơn hàng của Top 1 đã được status CANCELLED ở OrdersService nên không cần hủy ở đây
+      // Top 1 Order already marked CANCELLED in OrdersService
 
       // 2. Mark Top 1 as FORFEITED
       await tx.auction_participants.update({
@@ -860,7 +942,7 @@ export class AuctionsService {
       // 3. Promote Top 2 (Standby)
       const standby = auction.auction_participants.find(p => p.status === 'STANDBY_WINNER');
       let newWinnerId: number | null = null;
-      const productName = auction.product_variants?.products?.name || `Sản phẩm #${auction.variant_id}`;
+      const productName = auction.product_variants?.products?.name || `Product #${auction.variant_id}`;
       const newPaymentDeadline = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
       if (standby) {
@@ -887,6 +969,7 @@ export class AuctionsService {
             user_id: standby.user_id,
             order_code: orderCode,
             total_amount: Math.max(0, remainingPayable),
+            paid_amount: 0,
             shipping_fee: shippingFee,
             original_shipping_fee: shippingFee,
             payment_ref_code: paymentRefCode,
@@ -912,13 +995,21 @@ export class AuctionsService {
         });
 
         // Notifications
-        await tx.notifications.create({
-          data: {
-            user_id: standby.user_id,
-            title: `✨ Cơ hội mua ${productName}!`,
-            content: `Người thắng trước đã hủy đơn hàng. Bạn có thể mua VỚI GIÁ CỦA BẠN: ${standbyPrice.toLocaleString('vi-VN')}₫. Hệ thống đã tạo đơn hàng tự động, bạn có thể thanh toán hoặc Hủy trong 24h.`,
-          }
-        });
+        const paymentLink = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/customer/cart`;
+        
+        await this.mailService.sendAuctionStandbyWinEmail(
+          standby.users,
+          auctionId,
+          productName,
+          paymentLink,
+          Number(remainingPayable)
+        );
+
+        await this.notificationsService.create(
+          standby.user_id,
+          `Purchase Opportunity: ${productName}!`,
+          `The previous auction winner has cancelled their order. An order has been auto-created for you at your highest bid price of ${standbyPrice.toLocaleString('en-US')} VND. You have 24 hours to complete payment or cancel the order.`
+        );
       }
 
       await tx.auctions.update({
@@ -945,7 +1036,7 @@ export class AuctionsService {
     });
   }
 
-  // [Gap 6] Top 2 từ chối mua sau khi được promote
+  // [Gap 6] Top 2 declines purchase after promotion
   async declineByStandby(auctionId: number, userId: number) {
     const auction = await this.prisma.auctions.findUnique({
       where: { auction_id: auctionId },
@@ -956,22 +1047,22 @@ export class AuctionsService {
 
     if (!auction) throw new NotFoundException('Auction not found');
     if (auction.status_code !== 'AWAITING_PAYMENT') {
-      throw new BadRequestException('Auction không ở trạng thái chờ thanh toán');
+      throw new BadRequestException('Auction is not awaiting payment');
     }
 
     const participant = auction.auction_participants[0];
     if (!participant || participant.status !== 'WINNER') {
-      throw new BadRequestException('Bạn không phải người được mời mua hoặc đã từ chối trước đó');
+      throw new BadRequestException('You are not the invited buyer or have already declined');
     }
 
-    // Top 2 từ chối: họ đã được hoàn cọc từ trước (bước endAuction) nên không cần hoàn lại
+    // Top 2 declined: they were already refunded during endAuction
     return this.prisma.$transaction(async (tx) => {
       await tx.auction_participants.update({
         where: { auction_id_user_id: { auction_id: auctionId, user_id: userId } },
         data: { status: 'DECLINED' }
       });
 
-      // 1.5 Cập nhật / Hủy Order đã tạo cho Top 2
+      // 1.5 Update / Cancel Order created for Top 2
       const standbyOrder = await tx.orders.findFirst({
         where: { order_code: { startsWith: `AUC-${auctionId}-` }, user_id: userId, status_code: 'PENDING_PAYMENT' }
       });
@@ -980,14 +1071,14 @@ export class AuctionsService {
           where: { order_id: standbyOrder.order_id },
           data: { status_code: 'CANCELLED' }
         });
-        // Hoàn kho
+        // Restock inventory
         await tx.product_variants.update({
           where: { variant_id: auction.variant_id },
           data: { stock_available: { increment: 1 } }
         });
       }
 
-      // Auction kết thúc hẳn — không có người mua
+      // Auction concluded - no buyer secured
       const updatedAuction = await tx.auctions.update({
         where: { auction_id: auctionId },
         data: {
@@ -999,7 +1090,7 @@ export class AuctionsService {
 
       return {
         success: true,
-        message: 'Bạn đã từ chối. Phiên đấu giá kết thúc.',
+        message: 'You have declined. The auction is concluded.',
         auction: updatedAuction
       };
     });
@@ -1105,6 +1196,42 @@ export class AuctionsService {
         message: 'Auction cancelled. All active deposits refunded and status reset to DRAFT.',
         auction: updatedAuction
       };
+    });
+  }
+
+  async saveChatMessage(auctionId: number, userId: number, message: string) {
+    return this.prisma.auction_chat_messages.create({
+      data: {
+        auction_id: auctionId,
+        user_id: userId,
+        message: message
+      },
+      include: {
+        users: {
+          select: {
+            full_name: true
+          }
+        }
+      }
+    });
+  }
+
+  async getChatHistory(auctionId: number) {
+    return this.prisma.auction_chat_messages.findMany({
+      where: {
+        auction_id: auctionId
+      },
+      include: {
+        users: {
+          select: {
+            full_name: true
+          }
+        }
+      },
+      orderBy: {
+        created_at: 'asc'
+      },
+      take: 100 // Limit history to last 100 messages
     });
   }
 }

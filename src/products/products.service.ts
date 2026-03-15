@@ -290,7 +290,7 @@ export class ProductsService {
             option_name: 'Blindbox Ticket',
             price: price,
             media_assets: JSON.stringify([]),
-            stock_available: 999999,
+            stock_available: 0,
             stock_defect: 0,
             weight_g: 200, length_cm: 10, width_cm: 10, height_cm: 10
           }
@@ -310,7 +310,9 @@ export class ProductsService {
             price: blindbox.price,
             min_value: blindbox.min_value_allow,
             max_value: blindbox.max_value_allow,
-            tier_config: JSON.stringify(tiers) as any
+            tier_config: JSON.stringify(tiers) as any,
+            start_time: blindbox.start_time ? new Date(blindbox.start_time) : null,
+            end_time: blindbox.end_time ? new Date(blindbox.end_time) : null
           }
         });
       }
@@ -479,8 +481,9 @@ export class ProductsService {
       orderBy
     });
 
-    // [NEW] Apply Dynamic Pricing Logic
-    return products.map(product => this.calculatePromotionalPrice(product));
+    // [NEW] Apply Dynamic Pricing & Dynamic Blindbox Stock
+    const results = await Promise.all(products.map(product => this.enrichProductData(product)));
+    return results;
   }
 
   /**
@@ -726,8 +729,80 @@ export class ProductsService {
     });
     if (!product) throw new BadRequestException('Product not found');
 
-    // [NEW] Apply Dynamic Pricing Logic
-    return this.calculatePromotionalPrice(product);
+    // [NEW] Apply Dynamic Pricing & Dynamic Blindbox Stock
+    return this.enrichProductData(product);
+  }
+
+  // [NEW] Helper: Enrichment for Pricing & Blindbox Stock
+  private async enrichProductData(product: any) {
+    // 1. Calculate Promotional Price
+    product = this.calculatePromotionalPrice(product);
+
+    // 2. Calculate Dynamic Blindbox Stock if applicable
+    if (product.type_code === 'BLINDBOX' && product.product_blindboxes) {
+      const bbConfig = product.product_blindboxes;
+      const min = Number(bbConfig.min_value);
+      const max = Number(bbConfig.max_value);
+      const ticket = Number(bbConfig.price);
+
+      // 1. Generate Dynamic 4-Zone Config (Sync with BlindboxesService)
+      const z1Upper = ticket * 0.9;
+      const z2Upper = ticket * 1.3;
+      const z3Upper = max * 0.9;
+
+      const zones = [
+        { name: 'Common (Shop Profit)', probability: 35, min: min, max: Math.max(min, z1Upper), key: 'Z1' },
+        { name: 'Fair Zone', probability: 60, min: Math.max(min, z1Upper), max: Math.max(z1Upper, z2Upper), key: 'Z2' },
+        { name: 'Big Win', probability: 4, min: Math.max(z2Upper, min), max: Math.max(z2Upper, z3Upper), key: 'Z3' },
+        { name: 'Legendary (Jackpot)', probability: 1, min: Math.max(z3Upper, min), max: max, key: 'Z4' }
+      ];
+
+      // 2. Calculate Stock per Zone from REAL warehouse items
+      const enhancedTiers = await Promise.all(zones.map(async (zone) => {
+        const agg = await this.prisma.product_variants.aggregate({
+          _sum: { stock_available: true, stock_defect: true },
+          where: {
+            products: { 
+              type_code: 'RETAIL', 
+              status_code: 'ACTIVE',
+              product_id: { not: product.product_id } // EXCLUDE the blindbox itself
+            },
+            price: { gte: zone.min, lte: zone.max },
+            deleted_at: null
+          }
+        });
+
+        return {
+          ...zone,
+          stock_count: (agg._sum.stock_available || 0) + (agg._sum.stock_defect || 0)
+        };
+      }));
+
+      product.product_blindboxes.tier_config = enhancedTiers;
+
+      // 3. Overall Dynamic Stock (for summary)
+      const aggregation = await this.prisma.product_variants.aggregate({
+        _sum: { stock_available: true, stock_defect: true },
+        where: {
+          products: { 
+            type_code: 'RETAIL', 
+            status_code: 'ACTIVE',
+            product_id: { not: product.product_id }
+          },
+          price: { gte: min, lte: max },
+          deleted_at: null
+        }
+      });
+
+      const dynamicStock = (aggregation._sum.stock_available || 0) + (aggregation._sum.stock_defect || 0);
+
+      // Override the Ticket Variant's stock display
+      if (product.product_variants && product.product_variants.length > 0) {
+        product.product_variants[0].stock_available = dynamicStock;
+      }
+    }
+
+    return product;
   }
 
   // [NEW] Helper: Dynamic Pricing Logic (Flash Sale Time-based)
@@ -1054,15 +1129,13 @@ export class ProductsService {
       if (category) richContextString += `Category: ${category}\n`;
       if (series) richContextString += `Series: ${series}\n`;
 
-      // Variant Specifics (if available for the target)
-      if (dto.variantName && variants) {
-        // Try to find the specific variant data or use the generic structure passed
-        // Assuming variants is an object with details
-        const v = variants; // If we pass the specific variant object directly
+      // Use variant data if available (either specific or from first variant for general overview)
+      const v = (dto.variantName && variants) ? variants : (Array.isArray(variants) ? variants[0] : variants);
+      if (v) {
         if (v.scale) richContextString += `Scale: ${v.scale}\n`;
         if (v.material) richContextString += `Material: ${v.material}\n`;
         if (v.included_items) richContextString += `Included Items: ${v.included_items}\n`;
-        if (v.price) richContextString += `Price: ${v.price} VND\n`;
+        if (v.price) richContextString += `Reference Price: ${v.price} VND\n`;
       }
     }
 
@@ -1080,8 +1153,15 @@ export class ProductsService {
             Guidelines:
             1. **Tone**: Enthusiastic, professional, "Dan choi" friendly (Otaku culture aware).
             2. **Content**: Use the Technical Specs (Scale, Material, Brand, etc.) to enhance the description. If an image is provided, describe visual details.
-            3. **Format**: Plain text, clear paragraph breaks, 2-3 paragraphs max. Use relevant emojis 🤖✨.
-            4. **Hallucination Check**: Only describe features visible in the image or explicitly stated.
+            3. **Format**: 
+               - Start with an engaging marketing text (2-3 paragraphs).
+               - AT THE END, add a section titled "**Thông số kỹ thuật:**" using the following bullet point format:
+                 * **Thương hiệu:** [Brand Name]
+                 * **Tỉ lệ:** [Scale]
+                 * **Chất liệu:** [Material]
+                 * **Phụ kiện:** [Included Items (list them)]
+                 * **Giá tham khảo:** [Reference Price]
+            4. **Hallucination Check**: Only describe features visible in the image or explicitly stated in Technical Specs.
             5. **Language**: Vietnamese.
         `;
 
