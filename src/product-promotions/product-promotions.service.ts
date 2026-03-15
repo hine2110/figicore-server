@@ -3,6 +3,14 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { CreateProductPromotionDto } from './dto/create-product-promotion.dto';
 import { UpdateProductPromotionDto } from './dto/update-product-promotion.dto';
+
+/** Returns current time as "HH:mm" string in local time */
+function nowTimeString(): string {
+  const now = new Date();
+  const h = String(now.getHours()).padStart(2, '0');
+  const m = String(now.getMinutes()).padStart(2, '0');
+  return `${h}:${m}`;
+}
 @Injectable()
 export class ProductPromotionsService {
   private readonly logger = new Logger(ProductPromotionsService.name);
@@ -10,9 +18,9 @@ export class ProductPromotionsService {
   constructor(private prisma: PrismaService) {}
 
   async create(dto: CreateProductPromotionDto) {
-    // Basic validation
-    if (new Date(dto.start_date) >= new Date(dto.end_date)) {
-      throw new BadRequestException('End date must be after start date');
+    // Validate time range
+    if (dto.start_time >= dto.end_time) {
+      throw new BadRequestException('end_time must be after start_time');
     }
 
     return this.prisma.product_promotions.create({
@@ -20,8 +28,9 @@ export class ProductPromotionsService {
         name: dto.name,
         type_code: dto.type_code,
         value: dto.value,
-        start_date: new Date(dto.start_date),
-        end_date: new Date(dto.end_date),
+        start_time: dto.start_time,
+        end_time: dto.end_time,
+        is_recurring: dto.is_recurring ?? false,
         is_active: dto.is_active ?? true,
         min_apply_price: dto.min_apply_price,
         max_apply_price: dto.max_apply_price,
@@ -31,10 +40,11 @@ export class ProductPromotionsService {
 
   async findAll() {
     return this.prisma.product_promotions.findMany({
+      where: { deleted_at: null },
       orderBy: { created_at: 'desc' },
       include: {
         _count: {
-          select: { products: true }
+          select: { product_variants: true }
         }
       }
     });
@@ -43,18 +53,20 @@ export class ProductPromotionsService {
   async findOne(id: number) {
     const promo = await this.prisma.product_promotions.findUnique({
       where: { promotion_id: id },
-      include: { products: { select: { product_id: true, name: true } } }
+      include: { product_variants: { select: { variant_id: true, sku: true, option_name: true } } }
     });
     if (!promo) throw new BadRequestException('Promotion not found');
     return promo;
   }
 
   async update(id: number, dto: UpdateProductPromotionDto) {
-    if (dto.start_date && dto.end_date && new Date(dto.start_date) >= new Date(dto.end_date)) {
-      throw new BadRequestException('End date must be after start date');
-    }
-
     const promo = await this.findOne(id);
+
+    const newStart = dto.start_time ?? promo.start_time;
+    const newEnd = dto.end_time ?? promo.end_time;
+    if (newStart >= newEnd) {
+      throw new BadRequestException('end_time must be after start_time');
+    }
 
     return this.prisma.product_promotions.update({
       where: { promotion_id: id },
@@ -62,8 +74,9 @@ export class ProductPromotionsService {
         name: dto.name !== undefined ? dto.name : promo.name,
         type_code: dto.type_code !== undefined ? dto.type_code : promo.type_code,
         value: dto.value !== undefined ? dto.value : promo.value,
-        start_date: dto.start_date ? new Date(dto.start_date) : promo.start_date,
-        end_date: dto.end_date ? new Date(dto.end_date) : promo.end_date,
+        start_time: newStart,
+        end_time: newEnd,
+        is_recurring: dto.is_recurring !== undefined ? dto.is_recurring : promo.is_recurring,
         is_active: dto.is_active !== undefined ? dto.is_active : promo.is_active,
         min_apply_price: dto.min_apply_price !== undefined ? dto.min_apply_price : promo.min_apply_price,
         max_apply_price: dto.max_apply_price !== undefined ? dto.max_apply_price : promo.max_apply_price,
@@ -72,123 +85,171 @@ export class ProductPromotionsService {
   }
 
   async applyToProducts(id: number, productIds: number[]) {
-    const promo = await this.findOne(id);
-    
-    // Update products to point to this promotion
-    return this.prisma.products.updateMany({
+    await this.findOne(id);
+    return this.prisma.product_variants.updateMany({
       where: { product_id: { in: productIds } },
       data: { product_promotion_id: id }
     });
   }
 
+  async applyToVariants(id: number, variantIds: number[]) {
+    await this.findOne(id);
+    return this.prisma.product_variants.updateMany({
+      where: { variant_id: { in: variantIds } },
+      data: { product_promotion_id: id }
+    });
+  }
+
   async removeFromProducts(id: number, productIds: number[]) {
-    return this.prisma.products.updateMany({
-      where: { 
+    return this.prisma.product_variants.updateMany({
+      where: {
         product_id: { in: productIds },
-        product_promotion_id: id 
+        product_promotion_id: id
       },
       data: { product_promotion_id: null }
     });
   }
 
   async remove(id: number) {
-    // Soft delete
     return this.prisma.product_promotions.update({
       where: { promotion_id: id },
-      data: { 
+      data: {
         deleted_at: new Date(),
-        is_active: false 
+        is_active: false
       }
     });
   }
 
-  async applyToPriceRange(id: number, minPrice: number, maxPrice: number) {
-    // 1. Find products that have at least one variant in the price range
-    const products = await this.prisma.products.findMany({
+  async previewByPriceRange(id: number, minPrice: number, maxPrice: number) {
+    const currentTime = nowTimeString();
+    const variants = await this.prisma.product_variants.findMany({
       where: {
-        type_code: 'RETAIL', // STRICT LOCK: Only RETAIL products
-        product_variants: {
-          some: {
-            price: {
-              gte: minPrice,
-              lte: maxPrice,
-            },
-          },
-        },
+        price: { gte: minPrice, lte: maxPrice },
+        products: { type_code: 'RETAIL' }
       },
-      select: { product_id: true }
-    });
-
-    if (products.length === 0) {
-      return { count: 0, message: 'No products found in this price range' };
-    }
-
-    const productIds = products.map(p => p.product_id);
-
-    // 2. Bulk Update products to link to this promotion
-    // NOTE: Schema defines specific 1-N relation (product_promotion_id in products table), 
-    // so we use updateMany instead of creating entries in a non-existent linking table.
-    const updateResult = await this.prisma.products.updateMany({
-      where: {
-        product_id: { in: productIds }
-      },
-      data: {
-        product_promotion_id: id
+      select: {
+        variant_id: true,
+        sku: true,
+        option_name: true,
+        products: { select: { name: true } },
+        product_promotion_id: true,
+        product_promotions: {
+          select: {
+            promotion_id: true,
+            name: true,
+            value: true,
+            end_time: true,
+            is_active: true
+          }
+        }
       }
     });
 
-    return { 
-      count: updateResult.count, 
-      message: `Successfully applied promotion to ${updateResult.count} products` 
+    const safe: any[] = [];
+    const conflicts: any[] = [];
+
+    for (const v of variants) {
+      const promo = v.product_promotions;
+      const hasActivePromo = promo &&
+        promo.is_active;
+
+      const vName = `${v.products?.name || 'Product'} - ${v.option_name}`;
+
+      if (hasActivePromo) {
+        conflicts.push({
+          product_id: v.variant_id,
+          name: vName,
+          current_promotion: {
+            promotion_id: promo.promotion_id,
+            name: promo.name,
+            value: promo.value,
+            end_time: promo.end_time
+          }
+        });
+      } else {
+        safe.push({ product_id: v.variant_id, name: vName });
+      }
+    }
+
+    return {
+      safe_count: safe.length,
+      conflict_count: conflicts.length,
+      safe_products: safe,
+      conflict_products: conflicts
     };
   }
 
-  @Cron(CronExpression.EVERY_HOUR)
-  async handleExpiredPromotions() {
-    this.logger.log('Running cron job to check for expired promotions...');
-    const now = new Date();
+  async applyToPriceRange(id: number, minPrice: number, maxPrice: number, overwrite: boolean = true) {
+    const variants = await this.prisma.product_variants.findMany({
+      where: {
+        price: { gte: minPrice, lte: maxPrice },
+        products: { type_code: 'RETAIL' }
+      },
+      select: {
+        variant_id: true,
+        product_promotion_id: true,
+        product_promotions: {
+          select: { is_active: true }
+        }
+      }
+    });
 
-    // Find all active promotions that have expired
+    const toApply = variants.filter(v => {
+      const hasActivePromo = v.product_promotions?.is_active;
+      return overwrite ? true : !hasActivePromo;
+    });
+
+    if (toApply.length === 0) {
+      return { count: 0, message: 'No variants to apply (all have active promotions and overwrite is off)' };
+    }
+
+    const variantIds = toApply.map(v => v.variant_id);
+    const updateResult = await this.prisma.product_variants.updateMany({
+      where: { variant_id: { in: variantIds } },
+      data: { product_promotion_id: id }
+    });
+
+    return {
+      count: updateResult.count,
+      message: `Successfully applied promotion to ${updateResult.count} variants`,
+      skipped: variants.length - updateResult.count
+    };
+  }
+
+  /**
+   * CRON: Runs every minute to check if non-recurring active promotions are outside their time window
+   * and deactivates them (so they don't run the next day).
+   */
+  @Cron(CronExpression.EVERY_MINUTE)
+  async handleExpiredPromotions() {
+    const currentTime = nowTimeString();
+
+    // Find active, NON-recurring promotions whose window has passed today
     const expiredPromotions = await this.prisma.product_promotions.findMany({
       where: {
         is_active: true,
-        end_date: {
-          lt: now
-        }
+        is_recurring: false,
+        end_time: { lt: currentTime },
+        deleted_at: null,
       }
     });
 
     if (expiredPromotions.length > 0) {
       const promotionIds = expiredPromotions.map(p => p.promotion_id);
 
-      // 1. Unlink expired promotions from products
-      await this.prisma.products.updateMany({
-        where: {
-          product_promotion_id: {
-            in: promotionIds
-          }
-        },
-        data: {
-          product_promotion_id: null
-        }
+      // Unlink from variants
+      await this.prisma.product_variants.updateMany({
+        where: { product_promotion_id: { in: promotionIds } },
+        data: { product_promotion_id: null }
       });
 
-      // 2. Mark promotions as inactive and deleted
+      // Deactivate the promotion (it won't run tomorrow)
       await this.prisma.product_promotions.updateMany({
-        where: {
-          promotion_id: {
-            in: promotionIds
-          }
-        },
-        data: {
-          is_active: false,
-          deleted_at: now
-        }
+        where: { promotion_id: { in: promotionIds } },
+        data: { is_active: false, deleted_at: new Date() }
       });
 
-      this.logger.log(`Expired and removed ${promotionIds.length} promotions: ${promotionIds.join(', ')}`);
-    } else {
-      this.logger.log('No expired promotions found.');
+      this.logger.log(`Deactivated ${promotionIds.length} expired non-recurring promotions: [${promotionIds.join(', ')}]`);
     }
   }
 }

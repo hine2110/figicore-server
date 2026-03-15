@@ -470,11 +470,11 @@ export class ProductsService {
         series: true,
         product_variants: {
           include: {
-            product_preorder_configs: true
+            product_preorder_configs: true,
+            product_promotions: true
           }
         },
         product_blindboxes: true,
-        product_promotions: true,
       },
       orderBy
     });
@@ -541,6 +541,9 @@ export class ProductsService {
         product_variants: {
           where: {
             deleted_at: null,
+          },
+          include: {
+            product_promotions: true
           }
         },
         categories: true,
@@ -549,12 +552,15 @@ export class ProductsService {
       orderBy: orderBy,
     });
 
+    // Apply promotions before grouping
+    const promotionalProducts = products.map(product => this.calculatePromotionalPrice(product));
+
     // Group by product and return with variants array
-    const groupedProducts = products.map(product => {
+    const groupedProducts = promotionalProducts.map(product => {
       // Get all active variants with stock > 0
       const activeVariants = product.product_variants
-        .filter(v => (v.stock_available || 0) > 0)
-        .map(variant => {
+        .filter((v: any) => (v.stock_available || 0) > 0)
+        .map((variant: any) => {
           // Get thumbnail from media_urls or media_assets
           let thumbnail = null;
 
@@ -582,7 +588,7 @@ export class ProductsService {
             variant_id: variant.variant_id,
             sku: variant.sku,
             option_name: variant.option_name,
-            price: Number(variant.price),
+            price: Number(variant.final_price ?? variant.price),
             current_stock: variant.stock_available || 0,
             thumbnail: thumbnail,
             tax_rate: Number(variant.tax_rate || 0), // Include tax_rate for POS
@@ -692,9 +698,8 @@ export class ProductsService {
           brands: true,
           categories: true,
           series: true,
-          product_variants: true,
+          product_variants: { include: { product_promotions: true } },
           product_blindboxes: true,
-          product_promotions: true
         }
       });
       similarProducts = [...similarProducts, ...byCategory];
@@ -710,13 +715,13 @@ export class ProductsService {
       include: {
         product_variants: {
           where: { deleted_at: null },
-          include: { product_preorder_configs: true }
+          orderBy: { created_at: 'asc' },
+          include: { product_preorder_configs: true, product_promotions: true }
         },
         product_blindboxes: true,
         brands: true,
         categories: true,
         series: true,
-        product_promotions: true,
       }
     });
     if (!product) throw new BadRequestException('Product not found');
@@ -725,22 +730,26 @@ export class ProductsService {
     return this.calculatePromotionalPrice(product);
   }
 
-  // [NEW] Helper: Dynamic Pricing Logic
+  // [NEW] Helper: Dynamic Pricing Logic (Flash Sale Time-based)
   private calculatePromotionalPrice(product: any) {
-    const promo = product.product_promotions;
     const now = new Date();
-
-    // Check if promotion is valid
-    const isValidPromo = promo &&
-      promo.is_active &&
-      new Date(promo.start_date) <= now &&
-      new Date(promo.end_date) >= now;
+    const h = String(now.getHours()).padStart(2, '0');
+    const m = String(now.getMinutes()).padStart(2, '0');
+    const currentTime = `${h}:${m}`; // e.g. "09:30"
 
     // Apply to Variants
     if (product.product_variants) {
       product.product_variants = product.product_variants.map((variant: any) => {
         let final_price = Number(variant.price);
         let discount_amount = 0;
+
+        const promo = variant.product_promotions;
+
+        // Check if promotion is active AND current time is within the daily flash sale window
+        const isValidPromo = promo &&
+          promo.is_active &&
+          currentTime >= promo.start_time &&
+          currentTime <= promo.end_time;
 
         if (isValidPromo) {
           if (promo.type_code === 'PERCENTAGE') {
