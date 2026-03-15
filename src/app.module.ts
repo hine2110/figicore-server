@@ -46,6 +46,7 @@ import { PromotionsModule } from './promotions/promotions.module';
 import { PaymentsModule } from './payments/payments.module';
 import { ReturnsModule } from './returns/returns.module';
 import { PayrollModule } from './payroll/payroll.module';
+import { AiAssistantModule } from './ai-assistant/ai-assistant.module';
 
 
 @Module({
@@ -96,7 +97,8 @@ import { PayrollModule } from './payroll/payroll.module';
     PromotionsModule,
     PaymentsModule,
     ReturnsModule,
-    PayrollModule
+    PayrollModule,
+    AiAssistantModule
 
   ],
 

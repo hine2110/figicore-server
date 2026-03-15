@@ -53,12 +53,21 @@ export class ProductPromotionsController {
     return this.service.remove(id);
   }
 
+  @Post(':id/preview-range')
+  @Roles('MANAGER')
+  previewByRange(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: { minPrice: number, maxPrice: number }
+  ) {
+    return this.service.previewByPriceRange(id, body.minPrice, body.maxPrice);
+  }
+
   @Post(':id/apply-range')
   @Roles('MANAGER')
   applyByRange(
     @Param('id', ParseIntPipe) id: number, 
-    @Body() body: { minPrice: number, maxPrice: number }
+    @Body() body: { minPrice: number, maxPrice: number, overwrite?: boolean }
   ) {
-    return this.service.applyToPriceRange(id, body.minPrice, body.maxPrice);
+    return this.service.applyToPriceRange(id, body.minPrice, body.maxPrice, body.overwrite ?? true);
   }
 }

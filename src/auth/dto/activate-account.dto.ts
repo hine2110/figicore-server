@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, MinLength, IsOptional } from 'class-validator';
+import { IsString, IsNotEmpty, MinLength, IsOptional, Matches } from 'class-validator';
 
 export class ActivateAccountDto {
   @IsString()
@@ -11,7 +11,9 @@ export class ActivateAccountDto {
 
   @IsString()
   @IsNotEmpty()
-  @MinLength(6)
+  @Matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$/, {
+    message: 'Password must be at least 8 characters long and include an uppercase letter, a lowercase letter, a number, and a special character.',
+  })
   newPassword: string;
 
   @IsString()
