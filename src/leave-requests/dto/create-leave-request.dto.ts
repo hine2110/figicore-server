@@ -16,4 +16,8 @@ export class CreateLeaveRequestDto {
     @IsString()
     @IsOptional()
     reason?: string;
+
+    @IsString()
+    @IsOptional()
+    evidence_url?: string;
 }

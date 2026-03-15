@@ -17,7 +17,5 @@ export class ImportEmployeeDto {
   @IsNotEmpty()
   role_code: string;
 
-  @IsNumber()
-  @IsNotEmpty()
-  base_salary: number;
+
 }

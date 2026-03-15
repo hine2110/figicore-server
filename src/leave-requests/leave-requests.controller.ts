@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Patch, Param, UseGuards, Req, ParseIntPipe } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, UseGuards, Req, ParseIntPipe, Query } from '@nestjs/common';
 import { LeaveRequestsService } from './leave-requests.service';
 import { CreateLeaveRequestDto } from './dto/create-leave-request.dto';
 import { UpdateLeaveStatusDto } from './dto/update-leave-status.dto';
@@ -23,8 +23,8 @@ export class LeaveRequestsController {
 
     @Get()
     @Roles('SUPER_ADMIN', 'MANAGER')
-    getAllLeaves() {
-        return this.leaveRequestsService.getAllLeaves();
+    getAllLeaves(@Query('status') status?: string) {
+        return this.leaveRequestsService.getAllLeaves(status);
     }
 
     @Patch(':id/status')
