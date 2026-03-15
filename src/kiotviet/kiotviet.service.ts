@@ -162,6 +162,7 @@ export class KiotVietService {
                         pageSize,
                         currentItem,
                         includeInventory: true,
+                        includeImages: true,
                     },
                 });
 
@@ -197,18 +198,26 @@ export class KiotVietService {
                     const sku = kvProduct.code;
                     const productName = kvProduct.name;
                     const basePrice = kvProduct.basePrice || 0;
-
+                    
                     // 1. Check if Variant exists by SKU
                     const existingVariant = await this.prisma.product_variants.findUnique({
                         where: { sku: sku }
                     });
 
+                    // KiotViet images look like [{ url: 'http...' }]
+                    const images = (kvProduct.images || []).map((img: any) => img.url).filter(Boolean);
                     let productId: number;
 
                     if (existingVariant) {
                         productId = existingVariant.product_id;
-                        // Update Parent Product Name if needed (Optional, maybe don't overwrite user edits)
-                        // await this.prisma.products.update({ where: { product_id: productId }, data: { name: productName } });
+                        // Update Parent Product Name and Images if needed
+                        await this.prisma.products.update({ 
+                            where: { product_id: productId }, 
+                            data: { 
+                                name: productName,
+                                media_urls: images.length > 0 ? images : undefined 
+                            } 
+                        });
                     } else {
                         // Create New Parent Product
                         const newProduct = await this.prisma.products.create({
@@ -217,6 +226,7 @@ export class KiotVietService {
                                 type_code: 'RETAIL',
                                 status_code: 'ACTIVE',
                                 category_id: defaultCategory.category_id,
+                                media_urls: images.length > 0 ? images : [], // Add images here
                             }
                         });
                         productId = newProduct.product_id;
@@ -238,6 +248,7 @@ export class KiotVietService {
                             price: basePrice,
                             stock_available: stock,
                             tax_rate: taxRate,
+                            media_assets: images.length > 0 ? images : undefined, // Update image array if exist from API
                             updated_at: new Date()
                         },
                         create: {
@@ -247,6 +258,7 @@ export class KiotVietService {
                             price: basePrice,
                             stock_available: stock,
                             tax_rate: taxRate,
+                            media_assets: images.length > 0 ? images : [], // Insert images here
                         }
                     });
 
