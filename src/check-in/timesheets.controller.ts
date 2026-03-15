@@ -112,7 +112,7 @@ export class TimesheetsController {
         const availableSchedules = schedules.filter(s => {
             const ts = s.timesheets?.[0];
             if (!ts) return true;
-            if (ts.check_in_at && ts.check_out_at) return false; // Completed
+            if (ts.check_in_at && ts.check_out_at) return false;
             return true;
         });
 
@@ -120,28 +120,22 @@ export class TimesheetsController {
             throw new BadRequestException("Bạn đã hoàn thành tất cả ca làm việc hôm nay.");
         }
 
-        // 🔥 FIX ERROR: Khai báo rõ kiểu dữ liệu cho bestMatch
-        // Nó lấy kiểu của phần tử đầu tiên trong mảng availableSchedules
         let bestMatch: typeof availableSchedules[0] | null = null;
         let minDiff = Number.MAX_SAFE_INTEGER;
 
         for (const schedule of availableSchedules) {
             if (!schedule.expected_start || !schedule.expected_end) continue;
 
-            // FIX 1: Force Timezone +07:00
-            const scheduleStart = this.mergeDateAndTime(new Date(schedule.date), new Date(schedule.expected_start));
-            const scheduleEnd = this.mergeDateAndTime(new Date(schedule.date), new Date(schedule.expected_end));
+            // XÓA MERGE: Trực tiếp lấy Timestamp từ DB
+            const scheduleStart = schedule.expected_start;
+            const scheduleEnd = schedule.expected_end;
 
-            // FIX 2: Strict 15-Minute Entry Window
             // Window opens: 15 mins BEFORE start
-            // Window closes: 15 mins AFTER end (Too Late)
+            // Window closes: 15 mins AFTER end
             const validWindowStart = new Date(scheduleStart.getTime() - 15 * 60 * 1000);
             const validWindowEnd = new Date(scheduleEnd.getTime() + 15 * 60 * 1000);
 
-            // If now is BEFORE window -> Too Early
             if (now < validWindowStart) continue;
-
-            // If now is AFTER window -> Too Late (Shift Closed)
             if (now > validWindowEnd) continue;
 
             const diff = Math.abs(now.getTime() - scheduleStart.getTime());
@@ -156,9 +150,7 @@ export class TimesheetsController {
         }
 
         // --- STATUS LOGIC ---
-        // Tại đây bestMatch đã được TypeScript hiểu là không null nhờ lệnh throw bên trên
-        const finalScheduleStart = this.mergeDateAndTime(new Date(bestMatch.date), new Date(bestMatch.expected_start!));
-
+        const finalScheduleStart = bestMatch.expected_start!;
         const lateThreshold = new Date(finalScheduleStart.getTime() + 15 * 60 * 1000);
 
         let status: string = TIMESHEET_STATUS.PRESENT;
@@ -208,7 +200,6 @@ export class TimesheetsController {
         }
 
         if (!openTimesheet.work_schedules?.expected_end) {
-            // Fallback if no expected end (should rare)
             const checkInTime = new Date(openTimesheet.check_in_at!);
             const durationMs = now.getTime() - checkInTime.getTime();
             const realWorkHours = durationMs / (1000 * 60 * 60);
@@ -227,9 +218,8 @@ export class TimesheetsController {
             return;
         }
 
-        const scheduleDate = new Date(openTimesheet.work_schedules.date);
-        const expectedEnd = new Date(openTimesheet.work_schedules.expected_end);
-        const validEndTime = this.mergeDateAndTime(scheduleDate, expectedEnd);
+        // XÓA MERGE: Lấy thẳng mốc giờ kết thúc ca (Timestamp)
+        const validEndTime = openTimesheet.work_schedules.expected_end;
 
         // Step A: Validate Overdue (End + 15m)
         const overdueTime = new Date(validEndTime.getTime() + 15 * 60 * 1000);
@@ -245,16 +235,13 @@ export class TimesheetsController {
             throw new BadRequestException("Quá hạn check-out > 15p. Hệ thống đã ghi nhận lỗi MISSING.");
         }
 
-        // Step B: Determine Status (Sticky Logic)
+        // Step B: Determine Status
         const currentStatus = openTimesheet.status_code;
         let newStatus = currentStatus;
 
-        // Case 1: LATE -> Keep LATE
         if (currentStatus === TIMESHEET_STATUS.LATE) {
             newStatus = TIMESHEET_STATUS.LATE;
-        }
-        // Case 2: PRESENT -> Check Early Leave
-        else if (currentStatus === TIMESHEET_STATUS.PRESENT) {
+        } else if (currentStatus === TIMESHEET_STATUS.PRESENT) {
             const earlyThreshold = new Date(validEndTime.getTime() - 5 * 60 * 1000);
             if (now < earlyThreshold) {
                 newStatus = TIMESHEET_STATUS.EARLY_LEAVE;
@@ -262,7 +249,6 @@ export class TimesheetsController {
                 newStatus = TIMESHEET_STATUS.COMPLETED;
             }
         }
-        // Case 3: Else (Keep current - e.g. maybe already something else?)
 
         // Step C: Update DB
         const checkInTime = new Date(openTimesheet.check_in_at!);
@@ -341,6 +327,7 @@ export class TimesheetsController {
             totalRealHours += realHours;
 
             logs.push({
+                timesheet_id: timesheet?.timesheet_id || null,
                 date: schedule.date,
                 shift_name: schedule.shift_code,
                 check_in_at: timesheet?.check_in_at || null,
@@ -372,17 +359,5 @@ export class TimesheetsController {
         return { startOfMonth, endOfMonth };
     }
 
-    private mergeDateAndTime(dateObj: Date, timeObj: Date): Date {
-        // Lấy ngày dưới định dạng YYYY-MM-DD tại múi giờ VN
-        const dateStr = dayjs(dateObj).tz('Asia/Ho_Chi_Minh').format('YYYY-MM-DD');
 
-        // Lấy thời gian UTC của timeObj do Prisma nạp lên (vốn dĩ lúc save đã dùng setUTCHours = Local Time)
-        const h = String(timeObj.getUTCHours()).padStart(2, '0');
-        const m = String(timeObj.getUTCMinutes()).padStart(2, '0');
-        const s = String(timeObj.getUTCSeconds()).padStart(2, '0');
-        const timeStrRaw = `${h}:${m}:${s}`;
-
-        // Kết hợp lại nguyên khối vào múi giờ Asia/Ho_Chi_Minh
-        return dayjs.tz(`${dateStr} ${timeStrRaw}`, 'YYYY-MM-DD HH:mm:ss', 'Asia/Ho_Chi_Minh').toDate();
-    }
 }

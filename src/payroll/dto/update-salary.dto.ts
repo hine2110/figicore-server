@@ -1,4 +1,12 @@
-import { IsInt, IsNotEmpty, IsNumber, IsOptional, IsString } from 'class-validator';
+import { IsInt, IsNotEmpty, IsNumber, IsOptional, IsString, IsIn, IsBoolean } from 'class-validator';
+
+export class CreateSalaryConfigDto {
+    @IsInt() @IsNotEmpty() userId: number;
+    @IsString() @IsNotEmpty() type_code: string; // ALLOWANCE hoặc DEDUCTION
+    @IsString() @IsNotEmpty() name: string;
+    @IsNumber() @IsNotEmpty() amount: number;
+    @IsBoolean() @IsOptional() is_recurring?: boolean;
+}
 
 export class UpdateBaseSalaryDto {
     @IsInt()
@@ -40,4 +48,24 @@ export class RunPayrollDto {
     @IsInt()
     @IsNotEmpty()
     year: number;
+}
+
+export class UpdatePayrollStatusDto {
+    @IsString()
+    @IsNotEmpty()
+    @IsIn(['DRAFT', 'SENT_FOR_REVIEW', 'PENDING_APPROVAL', 'APPROVED', 'PAID', 'DISPUTED'])
+    status_code: string;
+}
+
+export class AddAdjustmentDto {
+    @IsString()
+    @IsNotEmpty()
+    title: string;
+
+    @IsNumber()
+    @IsNotEmpty()
+    amount: number;
+
+    @IsOptional()
+    isAddition?: boolean;
 }
