@@ -46,6 +46,7 @@ import { PromotionsModule } from './promotions/promotions.module';
 import { PaymentsModule } from './payments/payments.module';
 import { ReturnsModule } from './returns/returns.module';
 import { PayrollModule } from './payroll/payroll.module';
+import { LivekitModule } from './livekit/livekit.module';
 
 
 @Module({
@@ -96,7 +97,8 @@ import { PayrollModule } from './payroll/payroll.module';
     PromotionsModule,
     PaymentsModule,
     ReturnsModule,
-    PayrollModule
+    PayrollModule,
+    LivekitModule
 
   ],
 
