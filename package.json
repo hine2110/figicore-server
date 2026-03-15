@@ -51,6 +51,7 @@
     "handlebars": "^4.7.8",
     "multer": "^2.0.2",
     "nodemailer": "^7.0.13",
+    "openai": "^6.27.0",
     "passport": "^0.7.0",
     "passport-google-oauth20": "^2.0.0",
     "passport-jwt": "^4.0.1",

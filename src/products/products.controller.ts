@@ -14,6 +14,11 @@ export class ProductsController {
     return this.productsService.create(createProductDto);
   }
 
+  @Post('visual-search')
+  visualSearch(@Body() body: { image: string }) {
+    return this.productsService.visualSearch(body.image);
+  }
+
   // ⚠️ IMPORTANT: Place this BEFORE any ':id' routes
   @Post('quick-create')
   quickCreate(@Body() body: QuickCreateProductDto) {
