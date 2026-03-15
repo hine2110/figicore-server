@@ -458,8 +458,6 @@ model products {
   brands               brands?             @relation(fields: [brand_id], references: [brand_id], onDelete: NoAction, onUpdate: NoAction)
   categories           categories?         @relation(fields: [category_id], references: [category_id], onDelete: NoAction, onUpdate: NoAction)
   series               series?             @relation(fields: [series_id], references: [series_id], onDelete: NoAction, onUpdate: NoAction)
-  product_promotion_id Int?
-  product_promotions   product_promotions? @relation(fields: [product_promotion_id], references: [promotion_id], onDelete: SetNull, onUpdate: NoAction)
 }
 
 model product_variants {
@@ -505,6 +503,10 @@ model product_variants {
   product_preorder_configs product_preorder_configs? // Unified Pre-order Config
   preorder_contracts       preorder_contracts[] // Contracts linked to this variant
 
+  // PROMOTIONS
+  product_promotion_id Int?
+  product_promotions   product_promotions? @relation(fields: [product_promotion_id], references: [promotion_id], onDelete: SetNull, onUpdate: NoAction)
+
   // ... Keep existing relations (cart_items, order_items, etc.)
   cart_items               cart_items[]
   inventory_logs           inventory_logs[]
@@ -534,15 +536,16 @@ model product_promotions {
   name            String     @db.VarChar(255)
   type_code       String     @db.VarChar(50) // PERCENTAGE | FIXED_AMOUNT
   value           Decimal    @db.Decimal(15, 2)
-  start_date      DateTime   @db.Timestamp(6)
-  end_date        DateTime   @db.Timestamp(6)
+  start_time      String     @db.VarChar(5)  // HH:mm e.g. "09:00"
+  end_time        String     @db.VarChar(5)  // HH:mm e.g. "11:00"
+  is_recurring    Boolean    @default(false) // If true, runs every day in the time window
   is_active       Boolean?   @default(true)
-  min_apply_price Decimal?   @db.Decimal(15, 2)
-  max_apply_price Decimal?   @db.Decimal(15, 2)
-  created_at      DateTime?  @default(now()) @db.Timestamp(6)
-  updated_at      DateTime?  @default(now()) @db.Timestamp(6)
-  deleted_at      DateTime?  @db.Timestamp(6)
-  products        products[]
+  min_apply_price Decimal?           @db.Decimal(15, 2)
+  max_apply_price Decimal?           @db.Decimal(15, 2)
+  created_at      DateTime?          @default(now()) @db.Timestamp(6)
+  updated_at      DateTime?          @default(now()) @db.Timestamp(6)
+  deleted_at      DateTime?          @db.Timestamp(6)
+  product_variants product_variants[]
 }
 
 model promotions {
@@ -652,6 +655,19 @@ model system_configurations {
   created_at   DateTime? @default(now()) @db.Timestamp(6)
   updated_at   DateTime? @default(now()) @db.Timestamp(6)
   deleted_at   DateTime? @db.Timestamp(6)
+}
+
+model system_recommendations {
+  recommendation_id Int       @id @default(autoincrement())
+  target_type       String    @db.VarChar(50) // "VARIANT" | "PRODUCT"
+  target_id         Int
+  type              String    @db.VarChar(50) // "DISCOUNT" | "BUNDLE" | "RESTOCK"
+  title             String    @db.VarChar(255)
+  reasoning         String    @db.Text
+  suggested_action  Json      // e.g. {"discount_percent": 15, "duration_days": 7}
+  status_code       String    @default("PENDING") @db.VarChar(20) // PENDING, APPLIED, DISMISSED
+  created_at        DateTime? @default(now()) @db.Timestamp(6)
+  updated_at        DateTime? @default(now()) @db.Timestamp(6)
 }
 
 model system_lookups {
@@ -864,8 +880,8 @@ model work_schedules {
   user_id        Int
   date           DateTime     @db.Date
   shift_code     String       @db.VarChar(20)
-  expected_start DateTime?    @db.Time(6)
-  expected_end   DateTime?    @db.Time(6)
+  expected_start DateTime?    @db.Timestamp(6) 
+  expected_end   DateTime?    @db.Timestamp(6)  
   created_at     DateTime?    @default(now()) @db.Timestamp(6)
   updated_at     DateTime?    @default(now()) @db.Timestamp(6)
   deleted_at     DateTime?    @db.Timestamp(6)
@@ -925,7 +941,7 @@ model leave_requests {
   status_code String?   @default("PENDING") @db.VarChar(50)
   created_at  DateTime? @default(now()) @db.Timestamp(6)
   updated_at  DateTime? @default(now()) @db.Timestamp(6)
-
+  evidence_url String?   @db.Text
   employees employees @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
 }
 

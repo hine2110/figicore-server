@@ -70,10 +70,11 @@ export class WorkSchedulesService {
         // Format: YYYY-MM-DDTHH:mm:ss+07:00
         const formatTime = (h: number) => h.toString().padStart(2, '0');
 
-        const expected_start = new Date(0); // Epoch
-        expected_start.setUTCHours(config.start, 0, 0, 0);
-        const expected_end = new Date(0);
-        expected_end.setUTCHours(config.end, 0, 0, 0);
+        const expected_start = dayjs.tz(date, 'YYYY-MM-DD', 'Asia/Ho_Chi_Minh')
+            .hour(config.start).minute(0).second(0).millisecond(0).toDate();
+
+        const expected_end = dayjs.tz(date, 'YYYY-MM-DD', 'Asia/Ho_Chi_Minh')
+            .hour(config.end).minute(0).second(0).millisecond(0).toDate();
 
         return this.prisma.work_schedules.create({
             data: {
@@ -168,17 +169,21 @@ export class WorkSchedulesService {
             let newEnd: Date | null = null;
 
             if (schedule.expected_start) {
-                newStart = new Date(target);
-                newStart.setHours(schedule.expected_start.getHours());
-                newStart.setMinutes(schedule.expected_start.getMinutes());
-                newStart.setSeconds(schedule.expected_start.getSeconds());
+                const sourceLocal = dayjs(schedule.expected_start).tz('Asia/Ho_Chi_Minh');
+                newStart = dayjs.tz(target_date, 'YYYY-MM-DD', 'Asia/Ho_Chi_Minh')
+                    .hour(sourceLocal.hour())
+                    .minute(sourceLocal.minute())
+                    .second(sourceLocal.second())
+                    .millisecond(0).toDate();
             }
 
             if (schedule.expected_end) {
-                newEnd = new Date(target);
-                newEnd.setHours(schedule.expected_end.getHours());
-                newEnd.setMinutes(schedule.expected_end.getMinutes());
-                newEnd.setSeconds(schedule.expected_end.getSeconds());
+                const sourceLocal = dayjs(schedule.expected_end).tz('Asia/Ho_Chi_Minh');
+                newEnd = dayjs.tz(target_date, 'YYYY-MM-DD', 'Asia/Ho_Chi_Minh')
+                    .hour(sourceLocal.hour())
+                    .minute(sourceLocal.minute())
+                    .second(sourceLocal.second())
+                    .millisecond(0).toDate();
             }
 
             newSchedulesData.push({

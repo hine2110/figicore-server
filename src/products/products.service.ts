@@ -1,17 +1,207 @@
 import { Injectable, BadRequestException, ServiceUnavailableException, Logger } from '@nestjs/common';
-import { GoogleGenerativeAI } from '@google/generative-ai';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { KiotVietService } from 'src/kiotviet/kiotviet.service';
+import { ConfigService } from '@nestjs/config';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { Prisma } from '@prisma/client';
+import OpenAI from 'openai';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 
 @Injectable()
 export class ProductsService {
+  private logger = new Logger('ProductsService');
+  private groq: OpenAI;
+  private genAI: GoogleGenerativeAI;
+
   constructor(
     private prisma: PrismaService,
+    private configService: ConfigService,
     private kiotvietService: KiotVietService,
-  ) { }
+  ) {
+    const groqKey = this.configService.get<string>('GROQ_API_KEY');
+    if (groqKey) {
+      this.groq = new OpenAI({
+        apiKey: groqKey,
+        baseURL: 'https://api.groq.com/openai/v1',
+      });
+    }
+
+    const geminiKey = this.configService.get<string>('GEMINI_API_KEY') || this.configService.get<string>('GOOGLE_AI_API_KEY');
+    if (geminiKey) {
+      this.genAI = new GoogleGenerativeAI(geminiKey);
+    }
+  }
+
+  async visualSearch(base64Image: string) {
+    if (!this.groq) {
+      throw new ServiceUnavailableException('Dịch vụ phân tích hình ảnh (Groq) hiện chưa được cấu hình.');
+    }
+
+    try {
+      this.logger.log('--- VISUAL SEARCH START (Llama 4 Scout) ---');
+      
+      const imageData = base64Image.replace(/^data:image\/\w+;base64,/, '');
+      const mimeTypeMatch = base64Image.match(/^data:(image\/\w+);base64,/);
+      const mimeType = mimeTypeMatch ? mimeTypeMatch[1] : 'image/jpeg';
+
+      const prompt = `Bạn là chuyên gia về mô hình (figures, gundam, art toys). 
+      Hãy phân tích hình ảnh này và trích xuất thông tin để tìm kiếm trong database:
+      1. Tên mô hình/sản phẩm (productName): ƯU TIÊN ĐỌC CHỮ TRÊN VỎ HỘP (ví dụ: "Megatron", "Gundam Exia"). Tìm các mã SKU/ID in trên hộp như "CC21", "71173".
+      2. Thương hiệu (brand): Ví dụ: Blokees, Bandai, Hasbro.
+      3. Dòng sản phẩm (series): Ví dụ: Classic Class, MG, HG.
+      4. Màu sắc (color): Màu chủ đạo.
+
+      QUY TẮC:
+      - Trả về JSON duy nhất với keys: productName, brand, series, color.
+      - CHỈ tập trung vào nhân vật/mẫu vật CHÍNH được xuất hiện trong ảnh. Bỏ qua các nhân vật phụ hoặc tên nhân vật khác xuất hiện trong logo phim/series (ví dụ: Logo "Transformers ONE" có thể có tên nhiều nhân vật, hãy bỏ qua và chỉ lấy tên mẫu vật chính).
+      - KHÔNG được bỏ trống productName nếu thấy bất kỳ chữ nào liên quan đến tên sản phẩm trên vỏ hộp.
+      - Nếu thấy chữ trên hộp, hãy dùng chính xác chữ đó.`;
+
+      let aiHint: any = {};
+      let results: any[] = [];
+      let isExactMatch = false;
+      let finalSearchTerm = '';
+      let attempts = 0;
+      const maxAttempts = 2; // Allow up to 2 attempts with refined prompts
+
+      while (attempts < maxAttempts && results.length === 0) {
+        attempts++;
+        this.logger.log(`Visual Search Attempt ${attempts}...`);
+
+        const dynamicPrompt = attempts === 1 
+          ? prompt 
+          : `${prompt}\n\nGHI CHÚ: Lần tìm kiếm trước không có kết quả. Hãy nhìn THẬT KỸ các chữ nhỏ nhất trên hộp, các mã số (như CC, SP, No.), hoặc các ký tự đặc biệt có thể định danh SKU sản phẩm.`;
+
+        // -- STEP 1: AI Analysis (Llama 4 -> Gemini Fallback) --
+        try {
+          const response = await this.groq.chat.completions.create({
+            model: 'meta-llama/llama-4-scout-17b-16e-instruct',
+            messages: [{
+              role: 'user',
+              content: [
+                { type: 'text', text: dynamicPrompt },
+                { type: 'image_url', image_url: { url: `data:${mimeType};base64,${imageData}` } }
+              ]
+            }],
+            response_format: { type: 'json_object' }
+          });
+          aiHint = JSON.parse(response.choices[0].message.content || '{}');
+          this.logger.log(`Attempt ${attempts} - Llama 4 Hint: ${JSON.stringify(aiHint)}`);
+        } catch (e) {
+          this.logger.warn(`Llama 4 failed on attempt ${attempts}: ${e.message}`);
+        }
+
+        if ((!aiHint.productName && !aiHint.brand) && this.genAI) {
+          this.logger.log(`Attempt ${attempts} - Llama failed keywords, trying Gemini Lite...`);
+          try {
+            const model = this.genAI.getGenerativeModel({ model: 'gemini-2.0-flash-lite-001' });
+            const result = await model.generateContent([
+              dynamicPrompt + " (Respond in raw JSON)",
+              { inlineData: { data: imageData, mimeType: mimeType } }
+            ]);
+            const text = (await result.response).text().replace(/```json/g, '').replace(/```/g, '').trim();
+            aiHint = JSON.parse(text);
+            this.logger.log(`Attempt ${attempts} - Gemini Hint: ${JSON.stringify(aiHint)}`);
+          } catch (e) {
+            this.logger.warn(`Gemini failed on attempt ${attempts}: ${e.message}`);
+          }
+        }
+
+        // -- STEP 2: Database Searching (4 Layers) --
+        if (aiHint.productName || aiHint.brand || aiHint.series) {
+          const searchTerms = [aiHint.series, aiHint.productName, aiHint.brand].filter(Boolean).join(' ');
+          finalSearchTerm = searchTerms;
+
+          // Layer 1: Strict (AND + Color)
+          results = await this.findAll({ search: searchTerms, color: aiHint.color });
+          
+          if (results.length > 0) {
+            isExactMatch = true;
+          } else {
+            // Layer 2: Strict (AND only)
+            if (aiHint.color) {
+              results = await this.findAll({ search: searchTerms });
+            }
+
+            // Layer 3: Broad (OR Tên/Dòng)
+            if (results.length === 0 && (aiHint.productName || aiHint.series)) {
+              finalSearchTerm = [aiHint.productName, aiHint.series].filter(Boolean).join(' ');
+              results = await this.findAll({ search: finalSearchTerm, searchMode: 'OR' });
+            }
+
+            // Layer 4: Minimal (Series/Brand)
+            if (results.length === 0 && (aiHint.brand || aiHint.series)) {
+              finalSearchTerm = aiHint.series || aiHint.brand;
+              results = await this.findAll({ search: finalSearchTerm, searchMode: 'OR' });
+            }
+          }
+
+          // -- STEP 3: Relevance Sorting & Filtering (Custom Ranking) --
+          if (results.length > 1) {
+            const keywords = finalSearchTerm.toLowerCase().split(/\s+/).filter(k => k.length > 1);
+            
+            // Map results to their scores for filtering
+            const scoredResults = results.map(p => {
+              const name = p.name.toLowerCase();
+              const brandName = p.brands?.name?.toLowerCase() || '';
+              const seriesName = p.series?.name?.toLowerCase() || '';
+              
+              const keywordScore = keywords.reduce((acc, kw) => 
+                acc + (name.includes(kw) || brandName.includes(kw) || seriesName.includes(kw) ? 1 : 0), 0);
+              
+              // Extra weight for SKU matches
+              const skuScore = p.product_variants?.some((v: any) => 
+                keywords.some(kw => v.sku.toLowerCase().includes(kw))) ? 2 : 0;
+              
+              return { product: p, score: keywordScore + skuScore };
+            });
+
+            // Sort by score descending
+            scoredResults.sort((a, b) => b.score - a.score);
+
+            const maxScore = scoredResults[0].score;
+            
+            // Filtering: Keep only results with high relevance relative to the top match
+            // If top matches are weak (score < 2), be very strict.
+            // If top matches are strong, allow some variation but filter out low scores.
+            results = scoredResults
+              .filter(item => {
+                if (maxScore >= 5) return item.score >= maxScore * 0.8; // Strong matches: keep very close ones
+                if (maxScore >= 3) return item.score >= maxScore * 0.6; // Mid matches
+                return item.score >= maxScore; // Weak matches: only keep the best ones
+              })
+              .map(item => item.product);
+
+            // Cap results to avoid overwhelming the user with noise
+            if (results.length > 5 && !isExactMatch) {
+              results = results.slice(0, 5);
+            }
+          }
+        }
+
+        if (results.length > 0) {
+          this.logger.log(`Success on Attempt ${attempts}! Found ${results.length} products.`);
+        } else {
+          this.logger.warn(`Attempt ${attempts} yielded no results.`);
+        }
+      }
+
+      return {
+        products: results,
+        metadata: {
+          isExactMatch,
+          searchTerm: finalSearchTerm,
+          aiHint,
+          analysisAttempts: attempts
+        }
+      };
+    } catch (error) {
+      this.logger.error(`Visual search critical error: ${error.message}`, error.stack);
+      throw error;
+    }
+  }
+
 
   async create(createProductDto: CreateProductDto) {
     let {
@@ -216,8 +406,8 @@ export class ProductsService {
     });
   }
 
-  async findAll(params: { search?: string, brand_id?: number, category_id?: number, series_id?: number, type_code?: any, min_price?: number, max_price?: number, sort?: string }) {
-    const { search, brand_id, category_id, series_id, type_code, min_price, max_price, sort } = params;
+  async findAll(params: { search?: string, color?: string, brand_id?: number, category_id?: number, series_id?: number, type_code?: any, min_price?: number, max_price?: number, sort?: string, searchMode?: 'AND' | 'OR' }) {
+    const { search, color, brand_id, category_id, series_id, type_code, min_price, max_price, sort, searchMode = 'AND' } = params;
 
     const where: Prisma.productsWhereInput = {
       AND: [
@@ -227,13 +417,17 @@ export class ProductsService {
         category_id ? { category_id: Number(category_id) } : {},
         series_id ? { series_id: Number(series_id) } : {},
 
-        // 2. Search Logic (Name OR SKU)
+        // 2. Search Logic (Split words into multiple AND/OR contains for flexibility)
         search ? {
-          OR: [
-            { name: { contains: search, mode: 'insensitive' } },
-            { product_variants: { some: { sku: { contains: search, mode: 'insensitive' } } } },
-            { product_variants: { some: { option_name: { contains: search, mode: 'insensitive' } } } }
-          ]
+          [searchMode]: search.split(/\s+/).filter(word => word.length > 1).map(word => ({
+            OR: [
+              { name: { contains: word, mode: 'insensitive' } },
+              { product_variants: { some: { sku: { contains: word, mode: 'insensitive' } } } },
+              { product_variants: { some: { option_name: { contains: word, mode: 'insensitive' } } } },
+              { brands: { name: { contains: word, mode: 'insensitive' } } },
+              { series: { name: { contains: word, mode: 'insensitive' } } }
+            ]
+          }))
         } : {},
 
         // 3. Price Filter (Check if ANY variant matches the price range)
@@ -246,6 +440,16 @@ export class ProductsService {
               }
             }
           }
+        } : {},
+
+        // 4. Color Filter (Multiple colors fallback)
+        color ? {
+          OR: color.split(/[\s,]+/).filter(c => c.length > 1).map(c => ({
+            OR: [
+              { name: { contains: c, mode: 'insensitive' } },
+              { product_variants: { some: { option_name: { contains: c, mode: 'insensitive' } } } }
+            ]
+          }))
         } : {}
       ]
     };
@@ -268,11 +472,11 @@ export class ProductsService {
         series: true,
         product_variants: {
           include: {
-            product_preorder_configs: true
+            product_preorder_configs: true,
+            product_promotions: true
           }
         },
         product_blindboxes: true,
-        product_promotions: true,
       },
       orderBy
     });
@@ -340,6 +544,9 @@ export class ProductsService {
         product_variants: {
           where: {
             deleted_at: null,
+          },
+          include: {
+            product_promotions: true
           }
         },
         categories: true,
@@ -348,12 +555,15 @@ export class ProductsService {
       orderBy: orderBy,
     });
 
+    // Apply promotions before grouping
+    const promotionalProducts = products.map(product => this.calculatePromotionalPrice(product));
+
     // Group by product and return with variants array
-    const groupedProducts = products.map(product => {
+    const groupedProducts = promotionalProducts.map(product => {
       // Get all active variants with stock > 0
       const activeVariants = product.product_variants
-        .filter(v => (v.stock_available || 0) > 0)
-        .map(variant => {
+        .filter((v: any) => (v.stock_available || 0) > 0)
+        .map((variant: any) => {
           // Get thumbnail from media_urls or media_assets
           let thumbnail = null;
 
@@ -381,7 +591,7 @@ export class ProductsService {
             variant_id: variant.variant_id,
             sku: variant.sku,
             option_name: variant.option_name,
-            price: Number(variant.price),
+            price: Number(variant.final_price ?? variant.price),
             current_stock: variant.stock_available || 0,
             thumbnail: thumbnail,
             tax_rate: Number(variant.tax_rate || 0), // Include tax_rate for POS
@@ -491,9 +701,8 @@ export class ProductsService {
           brands: true,
           categories: true,
           series: true,
-          product_variants: true,
+          product_variants: { include: { product_promotions: true } },
           product_blindboxes: true,
-          product_promotions: true
         }
       });
       similarProducts = [...similarProducts, ...byCategory];
@@ -509,13 +718,13 @@ export class ProductsService {
       include: {
         product_variants: {
           where: { deleted_at: null },
-          include: { product_preorder_configs: true }
+          orderBy: { created_at: 'asc' },
+          include: { product_preorder_configs: true, product_promotions: true }
         },
         product_blindboxes: true,
         brands: true,
         categories: true,
         series: true,
-        product_promotions: true,
       }
     });
     if (!product) throw new BadRequestException('Product not found');
@@ -596,22 +805,26 @@ export class ProductsService {
     return product;
   }
 
-  // [NEW] Helper: Dynamic Pricing Logic
+  // [NEW] Helper: Dynamic Pricing Logic (Flash Sale Time-based)
   private calculatePromotionalPrice(product: any) {
-    const promo = product.product_promotions;
     const now = new Date();
-
-    // Check if promotion is valid
-    const isValidPromo = promo &&
-      promo.is_active &&
-      new Date(promo.start_date) <= now &&
-      new Date(promo.end_date) >= now;
+    const h = String(now.getHours()).padStart(2, '0');
+    const m = String(now.getMinutes()).padStart(2, '0');
+    const currentTime = `${h}:${m}`; // e.g. "09:30"
 
     // Apply to Variants
     if (product.product_variants) {
       product.product_variants = product.product_variants.map((variant: any) => {
         let final_price = Number(variant.price);
         let discount_amount = 0;
+
+        const promo = variant.product_promotions;
+
+        // Check if promotion is active AND current time is within the daily flash sale window
+        const isValidPromo = promo &&
+          promo.is_active &&
+          currentTime >= promo.start_time &&
+          currentTime <= promo.end_time;
 
         if (isValidPromo) {
           if (promo.type_code === 'PERCENTAGE') {
@@ -901,11 +1114,9 @@ export class ProductsService {
     imageUrl?: string;
     richContext?: any;
   }) {
-    if (!process.env.GEMINI_API_KEY) {
+    if (!this.genAI) {
       throw new ServiceUnavailableException("AI service is not configured (Missing API Key).");
     }
-
-    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
     const context = dto.userContext ? `User Notes/Context: "${dto.userContext}"` : "User Notes: N/A";
     const variantContext = dto.variantName ? `Target Specific Variant: "${dto.variantName}"` : "Target: Main Product Overview";
@@ -938,7 +1149,7 @@ export class ProductsService {
             
             Technical Specs & Classification:
             ${richContextString}
-            
+
             Guidelines:
             1. **Tone**: Enthusiastic, professional, "Dan choi" friendly (Otaku culture aware).
             2. **Content**: Use the Technical Specs (Scale, Material, Brand, etc.) to enhance the description. If an image is provided, describe visual details.
@@ -956,7 +1167,6 @@ export class ProductsService {
 
     const parts: any[] = [prompt];
 
-    // MULTIMODAL: Fetch Image if provided
     if (dto.imageUrl) {
       try {
         const imgResp = await fetch(dto.imageUrl);
@@ -970,33 +1180,33 @@ export class ProductsService {
             }
           });
         } else {
-          Logger.warn(`Failed to fetch AI Image: ${dto.imageUrl}`);
+          this.logger.warn(`Failed to fetch AI Image: ${dto.imageUrl}`);
         }
       } catch (imgErr) {
-        Logger.error("AI Image Fetch Error", imgErr);
+        this.logger.error("AI Image Fetch Error in generateAiDescription", imgErr);
       }
     }
 
     // GENERATION LOGIC WITH FALLBACK
     try {
       try {
-        // Attempt 1: Gemini Flash Latest
-        const model = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
+        // Attempt 1: Gemini 2.0 Flash
+        const model = this.genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
         const result = await model.generateContent(parts);
         const response = await result.response;
         return { text: response.text() };
       } catch (primaryError) {
-        Logger.warn(`Primary Model (gemini-flash-latest) failed: ${primaryError.message}. Retrying with Fallback...`);
+        this.logger.warn(`Primary Model (gemini-2.0-flash) failed: ${primaryError.message}. Retrying with Lite...`);
 
-        // Attempt 2: Fallback to Stable 1.5 Flash
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+        // Attempt 2: Fallback to Lite
+        const model = this.genAI.getGenerativeModel({ model: "gemini-2.0-flash-lite-001" });
         const result = await model.generateContent(parts);
         const response = await result.response;
         return { text: response.text() };
       }
     } catch (finalError) {
-      Logger.error("AI Gen Failed (All Models)", finalError);
-      throw new ServiceUnavailableException("AI service is currently unavailable. Please try again later.");
+      this.logger.error("AI Gen Failed (All Models)", finalError);
+      throw new ServiceUnavailableException("Dịch vụ AI hiện không khả dụng. Vui lòng thử lại sau.");
     }
   }
 

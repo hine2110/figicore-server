@@ -90,13 +90,17 @@ export class OrdersService {
         });
 
         if (userDiscountVoucher && (!userDiscountVoucher.promotions.end_date || userDiscountVoucher.promotions.end_date > new Date())) {
+          // Block COMING_SOON vouchers - start_date must have arrived
+          if (userDiscountVoucher.promotions.start_date && new Date(userDiscountVoucher.promotions.start_date) > new Date()) {
+            throw new BadRequestException("This discount voucher is not yet active.");
+          }
           if (userDiscountVoucher.promotions.min_order_value && cartTotalAmount < Number(userDiscountVoucher.promotions.min_order_value)) {
-            throw new BadRequestException("Giá trị đơn hàng chưa đạt mức tối thiểu để sử dụng mã giảm giá này.");
+            throw new BadRequestException("Order total does not meet the minimum required to use this discount voucher.");
           }
           appliedDiscountVoucherCode = discountVoucherCode;
           usedDiscountPromotionId = userDiscountVoucher.promotion_id;
         } else {
-          throw new BadRequestException("Mã giảm giá không hợp lệ, đã hết hạn hoặc bạn chưa thu thập mã này.");
+          throw new BadRequestException("Discount voucher is invalid, expired, or has not been collected.");
         }
       }
 
@@ -116,14 +120,18 @@ export class OrdersService {
         });
 
         if (userFreeShipVoucher && (!userFreeShipVoucher.promotions.end_date || userFreeShipVoucher.promotions.end_date > new Date())) {
+          // Block COMING_SOON vouchers - start_date must have arrived
+          if (userFreeShipVoucher.promotions.start_date && new Date(userFreeShipVoucher.promotions.start_date) > new Date()) {
+            throw new BadRequestException("This free shipping voucher is not yet active.");
+          }
           if (userFreeShipVoucher.promotions.min_order_value && cartTotalAmount < Number(userFreeShipVoucher.promotions.min_order_value)) {
-            throw new BadRequestException("Giá trị đơn hàng chưa đạt mức tối thiểu để sử dụng mã miễn phí vận chuyển này.");
+            throw new BadRequestException("Order total does not meet the minimum required to use this free shipping voucher.");
           }
           appliedFreeShipVoucherCode = freeShipVoucherCode;
           usedFreeShipPromotionId = userFreeShipVoucher.promotion_id;
           isVoucherFreeShip = true;
         } else {
-          throw new BadRequestException("Mã miễn phí vận chuyển không hợp lệ, đã hết hạn hoặc bạn chưa thu thập mã này.");
+          throw new BadRequestException("Free shipping voucher is invalid, expired, or has not been collected.");
         }
       }
 
