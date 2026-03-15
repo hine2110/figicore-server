@@ -483,11 +483,22 @@ export class UsersService {
           continue;
         }
 
-        // Map Role
-        let roleCode = 'STAFF_POS';
-        const roleStr = roleInput.toString().toLowerCase();
-        if (roleStr.includes('quản lý') || roleStr.includes('manager')) roleCode = 'MANAGER';
-        else if (roleStr.includes('kho') || roleStr.includes('warehouse') || roleStr.includes('kiểm kho')) roleCode = 'STAFF_INVENTORY';
+        // Map Role — strict match, no silent default
+        let roleCode: string | null = null;
+        const roleStr = roleInput.toString().toLowerCase().trim();
+        if (roleStr.includes('quản lý') || roleStr.includes('manager')) {
+          roleCode = 'MANAGER';
+        } else if (roleStr.includes('kho') || roleStr.includes('warehouse') || roleStr.includes('kiểm kho')) {
+          roleCode = 'STAFF_INVENTORY';
+        } else if (roleStr.includes('pos') || roleStr.includes('thu ngân') || roleStr.includes('bán hàng') || roleStr.includes('cashier')) {
+          roleCode = 'STAFF_POS';
+        }
+
+        if (!roleCode) {
+          results.failed++;
+          results.errors.push({ row: rowNum, message: `Invalid or unrecognized role: "${roleInput}". Accepted values: Quản lý / Manager, Kho / Warehouse, POS / Thu ngân / Cashier` });
+          continue;
+        }
 
         // Check Duplication
         const existing = await this.prisma.users.findFirst({
