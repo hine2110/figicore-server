@@ -14,7 +14,14 @@ export class PromotionsService {
   }
 
   async findAll() {
+    const now = new Date();
     return this.prisma.promotions.findMany({
+      where: {
+        OR: [
+          { end_date: null },          // No expiry = always valid
+          { end_date: { gt: now } }    // Not yet expired
+        ]
+      },
       orderBy: { created_at: 'desc' }
     });
   }
@@ -141,10 +148,17 @@ export class PromotionsService {
   }
 
   async getMyVouchers(userId: number) {
+    const now = new Date();
     return this.prisma.user_vouchers.findMany({
       where: { 
         user_id: userId,
         is_used: false,
+        promotions: {
+          OR: [
+            { end_date: null },       // No expiry = always valid
+            { end_date: { gt: now } } // Not yet expired
+          ]
+        }
       },
       include: {
         promotions: true

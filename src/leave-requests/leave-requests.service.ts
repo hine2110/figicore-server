@@ -8,6 +8,25 @@ export class LeaveRequestsService {
     constructor(private prisma: PrismaService) { }
 
     async create(userId: number, dto: CreateLeaveRequestDto) {
+        // --- LUẬT MỚI: KIỂM TRA THỜI GIAN BÁO TRƯỚC ---
+        const now = new Date();
+        const leaveStartDate = new Date(dto.start_date);
+
+        // Tính khoảng cách thời gian từ hiện tại đến ngày bắt đầu nghỉ (tính bằng giờ)
+        const diffInMilliseconds = leaveStartDate.getTime() - now.getTime();
+        const diffInHours = diffInMilliseconds / (1000 * 60 * 60);
+
+        if (dto.type_code === 'SICK') {
+            if (diffInHours < 6) {
+                throw new BadRequestException('Nghỉ ốm (SICK) phải được báo trước ít nhất 6 tiếng.');
+            }
+        } else {
+            // STANDARD hoặc các loại khác
+            if (diffInHours < 24) {
+                throw new BadRequestException('Nghỉ phép thông thường phải được báo trước ít nhất 24 tiếng.');
+            }
+        }
+        // ----------------------------------------------
         // Rule 1: Overlap Prevention
         const overlap = await this.prisma.leave_requests.findFirst({
             where: {
@@ -35,6 +54,7 @@ export class LeaveRequestsService {
                     start_date: new Date(dto.start_date),
                     end_date: new Date(dto.end_date),
                     reason: dto.reason,
+                    evidence_url: dto.evidence_url,
                     status_code: 'PENDING',
                 },
             });
@@ -55,6 +75,7 @@ export class LeaveRequestsService {
                         start_date: new Date(dto.start_date),
                         end_date: new Date(dto.end_date),
                         reason: dto.reason,
+                        evidence_url: dto.evidence_url,
                         status_code: 'PENDING',
                     },
                 });
@@ -176,8 +197,16 @@ export class LeaveRequestsService {
         });
     }
 
-    async getAllLeaves() {
+    // Tìm hàm getAllLeaves và sửa lại thành:
+    async getAllLeaves(status?: string) {
+        // Tạo điều kiện lọc động
+        const whereClause: any = {};
+        if (status) {
+            whereClause.status_code = status;
+        }
+
         return this.prisma.leave_requests.findMany({
+            where: whereClause, // Nạp điều kiện lọc vào đây
             include: {
                 employees: {
                     include: {
@@ -194,7 +223,6 @@ export class LeaveRequestsService {
             orderBy: { created_at: 'desc' },
         });
     }
-
     async updateStatus(id: number, dto: UpdateLeaveStatusDto) {
         const leaveRequest = await this.prisma.leave_requests.findUnique({
             where: { request_id: id }
@@ -204,43 +232,49 @@ export class LeaveRequestsService {
             throw new BadRequestException('Không tìm thấy yêu cầu nghỉ phép này');
         }
 
+        // 1. Cập nhật trạng thái của đơn nghỉ phép
         const updated = await this.prisma.leave_requests.update({
             where: { request_id: id },
             data: { status_code: dto.status_code },
         });
 
-        // Rule 4: Anti-ABSENT Trap via Schedule Deletion
-        if (dto.status_code === 'APPROVED') {
-            const affectedSchedules = await this.prisma.work_schedules.findMany({
-                where: {
-                    user_id: leaveRequest.user_id,
-                    date: {
-                        gte: leaveRequest.start_date,
-                        lte: leaveRequest.end_date
-                    }
+        // 2. Lấy danh sách các ca làm việc nằm trong khoảng thời gian xin nghỉ
+        const affectedSchedules = await this.prisma.work_schedules.findMany({
+            where: {
+                user_id: leaveRequest.user_id,
+                date: {
+                    gte: leaveRequest.start_date,
+                    lte: leaveRequest.end_date
                 }
-            });
+            }
+        });
 
-            if (affectedSchedules.length > 0) {
-                const scheduleIds = affectedSchedules.map(s => s.schedule_id);
+        if (affectedSchedules.length > 0) {
+            const scheduleIds = affectedSchedules.map(s => s.schedule_id);
+
+            // Xử lý logic xóa mềm / khôi phục bằng Transaction để đảm bảo an toàn dữ liệu
+            if (dto.status_code === 'APPROVED') {
+                // Rule 4: Anti-ABSENT Trap - Xóa ca làm để không bị tính vắng mặt
                 await this.prisma.$transaction([
-                    // Soft delete schedules by marking deleted_at
                     this.prisma.work_schedules.updateMany({
-                        where: {
-                            schedule_id: { in: scheduleIds }
-                        },
-                        data: {
-                            deleted_at: new Date()
-                        }
+                        where: { schedule_id: { in: scheduleIds } },
+                        data: { deleted_at: new Date() }
                     }),
-                    // Also soft delete timesheets related to these schedules
                     this.prisma.timesheets.updateMany({
-                        where: {
-                            schedule_id: { in: scheduleIds }
-                        },
-                        data: {
-                            deleted_at: new Date()
-                        }
+                        where: { schedule_id: { in: scheduleIds } },
+                        data: { deleted_at: new Date() }
+                    })
+                ]);
+            } else if (dto.status_code === 'REJECTED') {
+                // Hồi sinh (Revert) ca làm nếu đơn bị từ chối
+                await this.prisma.$transaction([
+                    this.prisma.work_schedules.updateMany({
+                        where: { schedule_id: { in: scheduleIds } },
+                        data: { deleted_at: null }
+                    }),
+                    this.prisma.timesheets.updateMany({
+                        where: { schedule_id: { in: scheduleIds } },
+                        data: { deleted_at: null }
                     })
                 ]);
             }
