@@ -7,6 +7,7 @@ import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { ActivateAccountDto } from './dto/activate-account.dto';
+import { UpdatePasswordDto } from './dto/update-password.dto';
 
 @Controller('auth')
 export class AuthController {
@@ -73,5 +74,11 @@ export class AuthController {
   @Post('activate')
   async activate(@Body() dto: ActivateAccountDto) {
     return this.authService.activateAccount(dto);
+  }
+
+  @Post('update-password')
+  @UseGuards(AuthGuard('jwt'))
+  async updatePassword(@Req() req, @Body() dto: UpdatePasswordDto) {
+    return this.authService.updatePassword(req.user.user_id, dto);
   }
 }

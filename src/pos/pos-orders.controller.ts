@@ -112,4 +112,25 @@ export class PosOrdersController {
     async registerCustomer(@Body() dto: RegisterCustomerDto) {
         return this.posOrdersService.registerCustomer(dto);
     }
+
+    /**
+     * Lấy chi tiết đơn hàng
+     * GET /pos/orders/:id
+     */
+    @Get(':id')
+    async getOrderById(@Param('id') id: string, @Request() req) {
+        const staffId = req.user.userId;
+        return this.posOrdersService.getOrderById(staffId, parseInt(id));
+    }
+
+    /**
+     * Tạo đơn hàng POS chờ QR (PENDING_PAYMENT)
+     * POST /pos/orders/create-qr
+     */
+    @Post('create-qr')
+    @UsePipes(new ValidationPipe({ transform: true }))
+    async createQrOrder(@Request() req, @Body() dto: CreatePosOrderDto) {
+        const staffId = req.user.userId;
+        return this.posOrdersService.createPendingQrOrder(staffId, dto);
+    }
 }

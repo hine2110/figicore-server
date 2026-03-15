@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException, InternalServerErrorException, Logger, NotFoundException } from '@nestjs/common';
+import { Injectable, BadRequestException, InternalServerErrorException, Logger, NotFoundException, Inject, forwardRef } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { CustomersService } from '../customers/customers.service';
@@ -9,6 +9,7 @@ import { MailService } from '../mail/mail.service';
 import { EventsGateway } from '../events/events.gateway';
 import { WalletService } from '../wallet/wallet.service';
 import { BlindboxesService } from '../blindboxes/blindboxes.service';
+import { AuctionsService } from '../auctions/auctions.service';
 
 @Injectable()
 export class OrdersService {
@@ -20,7 +21,8 @@ export class OrdersService {
     private mailService: MailService,
     private eventsGateway: EventsGateway,
     private walletService: WalletService,
-    private blindboxesService: BlindboxesService
+    private blindboxesService: BlindboxesService,
+    @Inject(forwardRef(() => AuctionsService)) private auctionsService: AuctionsService
   ) { }
 
   // NEW: Anti-scalping Helper
@@ -67,6 +69,12 @@ export class OrdersService {
       });
       if (!address) throw new BadRequestException("Address not found");
 
+      // --- Calculate Initial Total Amount for Validation ---
+      let cartTotalAmount = 0;
+      for (const item of items) {
+        cartTotalAmount += Number(item.price) * item.quantity;
+      }
+
       // Check Discount Voucher Validity
       let appliedDiscountVoucherCode: string | null = null;
       let usedDiscountPromotionId: number | null = null;
@@ -80,12 +88,19 @@ export class OrdersService {
           },
           include: { promotions: true }
         });
-        
+
         if (userDiscountVoucher && (!userDiscountVoucher.promotions.end_date || userDiscountVoucher.promotions.end_date > new Date())) {
+          // Block COMING_SOON vouchers - start_date must have arrived
+          if (userDiscountVoucher.promotions.start_date && new Date(userDiscountVoucher.promotions.start_date) > new Date()) {
+            throw new BadRequestException("This discount voucher is not yet active.");
+          }
+          if (userDiscountVoucher.promotions.min_order_value && cartTotalAmount < Number(userDiscountVoucher.promotions.min_order_value)) {
+            throw new BadRequestException("Order total does not meet the minimum required to use this discount voucher.");
+          }
           appliedDiscountVoucherCode = discountVoucherCode;
           usedDiscountPromotionId = userDiscountVoucher.promotion_id;
         } else {
-          throw new BadRequestException("Mã giảm giá không hợp lệ hoặc bạn chưa thu thập mã này.");
+          throw new BadRequestException("Discount voucher is invalid, expired, or has not been collected.");
         }
       }
 
@@ -103,13 +118,20 @@ export class OrdersService {
           },
           include: { promotions: true }
         });
-        
+
         if (userFreeShipVoucher && (!userFreeShipVoucher.promotions.end_date || userFreeShipVoucher.promotions.end_date > new Date())) {
+          // Block COMING_SOON vouchers - start_date must have arrived
+          if (userFreeShipVoucher.promotions.start_date && new Date(userFreeShipVoucher.promotions.start_date) > new Date()) {
+            throw new BadRequestException("This free shipping voucher is not yet active.");
+          }
+          if (userFreeShipVoucher.promotions.min_order_value && cartTotalAmount < Number(userFreeShipVoucher.promotions.min_order_value)) {
+            throw new BadRequestException("Order total does not meet the minimum required to use this free shipping voucher.");
+          }
           appliedFreeShipVoucherCode = freeShipVoucherCode;
           usedFreeShipPromotionId = userFreeShipVoucher.promotion_id;
           isVoucherFreeShip = true;
         } else {
-           throw new BadRequestException("Mã miễn phí vận chuyển không hợp lệ hoặc bạn chưa thu thập mã này.");
+          throw new BadRequestException("Free shipping voucher is invalid, expired, or has not been collected.");
         }
       }
 
@@ -398,8 +420,8 @@ export class OrdersService {
           let customerShippingFee = FIXED_SHIPPING_FEE;
 
           if (isVoucherFreeShip) {
-             const discountValue = 30000; // Implicit 100% free ship
-             customerShippingFee = Math.max(0, customerShippingFee - discountValue);
+            const discountValue = 30000; // Implicit 100% free ship
+            customerShippingFee = Math.max(0, customerShippingFee - discountValue);
           }
 
           // Total now uses the fixed user fee, not the real cost
@@ -506,6 +528,37 @@ export class OrdersService {
     return orders;
   }
 
+  // --- NEW: FETCH SINGLE ORDER BY CODE (or code prefix for auction orders) ---
+  async getOrderByCode(code: string, userId: number) {
+    if (!code) throw new BadRequestException('Order code required');
+
+    // For auction orders, code may be a prefix (e.g., "AUC-12") matching "AUC-12-1234567890"
+    const orders = await this.prisma.orders.findMany({
+      where: {
+        user_id: userId,
+        order_code: { startsWith: code }
+      },
+      include: {
+        order_items: {
+          include: {
+            product_variants: {
+              include: { products: true, product_preorder_configs: true }
+            }
+          }
+        },
+        addresses: true
+      },
+      orderBy: { created_at: 'desc' }
+    });
+
+    if (!orders || orders.length === 0) {
+      throw new NotFoundException(`No order found with code: ${code}`);
+    }
+
+    // Return array for compatibility with Checkout.tsx (legacyAuction path sets fetchedOrders = res.data)
+    return orders;
+  }
+
   // --- NEW: MOCK PAYMENT FOR GROUP ---
   async mockPayGroup(paymentRefCode: string, userId: number) {
     if (!paymentRefCode) throw new BadRequestException("Payment Ref Code required");
@@ -569,6 +622,22 @@ export class OrdersService {
         }
       });
 
+      // --- NEW: SYNC AUCTION STATUS ---
+      for (const order of updatedOrders) {
+        if (order.order_code && order.order_code.startsWith('AUC-')) {
+          try {
+            const auctionId = parseInt(order.order_code.split('-')[1], 10);
+            await this.prisma.auctions.update({
+              where: { auction_id: auctionId },
+              data: { status_code: 'COMPLETED' }
+            });
+            this.logger.log(`Synced Auction #${auctionId} to COMPLETED after payment`);
+          } catch (err) {
+            this.logger.error(`Failed to sync auction status for order ${order.order_code}:`, err);
+          }
+        }
+      }
+
       for (const order of updatedOrders) {
         if (order.users && order.users.email) {
           // Send Email
@@ -627,8 +696,6 @@ export class OrdersService {
             where: { order_id: order.order_id },
             data: { status_code: 'PROCESSING', paid_amount: order.total_amount }
           });
-
-
         }
 
         // 6. Record Wallet Deduction Transaction
@@ -651,6 +718,22 @@ export class OrdersService {
           order_items: { include: { product_variants: { include: { products: true } } } }
         }
       });
+
+      // --- NEW: SYNC AUCTION STATUS ---
+      for (const order of updatedOrders) {
+        if (order.order_code && order.order_code.startsWith('AUC-')) {
+          try {
+            const auctionId = parseInt(order.order_code.split('-')[1], 10);
+            await this.prisma.auctions.update({
+              where: { auction_id: auctionId },
+              data: { status_code: 'COMPLETED' }
+            });
+            this.logger.log(`Synced Auction #${auctionId} to COMPLETED after wallet payment`);
+          } catch (err) {
+            this.logger.error(`Failed to sync auction status for order ${order.order_code}:`, err);
+          }
+        }
+      }
 
       for (const order of updatedOrders) {
         if (order.users && order.users.email) {
@@ -713,7 +796,9 @@ export class OrdersService {
     return this.prisma.$transaction(async (tx) => {
       const order = await tx.orders.findUnique({
         where: { order_id: orderId },
-        include: { order_items: true }
+        include: {
+          order_items: true
+        }
       });
 
       if (!order) throw new BadRequestException(`Order #${orderId} not found`);
@@ -780,6 +865,31 @@ export class OrdersService {
         // We don't block cancellation if this fails, just log it
       }
 
+      // 2.5 Restore Vouchers (If any were applied)
+      const usedPromotions = [order.promotion_id, order.shipping_promotion_id].filter(Boolean) as number[];
+      if (order.user_id && usedPromotions.length > 0) {
+        for (const promoId of usedPromotions) {
+          // Find the user_voucher record and set is_used back to false
+          const usedVoucher = await tx.user_vouchers.findFirst({
+            where: {
+              user_id: order.user_id,
+              promotion_id: promoId,
+              is_used: true
+            },
+            orderBy: {
+              updated_at: 'desc' // Try to get the one most recently used
+            }
+          });
+
+          if (usedVoucher) {
+            await tx.user_vouchers.update({
+              where: { id: usedVoucher.id },
+              data: { is_used: false }
+            });
+          }
+        }
+      }
+
       // 3. Update Status
       return tx.orders.update({
         where: { order_id: orderId },
@@ -797,6 +907,7 @@ export class OrdersService {
 
     return this._processExpireTransaction(orderId);
   }
+
 
   @Cron(CronExpression.EVERY_MINUTE)
   async handleOverdueOrders() {
@@ -1068,7 +1179,7 @@ export class OrdersService {
   }
 
   async cancelOrder(orderId: number, userId: number) {
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       const order = await tx.orders.findFirst({
         where: { order_id: orderId, user_id: userId },
         include: {
@@ -1093,6 +1204,20 @@ export class OrdersService {
       // Allow PENDING (Retail) and WAITING_DEPOSIT (Pre-order)
       if (!['PENDING_PAYMENT', 'WAITING_DEPOSIT'].includes(order.status_code || '')) {
         throw new BadRequestException("Cannot cancel processed orders");
+      }
+
+      // Special Handling for Auction Orders
+      if (order.order_code && order.order_code.startsWith('AUC-')) {
+        const parts = order.order_code.split('-');
+        const auctionId = parseInt(parts[1], 10);
+
+        const cancelledAuctionOrder = await tx.orders.update({
+          where: { order_id: orderId },
+          data: { status_code: 'CANCELLED' }
+        });
+
+        // Save auctionId to process forfeit outside transaction
+        return { ...cancelledAuctionOrder, _auctionForfeitId: auctionId };
       }
 
       // 1. Revert Stock (Handle Retail vs Pre-order)
@@ -1159,6 +1284,30 @@ export class OrdersService {
         console.error("Failed to restore items to cart", err);
       }
 
+      // 2.5 Restore Vouchers
+      const usedPromotions = [order.promotion_id, order.shipping_promotion_id].filter(Boolean) as number[];
+      if (order.user_id && usedPromotions.length > 0) {
+        for (const promoId of usedPromotions) {
+          const usedVoucher = await tx.user_vouchers.findFirst({
+            where: {
+              user_id: order.user_id,
+              promotion_id: promoId,
+              is_used: true
+            },
+            orderBy: {
+              updated_at: 'desc'
+            }
+          });
+
+          if (usedVoucher) {
+            await tx.user_vouchers.update({
+              where: { id: usedVoucher.id },
+              data: { is_used: false }
+            });
+          }
+        }
+      }
+
       // 3. Update Order Status
       const cancelledOrder = await tx.orders.update({
         where: { order_id: orderId },
@@ -1181,6 +1330,14 @@ export class OrdersService {
 
       return cancelledOrder;
     });
+
+    // Execute side-effect outside the transaction
+    if (result && (result as any)._auctionForfeitId) {
+      await this.auctionsService.manualForfeitAuction((result as any)._auctionForfeitId, userId);
+      delete (result as any)._auctionForfeitId;
+    }
+
+    return result;
   }
 
   async update(id: number, updateOrderDto: UpdateOrderDto) {
@@ -1321,6 +1478,20 @@ export class OrdersService {
     // C. Trigger Delivery Success Email
     if (order.users) {
       this.mailService.sendDeliverySuccess(order.users, order, earnedPoints);
+    }
+
+    // D. Sync Auction Status if it is an auction order
+    if (order.order_code && order.order_code.startsWith('AUC-')) {
+      try {
+        const auctionId = parseInt(order.order_code.split('-')[1], 10);
+        await this.prisma.auctions.update({
+          where: { auction_id: auctionId },
+          data: { status_code: 'COMPLETED' }
+        });
+        this.logger.log(`Synced Auction #${auctionId} to COMPLETED after delivery/completion`);
+      } catch (err) {
+        this.logger.error(`Failed to sync auction status for order ${order.order_code}:`, err);
+      }
     }
 
     return { success: true, message: `Order ${trackingCode} completed and points added.` };

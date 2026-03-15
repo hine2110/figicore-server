@@ -175,8 +175,9 @@ export class CartService {
             product_variants: {
               include: {
                 product_preorder_configs: true, // Included for correct price calculation
+                product_promotions: true,
                 products: {
-                  include: { product_blindboxes: true, product_promotions: true }
+                  include: { product_blindboxes: true }
                 }
               }
             }
@@ -219,6 +220,23 @@ export class CartService {
         if (bb) {
           effectivePrice = Number(bb.price || 0);
         }
+      } else {
+        // RETAIL: Apply variant-level Flash Sale promotion if within time window
+        const promo = variant.product_promotions;
+        if (promo && promo.is_active) {
+          const now = new Date();
+          const h = String(now.getHours()).padStart(2, '0');
+          const mi = String(now.getMinutes()).padStart(2, '0');
+          const currentTime = `${h}:${mi}`;
+          const inWindow = currentTime >= promo.start_time && currentTime <= promo.end_time;
+          if (inWindow) {
+            if (promo.type_code === 'PERCENTAGE') {
+              effectivePrice = effectivePrice * (1 - Number(promo.value) / 100);
+            } else if (promo.type_code === 'FIXED_AMOUNT') {
+              effectivePrice = Math.max(0, effectivePrice - Number(promo.value));
+            }
+          }
+        }
       }
 
       return {
@@ -236,7 +254,7 @@ export class CartService {
         payment_option: (item as any).payment_option,
         sku: variant.sku,
         maxStock: variant.stock_available,
-        promotion: (product as any).product_promotions
+        promotion: variant.product_promotions
       };
     });
 

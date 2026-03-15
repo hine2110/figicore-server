@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { OrdersService } from './orders.service';
 import { OrdersController } from './orders.controller';
 import { CustomersModule } from '../customers/customers.module';
@@ -6,11 +6,19 @@ import { AddressModule } from '../address/address.module';
 import { MailModule } from '../mail/mail.module';
 import { EventsModule } from '../events/events.module';
 import { WalletModule } from '../wallet/wallet.module';
-
+import { AuctionsModule } from '../auctions/auctions.module';
 import { BlindboxesModule } from '../blindboxes/blindboxes.module';
 
 @Module({
-  imports: [AddressModule, CustomersModule, MailModule, EventsModule, WalletModule, BlindboxesModule],
+  imports: [
+    AddressModule,
+    CustomersModule,
+    MailModule,
+    EventsModule,
+    WalletModule,
+    BlindboxesModule,
+    forwardRef(() => AuctionsModule)
+  ],
   controllers: [OrdersController],
   providers: [OrdersService],
   exports: [OrdersService],

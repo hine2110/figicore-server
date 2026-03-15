@@ -14,7 +14,16 @@ export class PromotionsService {
   }
 
   async findAll() {
-    return this.prisma.promotions.findMany();
+    const now = new Date();
+    return this.prisma.promotions.findMany({
+      where: {
+        OR: [
+          { end_date: null },          // No expiry = always valid
+          { end_date: { gt: now } }    // Not yet expired
+        ]
+      },
+      orderBy: { created_at: 'desc' }
+    });
   }
 
   async findOne(id: number) {
@@ -66,17 +75,17 @@ export class PromotionsService {
     });
     const collectedIds = new Set(collected.map(c => c.promotion_id));
 
-    return promotions.map(p => {
-      const isCollected = collectedIds.has(p.promotion_id);
-      const availableCount = p.max_quantity ? p.max_quantity - (p.collected_quantity || 0) : null;
-      const isOutOfStock = p.max_quantity && (p.collected_quantity || 0) >= p.max_quantity;
-      return {
+    const now = new Date();
+    return promotions
+      .filter(p => !collectedIds.has(p.promotion_id))
+      .filter(p => !(p.max_quantity && (p.collected_quantity || 0) >= p.max_quantity))
+      .filter(p => !p.end_date || new Date(p.end_date) >= now)
+      .map(p => ({
         ...p,
-        is_collected: isCollected,
-        can_collect: !isCollected && !isOutOfStock,
-        is_out_of_stock: isOutOfStock
-      };
-    });
+        is_collected: false,
+        can_collect: true,
+        is_out_of_stock: false
+      }));
   }
 
   async collectVoucher(userId: number, promotionId: number) {
@@ -139,10 +148,17 @@ export class PromotionsService {
   }
 
   async getMyVouchers(userId: number) {
+    const now = new Date();
     return this.prisma.user_vouchers.findMany({
       where: { 
         user_id: userId,
         is_used: false,
+        promotions: {
+          OR: [
+            { end_date: null },       // No expiry = always valid
+            { end_date: { gt: now } } // Not yet expired
+          ]
+        }
       },
       include: {
         promotions: true
