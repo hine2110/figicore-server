@@ -288,7 +288,6 @@ export class UsersService {
           data: {
             user_id: newUser.user_id,
             employee_code: employeeCode,
-            base_salary: Number(userDto.base_salary),
             job_title_code: userDto.job_title_code || userDto.role_code,
             start_date: userDto.start_date ? new Date(userDto.start_date) : new Date(),
           }

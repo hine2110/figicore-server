@@ -38,15 +38,14 @@ import { WalletModule } from './wallet/wallet.module';
 import { BlindboxesModule } from './blindboxes/blindboxes.module';
 import { ServeStaticModule } from '@nestjs/serve-static';
 import { join } from 'path';
-
-//import { LeaveRequestsModule } from './leave-requests/leave-requests.module';
-
+import { LeaveRequestsModule } from './leave-requests/leave-requests.module';
 import { KiotVietModule } from './kiotviet/kiotviet.module';
 import { PromotionsModule } from './promotions/promotions.module';
 import { PaymentsModule } from './payments/payments.module';
 import { ReturnsModule } from './returns/returns.module';
 import { PayrollModule } from './payroll/payroll.module';
-
+import { TimesheetCorrectionsModule } from './timesheet-corrections/timesheet-corrections.module';
+import { PayrollDisputesModule } from './payroll-disputes/payroll-disputes.module';
 
 @Module({
 
@@ -90,13 +89,13 @@ import { PayrollModule } from './payroll/payroll.module';
     ProductPromotionsModule,
     WalletModule,
     BlindboxesModule,
-
-    //LeaveRequestsModule
-
+    LeaveRequestsModule,
     PromotionsModule,
     PaymentsModule,
     ReturnsModule,
-    PayrollModule
+    PayrollModule,
+    TimesheetCorrectionsModule,
+    PayrollDisputesModule
 
   ],
 

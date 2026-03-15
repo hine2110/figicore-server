@@ -22,10 +22,7 @@ export class WorkSchedulesStaffService {
 
         let durationMs = endTime - startTime;
 
-        // Handle negative duration (Overnight shift: e.g., 22:00 -> 04:00)
-        if (durationMs < 0) {
-            durationMs += 24 * 60 * 60 * 1000; // Add 24 hours
-        }
+
 
         const durationHours = durationMs / (1000 * 60 * 60);
         return Math.round(durationHours * 10) / 10; // Round to 1 decimal
