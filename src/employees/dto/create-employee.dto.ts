@@ -38,13 +38,6 @@ export class CreateEmployeeDto {
   @IsNotEmpty()
   job_title_code: string;
 
-  @IsNumber()
-  @IsPositive()
-  @IsNotEmpty()
-  @Type(() => Number)
-  @Transform(({ value }) => Number(value))
-  base_salary: number;
-
   @IsOptional()
   @Type(() => Date)
   start_date?: Date;
