@@ -45,31 +45,22 @@ export class PosOrdersService {
 
         // 3. Tính toán tổng tiền và thuế
         let totalAmount = 0;
-        let totalTax = 0;
         const orderItems = dto.items.map(item => {
             const variant = variants.find(v => v.variant_id === item.variant_id);
             if (!variant) throw new BadRequestException('Sản phẩm không tồn tại');
 
             const unitPrice = Number(variant.price);
             const totalPrice = unitPrice * item.quantity;
-            const taxRate = Number(variant.tax_rate || 0);
-            const taxAmount = (totalPrice * taxRate) / 100;
-
-            totalAmount += totalPrice;
-            totalTax += taxAmount;
-
             return {
                 variant_id: variant.variant_id,
                 quantity: item.quantity,
                 unit_price: unitPrice,
                 total_price: totalPrice,
-                tax_rate: taxRate,
-                tax_amount: taxAmount
             };
         });
 
         const discountAmount = dto.discount_amount || 0;
-        const finalAmount = totalAmount + totalTax - discountAmount;
+        const finalAmount = totalAmount - discountAmount;
         const orderCode = this.generateOrderCode();
 
         // 4. Transaction: Tạo đơn + Finalize Sync
@@ -95,14 +86,8 @@ export class PosOrdersService {
                         user_id: dto.user_id || null,
                         payment_method_code: dto.payment_method_code,
                         total_amount: finalAmount,
-                        total_tax: totalTax, // Update tax
                         paid_amount: finalAmount,
                         discount_amount: discountAmount,
-                        is_vat_export: dto.is_vat_export || false,
-                        vat_tax_number: dto.vat_tax_number || null,
-                        vat_company_name: dto.vat_company_name || null,
-                        vat_company_address: dto.vat_company_address || null,
-                        vat_invoice_email: dto.vat_invoice_email || null,
                         cash_received: dto.cash_received || null,
                         cash_change: dto.cash_change || null,
                         status_code: 'COMPLETED',
@@ -121,17 +106,11 @@ export class PosOrdersService {
                         channel_code: 'POS',
                         payment_method_code: dto.payment_method_code,
                         total_amount: finalAmount,
-                        total_tax: totalTax, // Save tax
                         paid_amount: finalAmount,
                         discount_amount: discountAmount,
                         shipping_fee: 0,
                         status_code: 'COMPLETED',
                         note: dto.note,
-                        is_vat_export: dto.is_vat_export || false,
-                        vat_tax_number: dto.vat_tax_number || null,
-                        vat_company_name: dto.vat_company_name || null,
-                        vat_company_address: dto.vat_company_address || null,
-                        vat_invoice_email: dto.vat_invoice_email || null,
                     } as any,
                 });
 
@@ -143,8 +122,6 @@ export class PosOrdersService {
                             quantity: item.quantity,
                             unit_price: item.unit_price,
                             total_price: item.total_price,
-                            tax_rate: item.tax_rate,
-                            tax_amount: item.tax_amount
                         },
                     });
 
@@ -526,14 +503,8 @@ export class PosOrdersService {
                         user_id: dto.user_id || null,
                         channel_code: 'POS',
                         total_amount: 0,
-                        total_tax: 0,
                         status_code: 'PENDING',
                         note: dto.note,
-                        is_vat_export: dto.is_vat_export || false,
-                        vat_tax_number: dto.vat_tax_number || null,
-                        vat_company_name: dto.vat_company_name || null,
-                        vat_company_address: dto.vat_company_address || null,
-                        vat_invoice_email: dto.vat_invoice_email || null,
                     } as any,
                     include: { order_items: true }
                 });
@@ -543,11 +514,6 @@ export class PosOrdersService {
                     data: {
                         user_id: dto.user_id || null,
                         note: dto.note,
-                        is_vat_export: dto.is_vat_export || false,
-                        vat_tax_number: dto.vat_tax_number || null,
-                        vat_company_name: dto.vat_company_name || null,
-                        vat_company_address: dto.vat_company_address || null,
-                        vat_invoice_email: dto.vat_invoice_email || null,
                     } as any
                 });
             }
@@ -567,8 +533,6 @@ export class PosOrdersService {
                 if (!variant) throw new BadRequestException(`Variant ${vId} not found`);
 
                 const price = Number(variant.price);
-                const taxRate = Number(variant.tax_rate || 0);
-                const taxAmount = (price * nQty * taxRate) / 100;
 
                 if (oQty > 0) {
                     await tx.order_items.updateMany({
@@ -576,8 +540,6 @@ export class PosOrdersService {
                         data: {
                             quantity: nQty,
                             total_price: price * nQty,
-                            tax_rate: taxRate,
-                            tax_amount: taxAmount
                         }
                     });
                 } else {
@@ -588,8 +550,6 @@ export class PosOrdersService {
                             quantity: nQty,
                             unit_price: price,
                             total_price: price * nQty,
-                            tax_rate: taxRate,
-                            tax_amount: taxAmount
                         }
                     });
                 }
@@ -604,14 +564,12 @@ export class PosOrdersService {
 
             const finalItems = await tx.order_items.findMany({ where: { order_id: order.order_id } });
             const total = finalItems.reduce((sum, i) => sum + Number(i.total_price), 0);
-            const totalTax = finalItems.reduce((sum, i) => sum + Number(i.tax_amount || 0), 0);
             const discount = dto.discount_amount || 0;
 
             return tx.orders.update({
                 where: { order_id: order.order_id },
                 data: {
-                    total_amount: total + totalTax - discount,
-                    total_tax: totalTax,
+                    total_amount: total - discount,
                     discount_amount: discount
                 },
                 include: { order_items: true }
@@ -640,21 +598,17 @@ export class PosOrdersService {
         });
 
         let totalAmount = 0;
-        let totalTax = 0;
         const orderItems = dto.items.map(item => {
             const variant = variants.find(v => v.variant_id === item.variant_id);
             if (!variant) throw new BadRequestException('Sản phẩm không tồn tại');
             const unitPrice = Number(variant.price);
             const totalPrice = unitPrice * item.quantity;
-            const taxRate = Number(variant.tax_rate || 0);
-            const taxAmount = (totalPrice * taxRate) / 100;
             totalAmount += totalPrice;
-            totalTax += taxAmount;
-            return { variant_id: variant.variant_id, quantity: item.quantity, unit_price: unitPrice, total_price: totalPrice, tax_rate: taxRate, tax_amount: taxAmount };
+            return { variant_id: variant.variant_id, quantity: item.quantity, unit_price: unitPrice, total_price: totalPrice };
         });
 
         const discountAmount = dto.discount_amount || 0;
-        const finalAmount = totalAmount + totalTax - discountAmount;
+        const finalAmount = totalAmount - discountAmount;
         const paymentRefCode = this.generatePosQrRef();
         const orderCode = this.generateOrderCode();
 
@@ -700,17 +654,11 @@ export class PosOrdersService {
                         payment_method_code: 'VIETQR',
                         payment_ref_code: paymentRefCode,
                         total_amount: finalAmount,
-                        total_tax: totalTax,
                         paid_amount: 0,
                         discount_amount: discountAmount,
                         status_code: 'PENDING_PAYMENT',
                         note: dto.note,
                         updated_at: new Date(),
-                        is_vat_export: dto.is_vat_export || false,
-                        vat_tax_number: dto.vat_tax_number || null,
-                        vat_company_name: dto.vat_company_name || null,
-                        vat_company_address: dto.vat_company_address || null,
-                        vat_invoice_email: dto.vat_invoice_email || null,
                     } as any,
                 });
 
@@ -727,17 +675,11 @@ export class PosOrdersService {
                         payment_method_code: 'VIETQR',
                         payment_ref_code: paymentRefCode,
                         total_amount: finalAmount,
-                        total_tax: totalTax,
                         paid_amount: 0,
                         discount_amount: discountAmount,
                         shipping_fee: 0,
                         status_code: 'PENDING_PAYMENT',
                         note: dto.note,
-                        is_vat_export: dto.is_vat_export || false,
-                        vat_tax_number: dto.vat_tax_number || null,
-                        vat_company_name: dto.vat_company_name || null,
-                        vat_company_address: dto.vat_company_address || null,
-                        vat_invoice_email: dto.vat_invoice_email || null,
                     } as any,
                 });
 
@@ -749,8 +691,6 @@ export class PosOrdersService {
                             quantity: item.quantity,
                             unit_price: item.unit_price,
                             total_price: item.total_price,
-                            tax_rate: item.tax_rate,
-                            tax_amount: item.tax_amount,
                         },
                     });
                     await tx.product_variants.update({

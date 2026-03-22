@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ProductsService } from './products.service';
 import { ProductsController } from './products.controller';
-import { KiotVietModule } from 'src/kiotviet/kiotviet.module';
+import { KiotVietModule } from '../kiotviet/kiotviet.module';
 
 import { ConfigModule } from '@nestjs/config';
 
