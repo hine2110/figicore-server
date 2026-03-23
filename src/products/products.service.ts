@@ -1167,46 +1167,27 @@ export class ProductsService {
 
     const parts: any[] = [prompt];
 
-    if (dto.imageUrl) {
-      try {
-        const imgResp = await fetch(dto.imageUrl);
-        if (imgResp.ok) {
-          const arrayBuffer = await imgResp.arrayBuffer();
-          const buffer = Buffer.from(arrayBuffer);
-          parts.push({
-            inlineData: {
-              data: buffer.toString("base64"),
-              mimeType: imgResp.headers.get("content-type") || "image/jpeg"
-            }
-          });
-        } else {
-          this.logger.warn(`Failed to fetch AI Image: ${dto.imageUrl}`);
-        }
-      } catch (imgErr) {
-        this.logger.error("AI Image Fetch Error in generateAiDescription", imgErr);
-      }
+    // --- GRQO (Llama 3) LOGIC ---
+    if (!this.groq) {
+      this.logger.error("Groq key missing.");
+      throw new ServiceUnavailableException("Hệ thống chưa cấu hình GROQ_API_KEY. Vui lòng thêm vào file .env.");
     }
 
-    // GENERATION LOGIC WITH FALLBACK
     try {
-      try {
-        // Attempt 1: Gemini 2.0 Flash
-        const model = this.genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
-        const result = await model.generateContent(parts);
-        const response = await result.response;
-        return { text: response.text() };
-      } catch (primaryError) {
-        this.logger.warn(`Primary Model (gemini-2.0-flash) failed: ${primaryError.message}. Retrying with Lite...`);
+      this.logger.log("Generating with Groq (Llama 3.3 70B)...");
+      const groqPrompt = parts[0] as string;
+      const groqRes = await this.groq.chat.completions.create({
+        model: 'llama-3.3-70b-versatile',
+        messages: [{ role: 'user', content: groqPrompt }],
+        max_tokens: 800,
+      });
 
-        // Attempt 2: Fallback to Lite
-        const model = this.genAI.getGenerativeModel({ model: "gemini-2.0-flash-lite-001" });
-        const result = await model.generateContent(parts);
-        const response = await result.response;
-        return { text: response.text() };
-      }
+      const text = groqRes.choices?.[0]?.message?.content || '';
+      return { text, source: 'groq' };
+
     } catch (finalError) {
-      this.logger.error("AI Gen Failed (All Models)", finalError);
-      throw new ServiceUnavailableException("Dịch vụ AI hiện không khả dụng. Vui lòng thử lại sau.");
+      this.logger.error("AI Gen Failed (Groq)", finalError);
+      throw new ServiceUnavailableException("Dịch vụ AI Groq hiện không khả dụng. Vui lòng thử lại sau.");
     }
   }
 

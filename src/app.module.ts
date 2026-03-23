@@ -48,6 +48,7 @@ import { LivekitModule } from './livekit/livekit.module';
 import { TimesheetCorrectionsModule } from './timesheet-corrections/timesheet-corrections.module';
 import { PayrollDisputesModule } from './payroll-disputes/payroll-disputes.module';
 import { AiAssistantModule } from './ai-assistant/ai-assistant.module';
+import { LivestreamsModule } from './livestreams/livestreams.module';
 
 
 @Module({
@@ -100,7 +101,8 @@ import { AiAssistantModule } from './ai-assistant/ai-assistant.module';
     LivekitModule,
     TimesheetCorrectionsModule,
     PayrollDisputesModule,
-    AiAssistantModule
+    AiAssistantModule,
+    LivestreamsModule
   ],
 
   controllers: [AppController],

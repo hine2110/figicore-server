@@ -137,6 +137,7 @@ export class CartService {
         cart_id: cart.cart_id,
         variant_id: variantId,
         payment_option: paymentOption, // <--- CRITICAL FIX
+        livestream_id: dto.livestreamId || null,
         deleted_at: null
       }
     });
@@ -192,7 +193,11 @@ export class CartService {
 
       await this.prisma.cart_items.update({
         where: { item_id: existingItem.item_id },
-        data: { quantity: newQuantity, updated_at: new Date() }
+        data: { 
+          quantity: newQuantity, 
+          updated_at: new Date(),
+          livestream_id: dto.livestreamId || existingItem.livestream_id 
+        }
       });
     } else {
       await this.prisma.cart_items.create({
@@ -200,7 +205,8 @@ export class CartService {
           cart_id: cart.cart_id,
           variant_id: variantId,
           quantity: quantity,
-          payment_option: dto.paymentOption || 'DEPOSIT' // Ensure DTO has this or we default
+          payment_option: dto.paymentOption || 'DEPOSIT',
+          livestream_id: dto.livestreamId || null
         }
       });
     }
@@ -233,7 +239,7 @@ export class CartService {
     if (!cart) return { items: [], total: 0 };
 
     // Format for frontend
-    const items = cart.cart_items.map(item => {
+    const items = await Promise.all(cart.cart_items.map(async (item) => {
       const variant = item.product_variants as any; // Cast to any to access dynamic fields if needed
       const product = variant.products;
 
@@ -265,19 +271,45 @@ export class CartService {
           effectivePrice = Number(bb.price || 0);
         }
       } else {
-        // RETAIL: Apply variant-level Flash Sale promotion if within time window
-        const promo = variant.product_promotions;
-        if (promo && promo.is_active) {
-          const now = new Date();
-          const h = String(now.getHours()).padStart(2, '0');
-          const mi = String(now.getMinutes()).padStart(2, '0');
-          const currentTime = `${h}:${mi}`;
-          const inWindow = currentTime >= promo.start_time && currentTime <= promo.end_time;
-          if (inWindow) {
-            if (promo.type_code === 'PERCENTAGE') {
-              effectivePrice = effectivePrice * (1 - Number(promo.value) / 100);
-            } else if (promo.type_code === 'FIXED_AMOUNT') {
-              effectivePrice = Math.max(0, effectivePrice - Number(promo.value));
+        // LIVESTREAM PRICING LOGIC
+        if (item.livestream_id) {
+          // 1. Fetch Flash Sale if active
+          const liveProduct = await this.prisma.livestream_products.findUnique({
+            where: {
+              livestream_id_variant_id: {
+                livestream_id: item.livestream_id,
+                variant_id: variant.variant_id
+              }
+            },
+            include: {
+              livestream: true // Fetch status
+            }
+          });
+
+          const isLive = liveProduct?.livestream?.status === 'LIVE';
+
+          if (isLive && liveProduct && liveProduct.flash_sale_price && (liveProduct.flash_sale_stock || 0) > 0) {
+            effectivePrice = Number(liveProduct.flash_sale_price);
+          } else if (isLive) {
+            // 2. Apply General 2% Live Discount
+            effectivePrice = effectivePrice * 0.98;
+          }
+          // If NOT LIVE, it falls through to standard pricing (original price)
+        } else {
+          // RETAIL: Apply variant-level Flash Sale promotion if within time window
+          const promo = variant.product_promotions;
+          if (promo && promo.is_active) {
+            const now = new Date();
+            const h = String(now.getHours()).padStart(2, '0');
+            const mi = String(now.getMinutes()).padStart(2, '0');
+            const currentTime = `${h}:${mi}`;
+            const inWindow = currentTime >= promo.start_time && currentTime <= promo.end_time;
+            if (inWindow) {
+              if (promo.type_code === 'PERCENTAGE') {
+                effectivePrice = effectivePrice * (1 - Number(promo.value) / 100);
+              } else if (promo.type_code === 'FIXED_AMOUNT') {
+                effectivePrice = Math.max(0, effectivePrice - Number(promo.value));
+              }
             }
           }
         }
@@ -298,9 +330,10 @@ export class CartService {
         payment_option: (item as any).payment_option,
         sku: variant.sku,
         maxStock: variant.stock_available,
-        promotion: variant.product_promotions
+        promotion: variant.product_promotions,
+        livestream_id: item.livestream_id
       };
-    });
+    }));
 
     const total = items.reduce((sum, item) => sum + (item.price * (item.quantity || 1)), 0);
 

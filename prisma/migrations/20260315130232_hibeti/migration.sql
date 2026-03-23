@@ -280,6 +280,8 @@ CREATE TABLE "orders" (
     "vat_company_name" VARCHAR(255),
     "vat_company_address" VARCHAR(500),
     "vat_invoice_email" VARCHAR(100),
+    "cash_received" DECIMAL(15,2),
+    "cash_change" DECIMAL(15,2),
     "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "deleted_at" TIMESTAMP(6),
@@ -408,7 +410,6 @@ CREATE TABLE "products" (
     "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "deleted_at" TIMESTAMP(6),
-    "product_promotion_id" INTEGER,
 
     CONSTRAINT "products_pkey" PRIMARY KEY ("product_id")
 );
@@ -437,6 +438,7 @@ CREATE TABLE "product_variants" (
     "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "deleted_at" TIMESTAMP(6),
+    "product_promotion_id" INTEGER,
 
     CONSTRAINT "product_variants_pkey" PRIMARY KEY ("variant_id")
 );
@@ -461,8 +463,9 @@ CREATE TABLE "product_promotions" (
     "name" VARCHAR(255) NOT NULL,
     "type_code" VARCHAR(50) NOT NULL,
     "value" DECIMAL(15,2) NOT NULL,
-    "start_date" TIMESTAMP(6) NOT NULL,
-    "end_date" TIMESTAMP(6) NOT NULL,
+    "start_time" VARCHAR(5) NOT NULL,
+    "end_time" VARCHAR(5) NOT NULL,
+    "is_recurring" BOOLEAN NOT NULL DEFAULT false,
     "is_active" BOOLEAN DEFAULT true,
     "min_apply_price" DECIMAL(15,2),
     "max_apply_price" DECIMAL(15,2),
@@ -592,6 +595,22 @@ CREATE TABLE "system_configurations" (
     "deleted_at" TIMESTAMP(6),
 
     CONSTRAINT "system_configurations_pkey" PRIMARY KEY ("config_id")
+);
+
+-- CreateTable
+CREATE TABLE "system_recommendations" (
+    "recommendation_id" SERIAL NOT NULL,
+    "target_type" VARCHAR(50) NOT NULL,
+    "target_id" INTEGER NOT NULL,
+    "type" VARCHAR(50) NOT NULL,
+    "title" VARCHAR(255) NOT NULL,
+    "reasoning" TEXT NOT NULL,
+    "suggested_action" JSONB NOT NULL,
+    "status_code" VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+    "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "system_recommendations_pkey" PRIMARY KEY ("recommendation_id")
 );
 
 -- CreateTable
@@ -741,6 +760,17 @@ CREATE TABLE "auction_bids" (
 );
 
 -- CreateTable
+CREATE TABLE "auction_chat_messages" (
+    "message_id" SERIAL NOT NULL,
+    "auction_id" INTEGER NOT NULL,
+    "user_id" INTEGER NOT NULL,
+    "message" TEXT NOT NULL,
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "auction_chat_messages_pkey" PRIMARY KEY ("message_id")
+);
+
+-- CreateTable
 CREATE TABLE "wallets" (
     "wallet_id" SERIAL NOT NULL,
     "user_id" INTEGER NOT NULL,
@@ -823,6 +853,7 @@ CREATE TABLE "leave_requests" (
     "status_code" VARCHAR(50) DEFAULT 'PENDING',
     "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
+    "evidence_url" TEXT,
 
     CONSTRAINT "leave_requests_pkey" PRIMARY KEY ("request_id")
 );
@@ -934,9 +965,6 @@ CREATE UNIQUE INDEX "users_email_key" ON "users"("email");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "users_google_id_key" ON "users"("google_id");
-
--- CreateIndex
-CREATE UNIQUE INDEX "auctions_variant_id_key" ON "auctions"("variant_id");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "auction_participants_auction_id_user_id_key" ON "auction_participants"("auction_id", "user_id");
@@ -1071,10 +1099,10 @@ ALTER TABLE "products" ADD CONSTRAINT "products_category_id_fkey" FOREIGN KEY ("
 ALTER TABLE "products" ADD CONSTRAINT "products_series_id_fkey" FOREIGN KEY ("series_id") REFERENCES "series"("series_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
 
 -- AddForeignKey
-ALTER TABLE "products" ADD CONSTRAINT "products_product_promotion_id_fkey" FOREIGN KEY ("product_promotion_id") REFERENCES "product_promotions"("promotion_id") ON DELETE SET NULL ON UPDATE NO ACTION;
+ALTER TABLE "product_variants" ADD CONSTRAINT "product_variants_product_id_fkey" FOREIGN KEY ("product_id") REFERENCES "products"("product_id") ON DELETE CASCADE ON UPDATE NO ACTION;
 
 -- AddForeignKey
-ALTER TABLE "product_variants" ADD CONSTRAINT "product_variants_product_id_fkey" FOREIGN KEY ("product_id") REFERENCES "products"("product_id") ON DELETE CASCADE ON UPDATE NO ACTION;
+ALTER TABLE "product_variants" ADD CONSTRAINT "product_variants_product_promotion_id_fkey" FOREIGN KEY ("product_promotion_id") REFERENCES "product_promotions"("promotion_id") ON DELETE SET NULL ON UPDATE NO ACTION;
 
 -- AddForeignKey
 ALTER TABLE "profile_update_requests" ADD CONSTRAINT "profile_update_requests_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("user_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
@@ -1132,6 +1160,12 @@ ALTER TABLE "auction_bids" ADD CONSTRAINT "auction_bids_auction_id_fkey" FOREIGN
 
 -- AddForeignKey
 ALTER TABLE "auction_bids" ADD CONSTRAINT "auction_bids_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("user_id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "auction_chat_messages" ADD CONSTRAINT "auction_chat_messages_auction_id_fkey" FOREIGN KEY ("auction_id") REFERENCES "auctions"("auction_id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "auction_chat_messages" ADD CONSTRAINT "auction_chat_messages_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("user_id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "wallets" ADD CONSTRAINT "wallets_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("user_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
