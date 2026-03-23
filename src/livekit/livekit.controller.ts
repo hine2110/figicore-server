@@ -14,12 +14,14 @@ export class LivekitController {
     @Query('room') room: string,
     @Query('username') username: string,
     @Query('isHost') isHostStr: string,
+    @Query('identity') identity?: string,
   ) {
     if (!room || !username) {
       throw new UnauthorizedException('Missing required parameters');
     }
 
     const isHost = isHostStr === 'true';
+    const finalIdentity = identity || username.replace(/\s+/g, '_');
 
     // [Total Lockdown Check] If Admin wants to host, verify room is not archived
     if (isHost && room.startsWith('auction_')) {
@@ -32,7 +34,7 @@ export class LivekitController {
         }
     }
 
-    const token = await this.livekitService.createToken(room, username, isHost);
+    const token = await this.livekitService.createToken(room, username, isHost, finalIdentity);
 
     return { token };
   }

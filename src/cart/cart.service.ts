@@ -10,12 +10,12 @@ export class CartService {
   // Shared helper to safely check Promo active state and timestamps
   private isActivePromo(promo: any, now: Date = new Date()): boolean {
     if (!promo || !promo.is_active) return false;
-    
+
     const startDateBase = promo.start_date ? new Date(promo.start_date) : now;
-    const endDateBase   = promo.end_date   ? new Date(promo.end_date)   : now;
+    const endDateBase = promo.end_date ? new Date(promo.end_date) : now;
 
     const [startHH, startMM] = promo.start_time.split(':').map(Number);
-    const [endHH,   endMM  ] = promo.end_time.split(':').map(Number);
+    const [endHH, endMM] = promo.end_time.split(':').map(Number);
 
     const promoStart = new Date(startDateBase);
     promoStart.setHours(startHH, startMM, 0, 0);
@@ -115,17 +115,17 @@ export class CartService {
       if (variant.stock_available < quantity) {
         throw new BadRequestException(`Insufficient stock. Available: ${variant.stock_available}`);
       }
-      
+
       // Flash Sale Quota Check
       const promo = variant.product_promotions;
       if (this.isActivePromo(promo) && promo?.is_flash_sale) {
-         const fsItem = promo.promotion_items?.find((i: any) => i.variant_id === variantId);
-         if (fsItem) {
-            const limit = fsItem.quota - fsItem.sold;
-            if (quantity > limit) {
-               throw new BadRequestException(`Sản phẩm Flash Sale này chỉ còn ${limit} suất. Không thể thêm ${quantity}.`);
-            }
-         }
+        const fsItem = promo.promotion_items?.find((i: any) => i.variant_id === variantId);
+        if (fsItem) {
+          const limit = fsItem.quota - fsItem.sold;
+          if (quantity > limit) {
+            throw new BadRequestException(`Sản phẩm Flash Sale này chỉ còn ${limit} suất. Không thể thêm ${quantity}.`);
+          }
+        }
       }
     }
 
@@ -176,6 +176,7 @@ export class CartService {
         cart_id: cart.cart_id,
         variant_id: variantId,
         payment_option: paymentOption, // <--- CRITICAL FIX
+        livestream_id: dto.livestreamId || null,
         deleted_at: null
       }
     });
@@ -227,23 +228,27 @@ export class CartService {
         if (variant.stock_available < newQuantity) {
           throw new BadRequestException(`Cannot add ${quantity} more. Max available: ${variant.stock_available}, In Cart: ${existingItem.quantity}`);
         }
-        
+
         // Flash Sale Quota Check for new total
         const promo = variant.product_promotions;
         if (this.isActivePromo(promo) && promo?.is_flash_sale) {
-           const fsItem = promo.promotion_items?.find((i: any) => i.variant_id === variantId);
-           if (fsItem) {
-              const limit = fsItem.quota - fsItem.sold;
-              if (newQuantity > limit) {
-                 throw new BadRequestException(`Sản phẩm Flash Sale chỉ được mua tối đa ${limit} suất (Kể cả giỏ hàng cũ). Bạn không thể thêm nữa.`);
-              }
-           }
+          const fsItem = promo.promotion_items?.find((i: any) => i.variant_id === variantId);
+          if (fsItem) {
+            const limit = fsItem.quota - fsItem.sold;
+            if (newQuantity > limit) {
+              throw new BadRequestException(`Sản phẩm Flash Sale chỉ được mua tối đa ${limit} suất (Kể cả giỏ hàng cũ). Bạn không thể thêm nữa.`);
+            }
+          }
         }
       }
 
       await this.prisma.cart_items.update({
         where: { item_id: existingItem.item_id },
-        data: { quantity: newQuantity, updated_at: new Date() }
+        data: {
+          quantity: newQuantity,
+          updated_at: new Date(),
+          livestream_id: dto.livestreamId || existingItem.livestream_id
+        }
       });
     } else {
       await this.prisma.cart_items.create({
@@ -251,7 +256,8 @@ export class CartService {
           cart_id: cart.cart_id,
           variant_id: variantId,
           quantity: quantity,
-          payment_option: dto.paymentOption || 'DEPOSIT' // Ensure DTO has this or we default
+          payment_option: dto.paymentOption || 'DEPOSIT',
+          livestream_id: dto.livestreamId || null
         }
       });
     }
@@ -288,7 +294,7 @@ export class CartService {
     if (!cart) return { items: [], total: 0 };
 
     // Format for frontend
-    const items = cart.cart_items.map(item => {
+    const items = await Promise.all(cart.cart_items.map(async (item) => {
       const variant = item.product_variants as any; // Cast to any to access dynamic fields if needed
       const product = variant.products;
 
@@ -321,43 +327,46 @@ export class CartService {
           effectivePrice = Number(bb.price || 0);
         }
       } else {
-        // RETAIL: Apply variant-level Flash Sale promotion if within time window
-        const promo = variant.product_promotions;
-        
-        if (promo && promo.is_active) {
-          const now = new Date();
-          const startDateBase = promo.start_date ? new Date(promo.start_date) : now;
-          const endDateBase   = promo.end_date   ? new Date(promo.end_date)   : now;
+        // LIVESTREAM PRICING LOGIC
+        if (item.livestream_id) {
+          // 1. Fetch Flash Sale if active
+          const liveProduct = await this.prisma.livestream_products.findUnique({
+            where: {
+              livestream_id_variant_id: {
+                livestream_id: item.livestream_id,
+                variant_id: variant.variant_id
+              }
+            },
+            include: {
+              livestream: true // Fetch status
+            }
+          });
 
-          const [startHH, startMM] = promo.start_time.split(':').map(Number);
-          const [endHH,   endMM  ] = promo.end_time.split(':').map(Number);
+          const isLive = liveProduct?.livestream?.status === 'LIVE';
 
-          const promoStart = new Date(startDateBase);
-          promoStart.setHours(startHH, startMM, 0, 0);
-
-          const promoEnd = new Date(endDateBase);
-          promoEnd.setHours(endHH, endMM, 59, 999);
-
-          // For purely recurring promos (no fixed date), use today's date as base.
-          if (promo.is_recurring && !promo.start_date && !promo.end_date) {
-            promoStart.setFullYear(now.getFullYear(), now.getMonth(), now.getDate());
-            promoEnd.setFullYear(now.getFullYear(), now.getMonth(), now.getDate());
+          if (isLive && liveProduct && liveProduct.flash_sale_price && (liveProduct.flash_sale_stock || 0) > 0) {
+            effectivePrice = Number(liveProduct.flash_sale_price);
+          } else if (isLive) {
+            // 2. Apply General 2% Live Discount
+            effectivePrice = effectivePrice * 0.98;
           }
-
-          if (now >= promoStart && now <= promoEnd) {
-             if (promo.is_flash_sale) {
-                 const fsItem = promo.promotion_items?.find((i: any) => i.variant_id === variant.variant_id);
-                 if (fsItem) {
-                     effectivePrice = Number(fsItem.flash_sale_price);
-                     appliedFlashSale = true;
-                 }
-             } else {
-                 if (promo.type_code === 'PERCENTAGE') {
-                   effectivePrice = effectivePrice * (1 - Number(promo.value) / 100);
-                 } else if (promo.type_code === 'FIXED_AMOUNT') {
-                   effectivePrice = Math.max(0, effectivePrice - Number(promo.value));
-                 }
-             }
+          // If NOT LIVE, it falls through to standard pricing (original price)
+        } else {
+          // RETAIL: Apply variant-level Flash Sale promotion if within time window
+          const promo = variant.product_promotions;
+          if (promo && promo.is_active) {
+            const now = new Date();
+            const h = String(now.getHours()).padStart(2, '0');
+            const mi = String(now.getMinutes()).padStart(2, '0');
+            const currentTime = `${h}:${mi}`;
+            const inWindow = currentTime >= promo.start_time && currentTime <= promo.end_time;
+            if (inWindow) {
+              if (promo.type_code === 'PERCENTAGE') {
+                effectivePrice = effectivePrice * (1 - Number(promo.value) / 100);
+              } else if (promo.type_code === 'FIXED_AMOUNT') {
+                effectivePrice = Math.max(0, effectivePrice - Number(promo.value));
+              }
+            }
           }
         }
       }
@@ -378,9 +387,9 @@ export class CartService {
         sku: variant.sku,
         maxStock: variant.stock_available,
         promotion: variant.product_promotions,
-        appliedFlashSale
+        livestream_id: item.livestream_id
       };
-    });
+    }));
 
     const total = items.reduce((sum, item) => sum + (item.price * (item.quantity || 1)), 0);
 
@@ -424,7 +433,7 @@ export class CartService {
       where: { item_id: itemId },
       include: {
         product_variants: {
-          include: { 
+          include: {
             products: true,
             product_promotions: {
               include: { promotion_items: true }
@@ -464,13 +473,13 @@ export class CartService {
       // Flash Sale Quota Check
       const promo: any = item.product_variants.product_promotions;
       if (this.isActivePromo(promo) && promo.is_flash_sale) {
-         const fsItem = promo.promotion_items?.find((i: any) => i.variant_id === item.product_variants.variant_id);
-         if (fsItem) {
-            const limit = fsItem.quota - fsItem.sold;
-            if (quantity > limit) {
-               throw new BadRequestException(`Sản phẩm Flash Sale này chỉ còn ${limit} suất. Không thể cật nhật thành ${quantity}.`);
-            }
-         }
+        const fsItem = promo.promotion_items?.find((i: any) => i.variant_id === item.product_variants.variant_id);
+        if (fsItem) {
+          const limit = fsItem.quota - fsItem.sold;
+          if (quantity > limit) {
+            throw new BadRequestException(`Sản phẩm Flash Sale này chỉ còn ${limit} suất. Không thể cật nhật thành ${quantity}.`);
+          }
+        }
       }
     }
 

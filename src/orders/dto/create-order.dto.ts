@@ -17,6 +17,10 @@ class CreateOrderItemDto {
     @IsString()
     @IsOptional()
     paymentOption?: string;
+
+    @IsInt()
+    @IsOptional()
+    livestreamId?: number;
 }
 
 export class CreateOrderDto {
