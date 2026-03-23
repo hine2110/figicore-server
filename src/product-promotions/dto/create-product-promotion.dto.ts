@@ -1,4 +1,18 @@
-import { IsBoolean, IsEnum, IsNumber, IsOptional, IsString, Matches, Min } from 'class-validator';
+import { IsBoolean, IsEnum, IsNumber, IsOptional, IsString, Matches, Min, IsArray, ValidateNested } from 'class-validator';
+import { Type } from 'class-transformer';
+
+export class FlashSaleItemDto {
+  @IsNumber()
+  variant_id: number;
+
+  @IsNumber()
+  @Min(0)
+  flash_sale_price: number;
+
+  @IsNumber()
+  @Min(1)
+  quota: number;
+}
 
 export class CreateProductPromotionDto {
   @IsString()
@@ -36,4 +50,22 @@ export class CreateProductPromotionDto {
   @IsOptional()
   @Min(0)
   max_apply_price?: number;
+
+  @IsOptional()
+  @IsString()
+  start_date?: string;
+
+  @IsOptional()
+  @IsString()
+  end_date?: string;
+
+  @IsBoolean()
+  @IsOptional()
+  is_flash_sale?: boolean;
+
+  @IsArray()
+  @IsOptional()
+  @ValidateNested({ each: true })
+  @Type(() => FlashSaleItemDto)
+  items?: FlashSaleItemDto[];
 }
