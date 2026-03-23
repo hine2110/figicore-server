@@ -6,7 +6,7 @@ import { ConfigService } from '@nestjs/config';
 export class LivekitService {
   constructor(private configService: ConfigService) {}
 
-  async createToken(roomName: string, participantName: string, isHost: boolean) {
+  async createToken(roomName: string, participantName: string, isHost: boolean, identity?: string) {
     const apiKey = this.configService.get<string>('LIVEKIT_API_KEY');
     const apiSecret = this.configService.get<string>('LIVEKIT_API_SECRET');
 
@@ -18,8 +18,10 @@ export class LivekitService {
       throw new UnauthorizedException('Room name and participant name are required');
     }
 
+    const finalIdentity = identity || participantName.replace(/\s+/g, '_');
+
     const at = new AccessToken(apiKey, apiSecret, {
-      identity: participantName.replace(/\s+/g, '_'),
+      identity: finalIdentity,
       name: participantName,
       ttl: '2h',
     });

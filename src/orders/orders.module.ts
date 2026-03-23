@@ -8,7 +8,7 @@ import { EventsModule } from '../events/events.module';
 import { WalletModule } from '../wallet/wallet.module';
 import { AuctionsModule } from '../auctions/auctions.module';
 import { BlindboxesModule } from '../blindboxes/blindboxes.module';
-
+import { LivestreamsModule } from '../livestreams/livestreams.module';
 @Module({
   imports: [
     AddressModule,
@@ -17,6 +17,7 @@ import { BlindboxesModule } from '../blindboxes/blindboxes.module';
     EventsModule,
     WalletModule,
     BlindboxesModule,
+    LivestreamsModule,
     forwardRef(() => AuctionsModule)
   ],
   controllers: [OrdersController],

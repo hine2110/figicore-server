@@ -10,6 +10,7 @@ import { EventsGateway } from '../events/events.gateway';
 import { WalletService } from '../wallet/wallet.service';
 import { BlindboxesService } from '../blindboxes/blindboxes.service';
 import { AuctionsService } from '../auctions/auctions.service';
+import { LivestreamLiveGateway } from '../livestreams/livestream-live.gateway';
 
 @Injectable()
 export class OrdersService {
@@ -22,7 +23,8 @@ export class OrdersService {
     private eventsGateway: EventsGateway,
     private walletService: WalletService,
     private blindboxesService: BlindboxesService,
-    @Inject(forwardRef(() => AuctionsService)) private auctionsService: AuctionsService
+    @Inject(forwardRef(() => AuctionsService)) private auctionsService: AuctionsService,
+    private livestreamLiveGateway: LivestreamLiveGateway
   ) { }
 
   // NEW: Anti-scalping Helper
@@ -84,11 +86,11 @@ export class OrdersService {
         if (!variant) throw new BadRequestException(`Variant ${item.variant_id} not found`);
 
         let finalUnitPrice = Number(variant.price);
-        
+
         // Flash Sale (Product Promotion) Real-time Check
         const promo = variant.product_promotions;
         let appliedFlashSale = false;
-        
+
         if (promo && promo.is_active) {
           let isValidPromo = true;
 
@@ -99,11 +101,11 @@ export class OrdersService {
 
           // Determine the reference date: use start_date if set, else use today's date.
           const startDateBase = promo.start_date ? new Date(promo.start_date) : now;
-          const endDateBase   = promo.end_date   ? new Date(promo.end_date)   : now;
+          const endDateBase = promo.end_date ? new Date(promo.end_date) : now;
 
           // Parse start_time / end_time ("HH:mm") and merge with respective dates.
           const [startHH, startMM] = promo.start_time.split(':').map(Number);
-          const [endHH,   endMM  ] = promo.end_time.split(':').map(Number);
+          const [endHH, endMM] = promo.end_time.split(':').map(Number);
 
           const promoStart = new Date(startDateBase);
           promoStart.setHours(startHH, startMM, 0, 0);
@@ -123,20 +125,20 @@ export class OrdersService {
 
           if (isValidPromo) {
             if (promo.is_flash_sale) {
-               // Load flash sale details
-               const fsItem = await this.prisma.promotion_items.findFirst({
-                 where: { promotion_id: promo.promotion_id, variant_id: item.variant_id }
-               });
-               if (fsItem) {
-                 finalUnitPrice = Number(fsItem.flash_sale_price);
-                 appliedFlashSale = true;
-               }
+              // Load flash sale details
+              const fsItem = await this.prisma.promotion_items.findFirst({
+                where: { promotion_id: promo.promotion_id, variant_id: item.variant_id }
+              });
+              if (fsItem) {
+                finalUnitPrice = Number(fsItem.flash_sale_price);
+                appliedFlashSale = true;
+              }
             } else {
-               if (promo.type_code === 'PERCENTAGE') {
-                  finalUnitPrice = finalUnitPrice * (1 - Number(promo.value) / 100);
-               } else if (promo.type_code === 'FIXED_AMOUNT') {
-                  finalUnitPrice = Math.max(0, finalUnitPrice - Number(promo.value));
-               }
+              if (promo.type_code === 'PERCENTAGE') {
+                finalUnitPrice = finalUnitPrice * (1 - Number(promo.value) / 100);
+              } else if (promo.type_code === 'FIXED_AMOUNT') {
+                finalUnitPrice = Math.max(0, finalUnitPrice - Number(promo.value));
+              }
             }
           }
         }
@@ -220,16 +222,29 @@ export class OrdersService {
       const createdOrders = await this.prisma.$transaction(async (tx) => {
         const retailItems: any[] = [];
         const preOrderItems: any[] = [];
-        const blindboxItems: any[] = [];
+        const blindboxItems: any[] = []; // NEW
 
-        for (const vItem of validatedItems) {
-          const { variant } = vItem;
+        // Pre-fetch variants to classify
+        for (const item of items) {
+          const variant = await tx.product_variants.findUnique({
+            where: { variant_id: item.variant_id },
+            include: {
+              products: true,
+              product_preorder_configs: true
+            }
+          });
+
+          if (!variant) throw new BadRequestException(`Variant ${item.variant_id} not found`);
+
+          const enrichedItem = { ...item, variant, livestreamId: item.livestreamId };
+
+          // Use existence of definition or explicit product type
           const isPreorder = variant.products.type_code === 'PREORDER' || !!variant.product_preorder_configs;
           const isBlindbox = variant.products.type_code === 'BLINDBOX';
 
-          if (isPreorder) preOrderItems.push(vItem);
-          else if (isBlindbox) blindboxItems.push(vItem);
-          else retailItems.push(vItem);
+          if (isPreorder) preOrderItems.push(enrichedItem);
+          else if (isBlindbox) blindboxItems.push(enrichedItem);
+          else retailItems.push(enrichedItem);
         }
 
         const ordersResults: any[] = [];
@@ -349,61 +364,31 @@ export class OrdersService {
           const rtOrderItemsData: any[] = [];
 
           for (const rItem of retailItems) {
-            const { variant, quantity, _backendVerifiedPrice, _allocated_product_id, _is_opened, _metadata, _applied_flash_sale } = rItem;
+            const { variant, quantity, price, _allocated_product_id, _is_opened, _metadata } = rItem;
 
+            // FIX: Always deduct stock for the main variant (Ticket or Retail Item)
+            // For Blindbox: Ticket stock (99999) is deducted here. Real Item stock is deducted in blindboxes.service
             if (variant.stock_available < quantity) {
               throw new BadRequestException(`Out of stock: ${variant.sku}`);
             }
 
-            // --- KIỂM TRA CHỐT CHẶN QUOTA FLASH SALE ---
-            if (_applied_flash_sale && variant.product_promotions) {
-              const promoId = variant.product_promotions.promotion_id;
-              
-              const currentPromoItem = await tx.promotion_items.findFirst({
-                 where: { promotion_id: promoId, variant_id: variant.variant_id }
-              });
-
-              if (currentPromoItem) {
-                const remainingQuota = currentPromoItem.quota - currentPromoItem.sold;
-                
-                if (quantity > remainingQuota) {
-                  throw new BadRequestException('Sản phẩm Flash Sale này chỉ còn lại ' + remainingQuota + ' suất. Vui lòng giảm số lượng.');
-                }
-
-                // Cập nhật Sold Realtime (Atomic Update OCC)
-                const updateRes = await tx.promotion_items.updateMany({
-                  where: {
-                    item_id: currentPromoItem.item_id,
-                    sold: { lte: currentPromoItem.quota - quantity }
-                  },
-                  data: {
-                    sold: { increment: quantity }
-                  }
-                });
-
-                if (updateRes.count === 0) {
-                  throw new BadRequestException('Sản phẩm Flash Sale này vừa hết hàng do có người khác thanh toán trước. Vui lòng thử lại.');
-                }
-              }
-            }
-
+            // Deduct Stock
             await tx.product_variants.update({
               where: { variant_id: variant.variant_id },
               data: { stock_available: { decrement: quantity } }
             });
 
-            // MATH: Verified Base Price 
-            rtTotalAmountVerified += _backendVerifiedPrice * quantity;
+            rtTotalAmountVerified += Number(price) * quantity;
             rtTotalWeight += (variant.weight_g || 200) * quantity;
 
             rtOrderItemsData.push({
               variant_id: variant.variant_id,
               quantity: quantity,
-              unit_price: _backendVerifiedPrice,
-              total_price: _backendVerifiedPrice * quantity,
-              allocated_product_id: _allocated_product_id || null, // Keep Blindbox allocation
+              unit_price: price,
+              total_price: Number(price) * quantity,
+              allocated_product_id: _allocated_product_id || null,
               is_opened: _is_opened ?? false,
-              metadata: _metadata || undefined
+              metadata: _metadata || undefined // Save Source Metadata
             });
           }
 
@@ -467,6 +452,34 @@ export class OrdersService {
 
       const totalAmount = createdOrders.reduce((sum, o) => sum + Number(o.total_amount), 0);
       const orderIds = createdOrders.map(o => o.order_id);
+
+      // --- EMIT EVENTS TO LIVESTREAM ---
+      try {
+        const user = await this.prisma.users.findUnique({ where: { user_id: userId }, select: { full_name: true } });
+
+        // Items were grouped by payment type. Let's just iterate over all `items` from `createOrderDto`
+        for (const item of items) {
+          if ((item as any).livestream_id) {
+            // Find variant name to broadcast
+            const variant = await this.prisma.product_variants.findUnique({
+              where: { variant_id: item.variant_id },
+              include: { products: true }
+            });
+            const productName = variant?.products?.name || variant?.option_name || 'Vật phẩm bí ẩn';
+
+            // Emit to the specific livestream room
+            this.livestreamLiveGateway.broadcastOrder(`livestream_${(item as any).livestream_id}`, {
+              customer_name: user?.full_name || 'Khách hàng',
+              product_name: productName,
+              quantity: item.quantity,
+              amount: Number(variant?.price || 0) * item.quantity,
+              time: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })
+            });
+          }
+        }
+      } catch (err) {
+        console.error("Failed to emit livestream event", err);
+      }
 
       return {
         payment_ref_code: paymentRefCode,
@@ -1290,7 +1303,8 @@ export class OrdersService {
             data: order.order_items.map(item => ({
               cart_id: cart!.cart_id,
               variant_id: item.variant_id,
-              quantity: item.quantity
+              quantity: item.quantity,
+              livestream_id: item.livestream_id
             }))
           });
         }
