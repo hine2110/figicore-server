@@ -1,13 +1,29 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, Logger } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreatePromotionDto } from './dto/create-promotion.dto';
 import { UpdatePromotionDto } from './dto/update-promotion.dto';
 
 @Injectable()
 export class PromotionsService {
+  private readonly logger = new Logger(PromotionsService.name);
+
   constructor(private readonly prisma: PrismaService) {}
 
   async create(createPromotionDto: CreatePromotionDto) {
+    if (createPromotionDto.discount_type === 'FIXED_AMOUNT') {
+      const discountVal = Number(createPromotionDto.discount_value || 0);
+      const minVal = Number(createPromotionDto.min_order_value || 0);
+      if (discountVal > minVal && minVal > 0) {
+        throw new BadRequestException('Fixed discount amount cannot be greater than the minimum order value required.');
+      }
+      if (discountVal > minVal && minVal === 0) {
+        // Warning: giving away money without minimum. Still risky, but depends on logic.
+        // Let's enforce that if min_order_value is 0, they can't have a discount > 0 (store gives away money for free items)
+        throw new BadRequestException('Fixed discount amount cannot be greater than the minimum order value required.');
+      }
+    }
+
     return this.prisma.promotions.create({
       data: createPromotionDto,
     });
@@ -35,6 +51,21 @@ export class PromotionsService {
   }
 
   async update(id: number, updatePromotionDto: UpdatePromotionDto) {
+    const existing = await this.prisma.promotions.findUnique({ where: { promotion_id: id } });
+    if (!existing) throw new NotFoundException('Promotion not found');
+
+    const discountType = updatePromotionDto.discount_type || existing.discount_type;
+    const discountValue = updatePromotionDto.hasOwnProperty('discount_value') ? updatePromotionDto.discount_value : existing.discount_value;
+    const minOrderValue = updatePromotionDto.hasOwnProperty('min_order_value') ? updatePromotionDto.min_order_value : existing.min_order_value;
+
+    if (discountType === 'FIXED_AMOUNT') {
+      const discountVal = Number(discountValue || 0);
+      const minVal = Number(minOrderValue || 0);
+      if (discountVal > minVal) {
+        throw new BadRequestException('Fixed discount amount cannot be greater than the minimum order value required.');
+      }
+    }
+
     return this.prisma.promotions.update({
       where: { promotion_id: id },
       data: updatePromotionDto,
@@ -118,28 +149,39 @@ export class PromotionsService {
       }
     }
 
-    // 5. Transaction to save
+    // 5. Transaction to save (Atomic Update / Optimistic Concurrency Control)
     return this.prisma.$transaction(async (tx) => {
-      // Check stock inside transaction to prevent race conditions
       if (promotion.max_quantity) {
-        const current = await tx.promotions.findUnique({ where: { promotion_id: promotionId } });
-        if (!current || (current.max_quantity && (current.collected_quantity || 0) >= current.max_quantity)) {
+        // OCC: Attempt to increment ONLY IF collected_quantity < max_quantity atomically
+        const result = await tx.promotions.updateMany({
+          where: {
+            promotion_id: promotionId,
+            // the database atomically ensures it only increments if condition is met
+            collected_quantity: { lt: promotion.max_quantity }
+          },
+          data: {
+            collected_quantity: { increment: 1 }
+          }
+        });
+
+        if (result.count === 0) {
+          // If count is 0, it means another transaction beat us to the last slot
           throw new BadRequestException('Voucher is out of stock.');
         }
+      } else {
+        // Unlimited vouchers: just increment
+        await tx.promotions.update({
+          where: { promotion_id: promotionId },
+          data: { collected_quantity: { increment: 1 } }
+        });
       }
 
+      // Only if the atomic increment succeeded do we assign it to the user
       await tx.user_vouchers.create({
         data: {
           user_id: userId,
           promotion_id: promotionId,
           is_used: false,
-        }
-      });
-
-      await tx.promotions.update({
-        where: { promotion_id: promotionId },
-        data: {
-          collected_quantity: { increment: 1 }
         }
       });
 
@@ -165,5 +207,48 @@ export class PromotionsService {
       },
       orderBy: { created_at: 'desc' }
     });
+  }
+
+  /**
+   * CRON: Runs every minute.
+   * Auto-delete Order Vouchers & Free Ship that expired > 10 minutes ago.
+   *
+   * Flow:
+   *   1. Find promotions where end_date + 10min < now (hard-expired)
+   *   2. Delete associated user_vouchers first (FK constraint)
+   *   3. Hard-delete the promotion records from DB
+   */
+  @Cron(CronExpression.EVERY_MINUTE)
+  async handleExpiredVouchers() {
+    const now = new Date();
+    const tenMinutesAgo = new Date(now.getTime() - 10 * 60 * 1000);
+
+    // Find vouchers whose end_date passed more than 10 minutes ago
+    const expiredVouchers = await this.prisma.promotions.findMany({
+      where: {
+        end_date: { not: null, lt: tenMinutesAgo }
+      },
+      select: { promotion_id: true, code: true }
+    });
+
+    if (expiredVouchers.length > 0) {
+      const ids = expiredVouchers.map(v => v.promotion_id);
+      const codes = expiredVouchers.map(v => v.code).join(', ');
+
+      // Delete user_vouchers first (child records, FK constraint)
+      await this.prisma.user_vouchers.deleteMany({
+        where: { promotion_id: { in: ids } }
+      });
+
+      // Hard delete the promotions
+      await this.prisma.promotions.deleteMany({
+        where: { promotion_id: { in: ids } }
+      });
+
+      this.logger.log(
+        `[AutoDelete] Hard-deleted ${ids.length} expired vouchers after 10-min grace period. ` +
+        `Codes: [${codes}]`
+      );
+    }
   }
 }

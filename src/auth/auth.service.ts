@@ -6,14 +6,19 @@ import * as bcrypt from 'bcrypt';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { ActivateAccountDto } from './dto/activate-account.dto';
+import { ResendActivationDto } from './dto/resend-activation.dto';
 import { MailService } from '../mail/mail.service';
 import { randomBytes } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
+import { UploadService } from '../upload/upload.service';
+import { FaceValidationService } from '../upload/face-validation.service';
 
 @Injectable()
 export class AuthService {
   constructor(
     private usersService: UsersService,
+    private uploadService: UploadService,
+    private faceValidationService: FaceValidationService,
     private jwtService: JwtService,
     private mailService: MailService,
     private prisma: PrismaService,
@@ -291,17 +296,20 @@ export class AuthService {
     }
   }
 
-  async activateAccount(data: ActivateAccountDto) {
+  async activateAccount(data: ActivateAccountDto, file?: Express.Multer.File) {
     try {
       // 1. Verify Token
       const payload = await this.jwtService.verifyAsync(data.token, {
         secret: process.env.JWT_SECRET || 'figicore_secret_key'
       });
-      // Payload should contain { sub: userId, email: ... }
 
       const user = await this.usersService.findByEmail(payload.email);
       if (!user) {
         throw new NotFoundException('User not found');
+      }
+
+      if (user.status_code !== 'PENDING') {
+        throw new BadRequestException('Account is already active or invalid');
       }
 
       // 2. Verify Temp Password
@@ -314,14 +322,22 @@ export class AuthService {
         throw new UnauthorizedException('Invalid temporary password');
       }
 
-      // 3. Update Password & Status
+      // 3. AI Face Validation & Cloudinary Upload
+      let avatarUrl = data.avatarUrl; // fallback if URL string was sent instead
+      if (file) {
+        await this.faceValidationService.validateImageBuffer(file.buffer);
+        const uploadResult = await this.uploadService.uploadFile(file, 'figicore_avatars');
+        avatarUrl = uploadResult.url;
+      }
+
+      // 4. Update Password & Status
       const newHash = await bcrypt.hash(data.newPassword, 10);
 
       await this.usersService.update(user.user_id, {
         password_hash: newHash,
         status_code: 'ACTIVE',
         is_verified: true,
-        ...(data.avatarUrl && { avatar_url: data.avatarUrl }),
+        ...(avatarUrl && { avatar_url: avatarUrl }),
       });
 
       return { message: 'Account activated successfully. Please login.' };
@@ -332,6 +348,36 @@ export class AuthService {
       }
       throw error;
     }
+  }
+
+  async resendActivation(dto: ResendActivationDto) {
+    const user = await this.usersService.findByEmail(dto.email);
+    if (!user || user.status_code !== 'PENDING') {
+      throw new BadRequestException('Invalid request or account is already active');
+    }
+
+    // Generate a new random temporary password
+    const tempPassword = randomBytes(4).toString('hex'); // 8 characters hex
+    const newHash = await bcrypt.hash(tempPassword, 10);
+
+    // Update password hash in database
+    await this.usersService.update(user.user_id, {
+      password_hash: newHash,
+    });
+
+    // Generate a new 1-day JWT token
+    const payload = {
+      sub: user.user_id,
+      email: user.email,
+      role_code: user.role_code
+    };
+    const token = this.jwtService.sign(payload, { expiresIn: '1d' });
+
+    // Send the email with the new credentials
+    if(!user.email) throw new BadRequestException('User does not have an email');
+    await this.mailService.sendEmployeeActivation(user.email, tempPassword, token, user.full_name || 'User');
+
+    return { message: 'A new activation link has been sent to your email.' };
   }
 
   async updatePassword(userId: number, dto: import('./dto/update-password.dto').UpdatePasswordDto) {
