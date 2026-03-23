@@ -48,97 +48,8 @@ export class KiotVietService {
     }
 
     async syncProductTaxes() {
-        this.logger.log('Starting KiotViet Product Tax Sync...');
-        const token = await this.getAccessToken();
-        const retailer = this.configService.get<string>('KIOTVIET_RETAILER_CODE');
-
-        try {
-            // 1. Fetch Products from KiotViet
-            // Note: KiotViet 'products' API returns a list. We need to check if it has tax info.
-            // If not directly, we might need to check Categories or just rely on manual mapping if API fails.
-            // But let's try to fetch a batch and see.
-
-            let allProducts: any[] = [];
-            let currentItem = 0;
-            const pageSize = 100;
-            let hasMore = true;
-
-            while (hasMore) {
-                const response = await axios.get('https://public.kiotapi.com/products', {
-                    headers: {
-                        Authorization: `Bearer ${token}`,
-                        Retailer: retailer,
-                    },
-                    params: {
-                        pageSize,
-                        currentItem,
-                        includeInventory: true,
-                    },
-                });
-
-                const data = response.data.data;
-                allProducts = [...allProducts, ...data];
-
-                if (data.length < pageSize) {
-                    hasMore = false;
-                } else {
-                    currentItem += data.length;
-                }
-
-                // Safety break for testing (remove in prod to sync all)
-                if (allProducts.length > 500) hasMore = false;
-            }
-
-            this.logger.log(`Fetched ${allProducts.length} products from KiotViet.`);
-
-            let updatedCount = 0;
-            let errorsCount = 0;
-
-            // 2. Update Database
-            for (const kvProduct of allProducts) {
-                try {
-                    // Try to find matching variant by SKU (kvProduct.code)
-                    // Note: KiotViet 'code' is usually our 'sku'.
-                    // Use prisma to find and update.
-
-                    // We assume KiotViet might have tax info in 'taxValue' or similar if configured. 
-                    // For now, if missing, we just log it or set to 0. 
-                    // Inspecting sample showed no explicit taxRate. 
-                    // We will check if 'attributes' or other fields might have it later.
-
-                    // Fallback: If 0, we might want to default to 10% (VAT) or leave as 0?
-                    // User requested accurate tax. If missing from API, we can't invent it.
-                    // We keep it 0 but log warning for sample.
-
-                    const taxRate = kvProduct.taxValue || 0;
-
-                    const updated = await this.prisma.product_variants.updateMany({
-                        where: { sku: kvProduct.code },
-                        data: { tax_rate: taxRate }
-                    });
-
-                    if (updated.count > 0) {
-                        updatedCount += updated.count;
-                    }
-                } catch (err) {
-                    errorsCount++;
-                    // Continue loop
-                }
-            }
-
-            this.logger.log(`Sync completed. Updated ${updatedCount} variants. Errors: ${errorsCount}`);
-            return {
-                status: 'success',
-                totalFetched: allProducts.length,
-                updatedLocal: updatedCount,
-                errors: errorsCount,
-                sample: allProducts.length > 0 ? allProducts[0] : null
-            };
-
-        } catch (error) {
-            this.logger.error('Error syncing products', error.response?.data || error.message);
-            throw error;
-        }
+        this.logger.log('KiotViet Product Tax Sync is now disabled.');
+        return { status: 'disabled', message: 'Tax synchronization is no longer supported.' };
     }
 
     async syncProducts() {
@@ -235,19 +146,13 @@ export class KiotVietService {
                     // 2. Upsert Variant
                     const stock = kvProduct.inventories ? kvProduct.inventories.reduce((sum: number, inv: any) => sum + inv.onHand, 0) : 0;
 
-                    // Fallback tax logic: Check productTaxs array first (common in recent API), then taxValue
-                    let taxRate = kvProduct.taxValue || 0;
-                    if (kvProduct.productTaxs && kvProduct.productTaxs.length > 0) {
-                        // Take the first tax value (usually VAT)
-                        taxRate = kvProduct.productTaxs[0].value;
-                    }
+
 
                     await this.prisma.product_variants.upsert({
                         where: { sku: sku },
                         update: {
                             price: basePrice,
                             stock_available: stock,
-                            tax_rate: taxRate,
                             media_assets: images.length > 0 ? images : undefined, // Update image array if exist from API
                             updated_at: new Date()
                         },
@@ -257,7 +162,6 @@ export class KiotVietService {
                             option_name: 'Standard',
                             price: basePrice,
                             stock_available: stock,
-                            tax_rate: taxRate,
                             media_assets: images.length > 0 ? images : [], // Insert images here
                         }
                     });

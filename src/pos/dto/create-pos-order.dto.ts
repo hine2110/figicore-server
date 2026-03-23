@@ -27,28 +27,6 @@ export class CreatePosOrderDto {
     @Type(() => Number)
     discount_amount?: number;
 
-    // VAT Mock Fields
-    @IsOptional()
-    @IsBoolean()
-    is_vat_export?: boolean;
-
-    @IsOptional()
-    @IsString()
-    vat_tax_number?: string;
-
-    @IsOptional()
-    @IsString()
-    vat_company_name?: string;
-
-    @IsOptional()
-    @IsString()
-    vat_company_address?: string;
-
-    @IsOptional()
-    @IsEmail()
-    @IsString()
-    vat_invoice_email?: string;
-
     @IsOptional()
     @IsNumber()
     @Type(() => Number)
