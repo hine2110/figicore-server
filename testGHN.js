@@ -1,6 +1,7 @@
-import { PrismaClient } from '@prisma/client';
-const prisma = new PrismaClient();
-
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const client_1 = require("@prisma/client");
+const prisma = new client_1.PrismaClient();
 async function main() {
     const order = await prisma.orders.findFirst({
         orderBy: { order_id: 'desc' },
@@ -10,7 +11,6 @@ async function main() {
             }
         }
     });
-
     if (order) {
         const items = order.order_items.map(i => ({
             sku: i.product_variants.sku,
@@ -22,9 +22,10 @@ async function main() {
             qty: i.quantity
         }));
         console.log(JSON.stringify(items, null, 2));
-    } else {
+    }
+    else {
         console.log('No order found');
     }
 }
-
 main().finally(() => prisma.$disconnect());
+//# sourceMappingURL=testGHN.js.map
