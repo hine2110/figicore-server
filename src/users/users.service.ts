@@ -25,10 +25,7 @@ export class UsersService {
     const user = await this.findOne(userId);
     if (!user) throw new NotFoundException('User not found');
 
-    if (user.avatar_url) {
-      throw new ForbiddenException("Bạn chỉ được phép cập nhật ảnh đại diện một lần duy nhất.");
-    }
-
+    // Removed 1-time upload limit to support continuous continuous uploads via frontend
     const uploadResult = await this.uploadService.uploadFile(file, 'figicore_avatars');
 
     return this.prisma.users.update({
@@ -299,7 +296,7 @@ export class UsersService {
           email: newUser.email,
           role_code: newUser.role_code
         };
-        const token = this.jwtService.sign(payload);
+        const token = this.jwtService.sign(payload, { expiresIn: '1d' });
         if (newUser.email) {
           await this.mailService.sendEmployeeActivation(newUser.email, tempPassword, token, newUser.full_name);
         }
@@ -619,7 +616,7 @@ export class UsersService {
         email: newUser.email,
         role_code: newUser.role_code
       };
-      const token = this.jwtService.sign(payload);
+      const token = this.jwtService.sign(payload, { expiresIn: '1d' });
 
       // 4. Send Activation Email
       // Note: using this.mailService here. Since we are inside a transaction, if email fails, 

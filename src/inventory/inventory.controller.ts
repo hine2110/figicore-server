@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Body, Query, UseGuards, Request, Logger, UnauthorizedException } from '@nestjs/common';
+import { Controller, Post, Patch, Param, Get, Body, Query, UseGuards, Request, Logger, UnauthorizedException, BadRequestException } from '@nestjs/common';
 import { InventoryService } from './inventory.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
@@ -27,6 +27,32 @@ export class InventoryController {
       return await this.inventoryService.createReceipt(userId, dto);
     } catch (error) {
       this.logger.error(`[Inventory] Error creating receipt: ${error.message}`, error.stack);
+      throw error;
+    }
+  }
+
+  @Patch('receipts/:id/complete')
+  @UseGuards(JwtAuthGuard)
+  async complete(
+    @Request() req: any,
+    @Param('id') id: string,
+    @Body() dto: { items: { item_id: number, quantity_good: number, quantity_defect: number }[] }
+  ) {
+    const user = req.user;
+    if (!user) throw new UnauthorizedException('User not found in request context');
+    
+    const userId = Number(user.userId || user.id || user.sub || user.user_id);
+    const receiptId = parseInt(id, 10);
+
+    if (isNaN(receiptId)) {
+        throw new BadRequestException('Invalid receipt ID');
+    }
+
+    try {
+      this.logger.log(`[Inventory] Completing Receipt #${receiptId} by User ${userId}`);
+      return await this.inventoryService.completeReceipt(receiptId, userId, dto.items);
+    } catch (error) {
+      this.logger.error(`[Inventory] Error completing receipt #${receiptId}: ${error.message}`, error.stack);
       throw error;
     }
   }

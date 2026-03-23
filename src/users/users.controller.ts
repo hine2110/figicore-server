@@ -2,6 +2,7 @@ import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, Req, Pars
 import { FileInterceptor } from '@nestjs/platform-express';
 import { AuthGuard } from '@nestjs/passport';
 import { UsersService } from './users.service';
+import { FaceValidationService } from '../upload/face-validation.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -11,7 +12,10 @@ import { AllowAnyIp } from '../common/decorators/allow-any-ip.decorator';
 
 @Controller('users')
 export class UsersController {
-  constructor(private readonly usersService: UsersService) { }
+  constructor(
+    private readonly usersService: UsersService,
+    private readonly faceValidationService: FaceValidationService
+  ) { }
 
   @Get('profile')
   @UseGuards(AuthGuard('jwt'))
@@ -31,6 +35,11 @@ export class UsersController {
   @UseInterceptors(FileInterceptor('file'))
   async uploadAvatar(@Req() req, @UploadedFile() file: Express.Multer.File) {
     if (!file) throw new BadRequestException('File is required');
+
+    // 1. Strict AI Face Detection BEFORE Dispatching to Cloudinary
+    await this.faceValidationService.validateImageBuffer(file.buffer);
+
+    // 2. Dispatch to service for Cloudinary Upload & DB update
     return this.usersService.updateAvatar(req.user.user_id, file);
   }
 

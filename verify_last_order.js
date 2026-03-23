@@ -1,8 +1,7 @@
-
-import { PrismaClient } from '@prisma/client';
-
-const prisma = new PrismaClient();
-
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const client_1 = require("@prisma/client");
+const prisma = new client_1.PrismaClient();
 async function main() {
     const lastOrder = await prisma.orders.findFirst({
         orderBy: { created_at: 'desc' },
@@ -11,12 +10,10 @@ async function main() {
             order_items: true
         }
     });
-
     if (!lastOrder) {
         console.log('No POS orders found.');
         return;
     }
-
     console.log('--- Last POS Order Verification ---');
     console.log(`Order Code: ${lastOrder.order_code}`);
     console.log(`Total Amount: ${lastOrder.total_amount}`);
@@ -29,12 +26,12 @@ async function main() {
         console.log(`  Tax Rate: ${item.tax_rate}% | Tax Amount: ${item.tax_amount}`);
     });
 }
-
 main()
     .catch(e => {
-        console.error(e);
-        process.exit(1);
-    })
+    console.error(e);
+    process.exit(1);
+})
     .finally(async () => {
-        await prisma.$disconnect();
-    });
+    await prisma.$disconnect();
+});
+//# sourceMappingURL=verify_last_order.js.map

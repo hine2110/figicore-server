@@ -48,10 +48,10 @@ export class ChatService {
         VĂN PHONG (RẤT QUAN TRỌNG):
         - Giao tiếp TỰ NHIÊN, NHIỆT TÌNH, như một người bạn am hiểu mô hình đang tư vấn.
         - Không dùng câu máy móc: "Mình không tìm thấy thông tin chính xác...", "Dựa theo dữ liệu...".
-        - KHI KHÁCH HỎI TÌM SẢN PHẨM: Tự tin lấy ngay sản phẩm trong danh sách bên dưới để gợi ý, như thể đó là những sản phẩm bạn tâm đắc nhất: "Dạ FigiCore đang có những siêu phẩm cực hot này ạ! ✨"
         - PHẢI giữ nguyên định dạng Markdown của link sản phẩm [Xem chi tiết](/...) và tên sản phẩm **...**. Không tự ý sửa cấu trúc này.
+        - TUYỆT ĐỐI KHÔNG tự bịa ra sản phẩm mẫu nếu danh sách bên dưới trống. Nếu không có sản phẩm, hãy nói rằng cửa hàng đang cập nhật dữ liệu.
 
-        DANH SÁCH SẢN PHẨM ĐỂ GIỚI THIỆU:
+        DANH SÁCH SẢN PHẨM THỰC TẾ (CHỈ DÙNG DANH SÁCH NÀY):
         {product_context}
 
         THÔNG TIN ĐƠN HÀNG (Nếu khách hỏi mã đơn):
@@ -124,18 +124,20 @@ export class ChatService {
         return new Intl.NumberFormat('vi-VN').format(Number(price)) + 'đ';
       };
 
-      const productContext = displayProducts.map(p => {
-        let firstImageUrl = '';
-        if (p.media_urls && typeof p.media_urls === 'object') {
-          const mediaArray = Array.isArray(p.media_urls) ? p.media_urls : (p.media_urls as any).images || [];
-          if (mediaArray.length > 0) {
-            firstImageUrl = mediaArray[0];
-          }
-        }
+      const productContext = displayProducts.length > 0 
+        ? displayProducts.map(p => {
+            let firstImageUrl = '';
+            if (p.media_urls && typeof p.media_urls === 'object') {
+              const mediaArray = Array.isArray(p.media_urls) ? p.media_urls : (p.media_urls as any).images || [];
+              if (mediaArray.length > 0) {
+                firstImageUrl = mediaArray[0];
+              }
+            }
 
-        const imageMarkdown = firstImageUrl ? `![${p.name}](${firstImageUrl})` : '';
-        return `- ${imageMarkdown} **${p.name}** (${p.type_code}): ${formatPrice(p.product_variants[0]?.price)} - [Xem chi tiết](/customer/product/${p.product_id})`;
-      }).join('\n\n');
+            const imageMarkdown = firstImageUrl ? `![${p.name}](${firstImageUrl})` : '';
+            return `- ${imageMarkdown} **${p.name}** (${p.type_code}): ${formatPrice(p.product_variants[0]?.price)} - [Xem chi tiết](/customer/product/${p.product_id})`;
+          }).join('\n\n')
+        : '--- HIỆN TẠI HỆ THỐNG CHƯA CÓ SẢN PHẨM NÀO. KHÔNG ĐƯỢC BỊA RA TÊN SẢN PHẨM. ---';
 
       // 2. Fetch Order if mentioned (Basic Regex find)
       let orderContext = 'Không có thông tin đơn hàng nào được nhắc tới.';
