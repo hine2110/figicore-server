@@ -241,6 +241,10 @@ export class ProductsService {
         for (const variantDto of variants) {
           const isPreorder = productData.type_code === 'PREORDER';
 
+          if (!isPreorder && variantDto.cost_price >= variantDto.price && variantDto.price > 0) {
+              throw new BadRequestException('Cost price must be less than retail price');
+          }
+
           const variantData: any = {
             product_id: parentProduct.product_id,
             option_name: variantDto.option_name,
@@ -256,6 +260,7 @@ export class ProductsService {
             material: variantDto.material,
             included_items: variantDto.included_items ? (variantDto.included_items as any) : undefined,
             price: isPreorder ? 0 : variantDto.price,
+            cost_price: variantDto.cost_price ?? 0,
             stock_available: isPreorder ? 0 : (variantDto.stock_available ?? 0),
             stock_defect: variantDto.stock_defect ?? 0,
           };
@@ -417,8 +422,8 @@ export class ProductsService {
         series_id ? { series_id: Number(series_id) } : {},
 
         // 2. Search Logic (Split words into multiple AND/OR contains for flexibility)
-        search ? {
-          [searchMode]: search.split(/\s+/).filter(word => word.length > 1).map(word => ({
+        (search && search.trim().length > 0) ? {
+          [searchMode]: search.trim().split(/\s+/).map(word => ({
             OR: [
               { name: { contains: word, mode: 'insensitive' } },
               { product_variants: { some: { sku: { contains: word, mode: 'insensitive' } } } },
@@ -545,7 +550,9 @@ export class ProductsService {
             deleted_at: null,
           },
           include: {
-            product_promotions: true
+            product_promotions: {
+              include: { promotion_items: true }
+            }
           }
         },
         categories: true,
@@ -699,7 +706,7 @@ export class ProductsService {
           brands: true,
           categories: true,
           series: true,
-          product_variants: { include: { product_promotions: true } },
+          product_variants: { include: { product_promotions: { include: { promotion_items: true } } } },
           product_blindboxes: true,
         }
       });
@@ -717,7 +724,7 @@ export class ProductsService {
         product_variants: {
           where: { deleted_at: null },
           orderBy: { created_at: 'asc' },
-          include: { product_preorder_configs: true, product_promotions: true }
+          include: { product_preorder_configs: true, product_promotions: { include: { promotion_items: true } } }
         },
         product_blindboxes: true,
         brands: true,
@@ -803,42 +810,72 @@ export class ProductsService {
     return product;
   }
 
+  // Shared helper to safely check Promo active state and timestamps
+  private isActivePromo(promo: any, now: Date = new Date()): boolean {
+    if (!promo || !promo.is_active) return false;
+    
+    const startDateBase = promo.start_date ? new Date(promo.start_date) : now;
+    const endDateBase   = promo.end_date   ? new Date(promo.end_date)   : now;
+
+    const [startHH, startMM] = promo.start_time.split(':').map(Number);
+    const [endHH,   endMM  ] = promo.end_time.split(':').map(Number);
+
+    const promoStart = new Date(startDateBase);
+    promoStart.setHours(startHH, startMM, 0, 0);
+
+    const promoEnd = new Date(endDateBase);
+    promoEnd.setHours(endHH, endMM, 59, 999);
+
+    if (promo.is_recurring && !promo.start_date && !promo.end_date) {
+      promoStart.setFullYear(now.getFullYear(), now.getMonth(), now.getDate());
+      promoEnd.setFullYear(now.getFullYear(), now.getMonth(), now.getDate());
+    }
+
+    return now >= promoStart && now <= promoEnd;
+  }
+
   // [NEW] Helper: Dynamic Pricing Logic (Flash Sale Time-based)
   private calculatePromotionalPrice(product: any) {
-    const now = new Date();
-    const h = String(now.getHours()).padStart(2, '0');
-    const m = String(now.getMinutes()).padStart(2, '0');
-    const currentTime = `${h}:${m}`; // e.g. "09:30"
-
-    // Apply to Variants
     if (product.product_variants) {
+      const now = new Date();
       product.product_variants = product.product_variants.map((variant: any) => {
         let final_price = Number(variant.price);
         let discount_amount = 0;
+        let is_on_sale = false;
+        let discount_percentage = 0;
 
         const promo = variant.product_promotions;
 
-        // Check if promotion is active AND current time is within the daily flash sale window
-        const isValidPromo = promo &&
-          promo.is_active &&
-          currentTime >= promo.start_time &&
-          currentTime <= promo.end_time;
+        // Check if promotion is active AND current time is within window
+        const isValidPromo = this.isActivePromo(promo, now);
 
         if (isValidPromo) {
-          if (promo.type_code === 'PERCENTAGE') {
-            discount_amount = final_price * (Number(promo.value) / 100);
-            final_price = final_price - discount_amount;
-          } else if (promo.type_code === 'FIXED_AMOUNT') {
-            discount_amount = Number(promo.value);
-            final_price = Math.max(0, final_price - discount_amount);
+          if (promo.is_flash_sale) {
+             const fsItem = promo.promotion_items?.find((i: any) => i.variant_id === variant.variant_id);
+             if (fsItem) {
+                 final_price = Number(fsItem.flash_sale_price);
+                 is_on_sale = true;
+                 discount_percentage = Math.round(( (Number(variant.price) - final_price) / Number(variant.price) ) * 100);
+             }
+          } else {
+             is_on_sale = true;
+             if (promo.type_code === 'PERCENTAGE') {
+               discount_percentage = Number(promo.value);
+               discount_amount = final_price * (discount_percentage / 100);
+               final_price = final_price - discount_amount;
+             } else if (promo.type_code === 'FIXED_AMOUNT') {
+               discount_amount = Number(promo.value);
+               final_price = Math.max(0, final_price - discount_amount);
+               discount_percentage = Math.round((discount_amount / Number(variant.price)) * 100);
+             }
           }
         }
 
         return {
           ...variant,
           final_price,
-          is_on_sale: isValidPromo,
-          discount_percentage: isValidPromo && promo.type_code === 'PERCENTAGE' ? Number(promo.value) : 0,
+          is_on_sale,
+          discount_percentage,
         };
       });
     }
@@ -883,6 +920,10 @@ export class ProductsService {
 
       if ((type === 'RETAIL' || type === 'AUCTION') && variants && variants.length > 0) {
         for (const v of variants) {
+          if (v.cost_price !== undefined && v.cost_price >= v.price && v.price > 0) {
+              throw new BadRequestException('Cost price must be less than retail price');
+          }
+
           const existingVariant = await tx.product_variants.findUnique({
             where: { sku: v.sku },
           });
@@ -897,6 +938,7 @@ export class ProductsService {
               data: {
                 option_name: v.option_name,
                 price: v.price,
+                cost_price: v.cost_price !== undefined ? v.cost_price : undefined,
                 barcode: v.barcode,
                 description: v.description,
                 media_assets: v.media_assets ? (v.media_assets as any) : undefined, // Update media_assets
@@ -918,6 +960,7 @@ export class ProductsService {
                 sku: v.sku,
                 option_name: v.option_name,
                 price: v.price,
+                cost_price: v.cost_price ?? 0,
                 barcode: v.barcode,
                 description: v.description,
                 media_assets: v.media_assets ? (v.media_assets as any) : JSON.stringify([]),

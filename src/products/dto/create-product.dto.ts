@@ -56,6 +56,11 @@ class ProductVariantDto {
     price: number;
 
     @IsNumber()
+    @IsNotEmpty()
+    @Min(0)
+    cost_price: number;
+
+    @IsNumber()
     @IsOptional()
     @Min(0)
     stock_available?: number;
