@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
-import { PrismaService } from 'src/prisma/prisma.service';
+import { PrismaService } from '../prisma/prisma.service';
 import { CreateProductPromotionDto } from './dto/create-product-promotion.dto';
 import { UpdateProductPromotionDto } from './dto/update-product-promotion.dto';
 

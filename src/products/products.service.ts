@@ -1,6 +1,6 @@
 import { Injectable, BadRequestException, ServiceUnavailableException, Logger } from '@nestjs/common';
-import { PrismaService } from 'src/prisma/prisma.service';
-import { KiotVietService } from 'src/kiotviet/kiotviet.service';
+import { PrismaService } from '../prisma/prisma.service';
+import { KiotVietService } from '../kiotviet/kiotviet.service';
 import { ConfigService } from '@nestjs/config';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
@@ -263,7 +263,6 @@ export class ProductsService {
             cost_price: variantDto.cost_price ?? 0,
             stock_available: isPreorder ? 0 : (variantDto.stock_available ?? 0),
             stock_defect: variantDto.stock_defect ?? 0,
-            tax_rate: (productData.type_code === 'RETAIL' || productData.type_code === 'AUCTION') ? 1 : 0,
           };
 
           const createdVariant = await tx.product_variants.create({ data: variantData });
@@ -601,7 +600,6 @@ export class ProductsService {
             price: Number(variant.final_price ?? variant.price),
             current_stock: variant.stock_available || 0,
             thumbnail: thumbnail,
-            tax_rate: Number(variant.tax_rate || 0), // Include tax_rate for POS
           };
         });
 
