@@ -195,6 +195,7 @@ model inventory_receipt_items {
   quantity_total     Int
   quantity_good      Int?               @default(0)
   quantity_defect    Int?               @default(0)
+  import_price       Decimal?           @db.Decimal(15, 2)
   created_at         DateTime?          @default(now()) @db.Timestamp(6)
   updated_at         DateTime?          @default(now()) @db.Timestamp(6)
   deleted_at         DateTime?          @db.Timestamp(6)
@@ -470,6 +471,7 @@ model product_variants {
 
   // RETAIL FIELDS
   price                Decimal @default(0) @db.Decimal(15, 2) // Retail Price
+  cost_price           Decimal @default(0) @db.Decimal(15, 2) // NEW: Import/Cost Price
   stock_available      Int     @default(0) // Physical Stock
   stock_defect         Int     @default(0)
   stock_factory_defect Int     @default(0)
@@ -504,8 +506,10 @@ model product_variants {
   preorder_contracts       preorder_contracts[] // Contracts linked to this variant
 
   // PROMOTIONS
-  product_promotion_id Int?
+  product_promotion_id      Int?
+  previous_promotion_id     Int?  // Saves the pre-Flash-Sale promotion for restore
   product_promotions   product_promotions? @relation(fields: [product_promotion_id], references: [promotion_id], onDelete: SetNull, onUpdate: NoAction)
+  promotion_items      promotion_items[]
 
   // ... Keep existing relations (cart_items, order_items, etc.)
   cart_items               cart_items[]
@@ -542,10 +546,26 @@ model product_promotions {
   is_active       Boolean?   @default(true)
   min_apply_price Decimal?           @db.Decimal(15, 2)
   max_apply_price Decimal?           @db.Decimal(15, 2)
+  is_flash_sale   Boolean    @default(false)
+  start_date      DateTime?          @db.Timestamp(6)
+  end_date        DateTime?          @db.Timestamp(6)
   created_at      DateTime?          @default(now()) @db.Timestamp(6)
   updated_at      DateTime?          @default(now()) @db.Timestamp(6)
   deleted_at      DateTime?          @db.Timestamp(6)
   product_variants product_variants[]
+  promotion_items  promotion_items[]
+}
+
+model promotion_items {
+  item_id          Int                @id @default(autoincrement())
+  promotion_id     Int
+  variant_id       Int
+  flash_sale_price Decimal            @db.Decimal(15, 2)
+  quota            Int                @default(0)
+  sold             Int                @default(0)
+
+  product_promotions product_promotions @relation(fields: [promotion_id], references: [promotion_id], onDelete: Cascade)
+  product_variants   product_variants   @relation(fields: [variant_id], references: [variant_id], onDelete: Cascade)
 }
 
 model promotions {
@@ -657,18 +677,7 @@ model system_configurations {
   deleted_at   DateTime? @db.Timestamp(6)
 }
 
-model system_recommendations {
-  recommendation_id Int       @id @default(autoincrement())
-  target_type       String    @db.VarChar(50) // "VARIANT" | "PRODUCT"
-  target_id         Int
-  type              String    @db.VarChar(50) // "DISCOUNT" | "BUNDLE" | "RESTOCK"
-  title             String    @db.VarChar(255)
-  reasoning         String    @db.Text
-  suggested_action  Json      // e.g. {"discount_percent": 15, "duration_days": 7}
-  status_code       String    @default("PENDING") @db.VarChar(20) // PENDING, APPLIED, DISMISSED
-  created_at        DateTime? @default(now()) @db.Timestamp(6)
-  updated_at        DateTime? @default(now()) @db.Timestamp(6)
-}
+
 
 model system_lookups {
   id         Int       @id @default(autoincrement())

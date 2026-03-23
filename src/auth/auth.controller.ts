@@ -1,4 +1,5 @@
-import { Controller, Post, Body, Get, Query, UseGuards, Req, Res } from '@nestjs/common';
+import { Controller, Post, Body, Get, Query, UseGuards, Req, Res, UseInterceptors, UploadedFile } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
@@ -8,6 +9,7 @@ import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { ActivateAccountDto } from './dto/activate-account.dto';
 import { UpdatePasswordDto } from './dto/update-password.dto';
+import { ResendActivationDto } from './dto/resend-activation.dto';
 
 @Controller('auth')
 export class AuthController {
@@ -72,8 +74,17 @@ export class AuthController {
   }
 
   @Post('activate')
-  async activate(@Body() dto: ActivateAccountDto) {
-    return this.authService.activateAccount(dto);
+  @UseInterceptors(FileInterceptor('file'))
+  async activate(
+    @Body() dto: ActivateAccountDto,
+    @UploadedFile() file?: Express.Multer.File
+  ) {
+    return this.authService.activateAccount(dto, file);
+  }
+
+  @Post('resend-activation')
+  async resendActivation(@Body() dto: ResendActivationDto) {
+    return this.authService.resendActivation(dto);
   }
 
   @Post('update-password')
