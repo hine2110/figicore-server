@@ -123,6 +123,127 @@ export class InventoryService {
     });
   }
 
+  async completeReceipt(receiptId: number, userId: number, items: { item_id: number, quantity_good: number, quantity_defect: number }[]) {
+    if (!items || items.length === 0) throw new BadRequestException('No items provided for completion.');
+
+    return await this.prisma.$transaction(async (tx) => {
+      // 1. Ensure Employee Exists
+      await this.ensureEmployeeExists(tx, userId);
+
+      // 2. Fetch and Validate Receipt
+      const receipt = await tx.inventory_receipts.findUnique({
+        where: { receipt_id: receiptId }
+      });
+
+      if (!receipt) throw new BadRequestException('Receipt not found.');
+      if (receipt.status_code === 'COMPLETED') throw new BadRequestException('This receipt is already completed.');
+
+      // 3. Update Receipt Header
+      const updatedReceipt = await tx.inventory_receipts.update({
+        where: { receipt_id: receiptId },
+        data: {
+          status_code: 'COMPLETED',
+          warehouse_staff_id: userId,
+          updated_at: new Date()
+        }
+      });
+
+      // 4. Process Items
+      for (const item of items) {
+        if (item.quantity_good < 0 || item.quantity_defect < 0) {
+          throw new BadRequestException('Quantity cannot be negative.');
+        }
+
+        // 4a. Fetch existing receipt item
+        const existingItem = await tx.inventory_receipt_items.findUnique({
+          where: { item_id: item.item_id }
+        });
+
+        if (!existingItem) {
+           throw new BadRequestException(`Item ID ${item.item_id} not found in this receipt.`);
+        }
+        if (existingItem.receipt_id !== receiptId) {
+            throw new BadRequestException(`Item ID ${item.item_id} does not belong to receipt ${receiptId}.`);
+        }
+
+        // 4b. Update receipt item quantities
+        await tx.inventory_receipt_items.update({
+          where: { item_id: item.item_id },
+          data: {
+            quantity_good: item.quantity_good,
+            quantity_defect: item.quantity_defect,
+            updated_at: new Date()
+          }
+        });
+
+        // 4c. Update Variant Stock (Standard Costing - no MAC update)
+        // Check if Preorder first to apply similar logic as createReceipt
+        const variant = await tx.product_variants.findUnique({
+          where: { variant_id: existingItem.variant_id },
+          include: { products: true, product_preorder_configs: true }
+        });
+
+        if (!variant) throw new BadRequestException(`Variant ${existingItem.variant_id} not found.`);
+        const isPreorder = variant.products.type_code === 'PREORDER' || !!variant.product_preorder_configs;
+
+        if (isPreorder) {
+           // PREORDER LOGIC: Add to Virtual Holding Stock
+           if (variant.product_preorder_configs) {
+               await tx.product_preorder_configs.update({
+                   where: { config_id: variant.product_preorder_configs.config_id },
+                   data: { stock_held: { increment: item.quantity_good } }
+               });
+               if (item.quantity_good > 0) {
+                   await this.allocatePreorders(tx, existingItem.variant_id, item.quantity_good);
+               }
+           }
+           if (item.quantity_defect > 0) {
+               await tx.product_variants.update({
+                   where: { variant_id: existingItem.variant_id },
+                   data: { stock_defect: { increment: item.quantity_defect } }
+               });
+           }
+        } else {
+           // STANDARD RETAIL LOGIC
+           await tx.product_variants.update({
+              where: { variant_id: existingItem.variant_id },
+              data: {
+                stock_available: { increment: item.quantity_good },
+                stock_defect: { increment: item.quantity_defect }
+              }
+           });
+        }
+
+        // 4d. Create Logs
+        if (item.quantity_good > 0) {
+          await tx.inventory_logs.create({
+            data: {
+              variant_id: existingItem.variant_id,
+              change_amount: item.quantity_good,
+              change_type_code: 'PURCHASE_ORDER',
+              reference_id: receiptId,
+              note: isPreorder ? 'Pre-order Stock Inbound (Held from Draft)' : 'Approved Draft Stock Inbound'
+            }
+          });
+        }
+
+        if (item.quantity_defect > 0) {
+          await tx.inventory_logs.create({
+            data: {
+              variant_id: existingItem.variant_id,
+              change_amount: item.quantity_defect,
+              change_type_code: 'PURCHASE_ORDER_DEFECT',
+              reference_id: receiptId,
+              note: 'Defect Stock Inbound (from Draft)'
+            }
+          });
+        }
+      }
+
+      return updatedReceipt;
+    });
+  }
+
   // FIFO Allocation Logic
   private async allocatePreorders(tx: any, variantId: number, quantityAvailable: number) {
     console.log(`[Allocation] Starting FIFO allocation for Variant ${variantId}. Stock: ${quantityAvailable}`);
