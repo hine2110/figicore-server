@@ -16,4 +16,8 @@ export class CreateCartDto {
     @IsString()
     @IsOptional()
     paymentOption?: string;
+
+    @IsInt()
+    @IsOptional()
+    livestreamId?: number;
 }
