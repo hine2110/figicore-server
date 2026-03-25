@@ -501,7 +501,8 @@ export class ProductsService {
         q ? {
           OR: [
             { name: { contains: q, mode: 'insensitive' } },
-            { product_variants: { some: { sku: { contains: q, mode: 'insensitive' } } } }
+            { product_variants: { some: { sku: { contains: q, mode: 'insensitive' } } } },
+            { product_variants: { some: { barcode: { contains: q, mode: 'insensitive' } } } }
           ]
         } : {},
         // Filter by category
@@ -593,6 +594,7 @@ export class ProductsService {
             price: Number(variant.final_price ?? variant.price),
             current_stock: variant.stock_available || 0,
             thumbnail: thumbnail,
+            barcode: variant.barcode,
           };
         });
 
