@@ -143,6 +143,31 @@ export class OrdersService {
           }
         }
 
+        let isLivestreamFlashSale = false;
+        // ------ LIVESTREAM PRICING OVERRIDE ------
+        if (item.livestreamId) {
+          const liveProduct = await this.prisma.livestream_products.findUnique({
+            where: {
+              livestream_id_variant_id: {
+                livestream_id: Number(item.livestreamId),
+                variant_id: item.variant_id
+              }
+            },
+            include: { livestream: true }
+          });
+          
+          if (liveProduct?.livestream?.status === 'LIVE') {
+            if (liveProduct.flash_sale_price && (liveProduct.flash_sale_stock || 0) > 0) {
+              finalUnitPrice = Number(liveProduct.flash_sale_price);
+              appliedFlashSale = true;
+              isLivestreamFlashSale = true;
+            } else {
+              finalUnitPrice = finalUnitPrice * 0.98; // 2% Live Discount
+            }
+          }
+        }
+        // -----------------------------------------
+
         const quantity = Number(item.quantity);
         cartTotalAmountDiscounted += finalUnitPrice * quantity;
 
@@ -150,7 +175,8 @@ export class OrdersService {
           ...item,
           variant,
           _backendVerifiedPrice: finalUnitPrice, // Saved purely from DB + Valid Promos
-          _applied_flash_sale: appliedFlashSale
+          _applied_flash_sale: appliedFlashSale,
+          _is_livestream_flash_sale: isLivestreamFlashSale
         });
       }
 
@@ -361,22 +387,76 @@ export class OrdersService {
         if (retailItems.length > 0) {
           let rtTotalAmountVerified = 0;
           let rtTotalWeight = 0;
+          let hasFlashSaleItem = false;
           const rtOrderItemsData: any[] = [];
 
           for (const rItem of retailItems) {
             const { variant, quantity, price, _allocated_product_id, _is_opened, _metadata } = rItem;
+            const livestreamId = rItem.livestreamId ? Number(rItem.livestreamId) : null;
 
-            // FIX: Always deduct stock for the main variant (Ticket or Retail Item)
-            // For Blindbox: Ticket stock (99999) is deducted here. Real Item stock is deducted in blindboxes.service
-            if (variant.stock_available < quantity) {
-              throw new BadRequestException(`Out of stock: ${variant.sku}`);
-            }
-
-            // Deduct Stock
-            await tx.product_variants.update({
-              where: { variant_id: variant.variant_id },
+            // --- 1. ATOMIC RETAIL STOCK DEDUCTION (Global Pool) ---
+            const stockUpdateResult = await tx.product_variants.updateMany({
+              where: {
+                variant_id: variant.variant_id,
+                stock_available: { gte: quantity }
+              },
               data: { stock_available: { decrement: quantity } }
             });
+
+            if (stockUpdateResult.count === 0) {
+              throw new BadRequestException(`Product ${variant.sku} is out of stock or has been purchased by someone else.`);
+            }
+
+            // --- 2. AUTHORITATIVE PRICE CALCULATION (Zero-Trust) ---
+            let authoritativePrice = Number(variant.price); // Base Retail
+            let shouldCheckFlashStock = false;
+
+            if (livestreamId) {
+              const liveConfig = await tx.livestream_products.findUnique({
+                where: { livestream_id_variant_id: { livestream_id: livestreamId, variant_id: variant.variant_id } }
+              });
+
+              if (liveConfig && liveConfig.flash_sale_price && Number(liveConfig.flash_sale_price) > 0) {
+                authoritativePrice = Number(liveConfig.flash_sale_price);
+                shouldCheckFlashStock = true;
+                hasFlashSaleItem = true; // Mark order for 5-min deadline
+              } else if (liveConfig && liveConfig.live_price && Number(liveConfig.live_price) > 0) {
+                authoritativePrice = Number(liveConfig.live_price);
+              } else {
+                authoritativePrice = Number(variant.price) * 0.98; // Default live discount
+              }
+            }
+
+            // SECURITY: Reject if price deviates
+            if (Math.abs(Number(price) - authoritativePrice) > 1) {
+              throw new BadRequestException(`Product price for ${variant.sku} has changed. Please update your cart.`);
+            }
+
+            // --- 3. ATOMIC FLASH SALE STOCK POOL ENFORCEMENT ---
+            if (shouldCheckFlashStock && livestreamId) {
+              const fsUpdateResult = await tx.livestream_products.updateMany({
+                where: {
+                  livestream_id: livestreamId,
+                  variant_id: variant.variant_id,
+                  flash_sale_stock: { gte: quantity }
+                },
+                data: { flash_sale_stock: { decrement: quantity } }
+              });
+
+              if (fsUpdateResult.count === 0) {
+                throw new BadRequestException(`Flash Sale slot for ${variant.sku} is sold out. Please update your cart.`);
+              }
+
+              // AUTO-REVERT: Clear price if stock hits zero
+              const revertResult = await tx.livestream_products.updateMany({
+                where: { livestream_id: livestreamId, variant_id: variant.variant_id, flash_sale_stock: { lte: 0 } },
+                data: { flash_sale_price: 0, flash_sale_stock: 0 }
+              });
+
+              if (revertResult.count > 0) {
+                this.livestreamLiveGateway.broadcastProductUpdate(`LIVE-${livestreamId}`, variant.variant_id);
+              }
+            }
 
             rtTotalAmountVerified += Number(price) * quantity;
             rtTotalWeight += (variant.weight_g || 200) * quantity;
@@ -388,38 +468,44 @@ export class OrdersService {
               total_price: Number(price) * quantity,
               allocated_product_id: _allocated_product_id || null,
               is_opened: _is_opened ?? false,
-              metadata: _metadata || undefined // Save Source Metadata
+              livestream_id: livestreamId,
+              metadata: _metadata || undefined
             });
+
+            // BROADCAST: Update stock meter in real-time
+            if (livestreamId) {
+              this.livestreamLiveGateway.broadcastProductUpdate(`LIVE-${livestreamId}`, variant.variant_id);
+            }
           }
 
           let customerShippingFee = 30000;
-          if (isVoucherFreeShip) {
-            customerShippingFee = 0;
-          }
+          if (isVoucherFreeShip) customerShippingFee = 0;
 
-          // CHỐT CHẶN: VOUCHER DISCOUNT LOGIC (Ngăn âm đơn hàng)
+          // FAIRNESS: Shorter deadline for Flash Sales (5 mins) vs Retail (15 mins)
+          const effectiveDeadline = new Date();
+          effectiveDeadline.setMinutes(effectiveDeadline.getMinutes() + (hasFlashSaleItem ? 5 : 15));
+
           const finalTotalBeforeShipping = Math.max(0, rtTotalAmountVerified - orderVoucherDiscountAmount);
           const rtFinalTotal = finalTotalBeforeShipping + customerShippingFee;
 
-          const rtOrderCode = `ORD-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
           const rtOrder = await tx.orders.create({
             data: {
               user_id: userId,
-              order_code: rtOrderCode,
+              order_code: `ORD-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
               shipping_address_id,
-              total_amount: rtFinalTotal,           // <--- BUG FIXED: Saved fully discounted total
-              discount_amount: orderVoucherDiscountAmount, // <--- SAVED: Record the applied discount
+              total_amount: rtFinalTotal,
+              discount_amount: orderVoucherDiscountAmount,
               shipping_fee: customerShippingFee,
               original_shipping_fee: 30000,
               payment_method_code,
               payment_ref_code: paymentRefCode,
               status_code: 'PENDING_PAYMENT',
-              payment_deadline: retailDeadline,
+              payment_deadline: effectiveDeadline,
               channel_code: 'WEB',
               promotion_id: usedDiscountPromotionId,
               shipping_promotion_id: usedFreeShipPromotionId,
               order_items: { create: rtOrderItemsData },
-              order_status_history: { create: { new_status: 'PENDING_PAYMENT', note: 'Retail Order Created (Authoritative Pricing)' } }
+              order_status_history: { create: { new_status: 'PENDING_PAYMENT', note: hasFlashSaleItem ? 'Flash Sale Order (5-min Hold)' : 'Retail Order (15-min Hold)' } }
             } as any
           });
           ordersResults.push(rtOrder);
@@ -453,33 +539,9 @@ export class OrdersService {
       const totalAmount = createdOrders.reduce((sum, o) => sum + Number(o.total_amount), 0);
       const orderIds = createdOrders.map(o => o.order_id);
 
-      // --- EMIT EVENTS TO LIVESTREAM ---
-      try {
-        const user = await this.prisma.users.findUnique({ where: { user_id: userId }, select: { full_name: true } });
-
-        // Items were grouped by payment type. Let's just iterate over all `items` from `createOrderDto`
-        for (const item of items) {
-          if ((item as any).livestream_id) {
-            // Find variant name to broadcast
-            const variant = await this.prisma.product_variants.findUnique({
-              where: { variant_id: item.variant_id },
-              include: { products: true }
-            });
-            const productName = variant?.products?.name || variant?.option_name || 'Vật phẩm bí ẩn';
-
-            // Emit to the specific livestream room
-            this.livestreamLiveGateway.broadcastOrder(`livestream_${(item as any).livestream_id}`, {
-              customer_name: user?.full_name || 'Khách hàng',
-              product_name: productName,
-              quantity: item.quantity,
-              amount: Number(variant?.price || 0) * item.quantity,
-              time: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })
-            });
-          }
-        }
-      } catch (err) {
-        console.error("Failed to emit livestream event", err);
-      }
+      // NOTE: new_order broadcast to livestream admin is intentionally NOT done here.
+      // It will be emitted ONLY after SUCCESSFUL PAYMENT (see mockPayGroup / payWithWallet / webhook handler).
+      // Reason: createOrder sets status = PENDING_PAYMENT (draft). Broadcasting here causes false +1 order counts.
 
       return {
         payment_ref_code: paymentRefCode,
@@ -634,8 +696,10 @@ export class OrdersService {
           // Send Email
           this.mailService.sendOrderConfirmation(order.users, order).catch(e => console.error("Mail Error", e));
         }
-        // Emit Socket
+        // Emit Socket (warehouse)
         this.eventsGateway.notifyNewOrder(order);
+        // Emit Socket (livestream room) — ONLY on successful payment
+        await this._broadcastLivestreamOrder(order);
       }
       this.logger.log(`Notifications sent for group ${paymentRefCode}`);
 
@@ -731,6 +795,8 @@ export class OrdersService {
           this.mailService.sendOrderConfirmation(order.users, order).catch(e => console.error("Mail Error", e));
         }
         this.eventsGateway.notifyNewOrder(order);
+        // Emit Socket (livestream room) — ONLY on successful payment
+        await this._broadcastLivestreamOrder(order);
       }
       this.logger.log(`Wallet Payment successful for group ${paymentRefCode}`);
 
@@ -741,6 +807,31 @@ export class OrdersService {
     }
 
     return { success: true, message: `Wallet payment successful for group ${paymentRefCode}` };
+  }
+
+  /**
+   * Broadcast a confirmed (paid) order to the livestream admin room.
+   * Called ONLY after order status transitions to PROCESSING.
+   */
+  private async _broadcastLivestreamOrder(order: any): Promise<void> {
+    try {
+      const items = order.order_items || [];
+      for (const item of items) {
+        if (!item.livestream_id) continue;
+        const variantInfo = item.product_variants;
+        const productName = variantInfo?.products?.name || variantInfo?.option_name || 'Sản phẩm';
+        const customerName = order.users?.full_name || 'Khách hàng';
+        this.livestreamLiveGateway.broadcastOrder(`LIVE-${item.livestream_id}`, {
+          customer_name: customerName,
+          product_name: productName,
+          quantity: item.quantity,
+          amount: Number(item.unit_price) * item.quantity,
+          time: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }),
+        });
+      }
+    } catch (err) {
+      this.logger.error('Failed to broadcast livestream order:', err);
+    }
   }
 
   async confirmPayment(orderId: number, userId: number) {
@@ -848,6 +939,20 @@ export class OrdersService {
           });
           this.logger.log(`[Expire] Restored ${item.quantity} quota to Flash Sale Item #${promoItem.item_id}`);
         }
+
+        // 4. Restore Livestream Flash Sale Quota
+        if (item.livestream_id) {
+          const livePromo = await tx.livestream_products.findUnique({
+             where: { livestream_id_variant_id: { livestream_id: item.livestream_id, variant_id: item.variant_id } }
+          });
+          if (livePromo && livePromo.flash_sale_price) {
+            await tx.livestream_products.update({
+               where: { livestream_id_variant_id: { livestream_id: item.livestream_id, variant_id: item.variant_id } },
+               data: { flash_sale_stock: { increment: item.quantity } }
+            });
+            this.logger.log(`[Expire] Restored ${item.quantity} quota to Livestream Product Flash Sale!`);
+          }
+        }
         // --- CRITICAL FIX END ---
       }
 
@@ -863,10 +968,11 @@ export class OrdersService {
         // Add items back to cart
         if (cart) {
           await tx.cart_items.createMany({
-            data: order.order_items.map(item => ({
+            data: order.order_items.map((item: any) => ({
               cart_id: cart!.cart_id,
               variant_id: item.variant_id,
-              quantity: item.quantity
+              quantity: item.quantity,
+              livestream_id: item.livestream_id || null
             }))
           });
         }
@@ -1285,6 +1391,20 @@ export class OrdersService {
               data: { sold: { decrement: item.quantity } }
             });
             this.logger.log(`[Cancel] Restored ${item.quantity} quota to Flash Sale Item #${promoItem.item_id}`);
+          }
+          
+          // FIX: Restore Livestream Flash Sale Quota
+          if (item.livestream_id) {
+            const livePromo = await tx.livestream_products.findUnique({
+               where: { livestream_id_variant_id: { livestream_id: item.livestream_id, variant_id: item.variant_id } }
+            });
+            if (livePromo && livePromo.flash_sale_price) {
+              await tx.livestream_products.update({
+                 where: { livestream_id_variant_id: { livestream_id: item.livestream_id, variant_id: item.variant_id } },
+                 data: { flash_sale_stock: { increment: item.quantity } }
+              });
+              this.logger.log(`[Cancel] Restored ${item.quantity} quota to Livestream Product Flash Sale!`);
+            }
           }
           // --- CRITICAL FIX END ---
         }
