@@ -48,6 +48,8 @@ import { LivekitModule } from './livekit/livekit.module';
 import { TimesheetCorrectionsModule } from './timesheet-corrections/timesheet-corrections.module';
 import { PayrollDisputesModule } from './payroll-disputes/payroll-disputes.module';
 import { LivestreamsModule } from './livestreams/livestreams.module';
+import { InventoryAnalyticsModule } from './inventory-analytics/inventory-analytics.module';
+import { BirthdayCronModule } from './cron/birthday-cron.module';
 
 
 @Module({
@@ -100,7 +102,9 @@ import { LivestreamsModule } from './livestreams/livestreams.module';
     LivekitModule,
     TimesheetCorrectionsModule,
     PayrollDisputesModule,
-    LivestreamsModule
+    LivestreamsModule,
+    InventoryAnalyticsModule,
+    BirthdayCronModule,
   ],
 
   controllers: [AppController],

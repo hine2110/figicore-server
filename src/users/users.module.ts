@@ -7,16 +7,18 @@ import { AdminController } from './admin.controller';
 import { PrismaModule } from '../prisma/prisma.module';
 import { UploadModule } from '../upload/upload.module';
 import { EncryptionService } from '../common/encryption.service';
+import { PromotionsModule } from '../promotions/promotions.module';
 
 @Module({
   imports: [
     PrismaModule,
     UploadModule,
     MailModule,
+    PromotionsModule,
     JwtModule.register({
       secret: process.env.JWT_SECRET || 'secretKey',
       signOptions: { expiresIn: '12h' },
-    })
+    }),
   ],
   controllers: [UsersController, AdminController],
   providers: [UsersService, EncryptionService],

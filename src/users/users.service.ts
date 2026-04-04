@@ -3,6 +3,8 @@ import { Injectable, ForbiddenException, NotFoundException, BadRequestException 
 import { PrismaService } from '../prisma/prisma.service';
 import { Prisma } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
+import { CreateEmployeeDto } from '../employees/dto/create-employee.dto';
+import { UpdateProfileDto } from './dto/update-profile.dto';
 import AdmZip from 'adm-zip';
 import * as XLSX from 'xlsx';
 
@@ -11,7 +13,6 @@ import { JwtService } from '@nestjs/jwt';
 import { MailService } from '../mail/mail.service';
 import * as crypto from 'crypto';
 import { EncryptionService } from '../common/encryption.service';
-import { CreateEmployeeDto } from '../employees/dto/create-employee.dto';
 import { GetAuditLogDto } from './dto/get-audit-log.dto';
 
 @Injectable()
@@ -206,15 +207,26 @@ export class UsersService {
     });
   }
 
-  async updateProfile(userId: number, data: { full_name?: string; phone?: string; email?: string }) {
-    // SECURITY: Prevent direct update of sensitive fields (Phone/Email) for everyone through this endpoint.
+  async updateProfile(userId: number, data: UpdateProfileDto) {
+    // 1. SECURITY: Prevent direct update of sensitive fields (Phone/Email) for everyone through this endpoint.
     // These should go through createProfileUpdateRequest which requires OTP.
     if (data.phone || data.email) {
       throw new BadRequestException('Security: Phone and Email updates require OTP verification. Please use the "Request Update" feature.');
     }
 
+    // 2. DOB Locking Logic
+    const currentUser = await this.prisma.users.findUnique({
+      where: { user_id: userId },
+      select: { dob: true }
+    });
+
+    if (currentUser?.dob && data.dob && new Date(currentUser.dob).toISOString().split('T')[0] !== new Date(data.dob).toISOString().split('T')[0]) {
+      throw new BadRequestException('Date of Birth cannot be changed once set.');
+    }
+
     const updateData: any = {};
     if (data.full_name) updateData.full_name = data.full_name;
+    if (data.dob) updateData.dob = new Date(data.dob);
 
     const updated = await this.prisma.users.update({
       where: { user_id: userId },
@@ -548,6 +560,7 @@ export class UsersService {
         if (changedData['phone']) updateData.phone = this.encryption.encryptDeterministic(changedData['phone'] as string);
         if (changedData['email']) updateData.email = this.encryption.encryptDeterministic(changedData['email'] as string);
         if (changedData['avatar_url']) updateData.avatar_url = changedData['avatar_url'];
+        if (changedData['dob']) updateData.dob = new Date(changedData['dob'] as string);
 
         if (Object.keys(updateData).length > 0) {
           await tx.users.update({

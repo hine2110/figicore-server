@@ -63,6 +63,16 @@ export class ProductsController {
     });
   }
 
+  @Get('blindboxes/draft')
+  getDraftBlindboxes() {
+    return this.productsService.getDraftBlindboxes();
+  }
+
+  @Patch('blindboxes/:id/approve')
+  approveBlindbox(@Param('id') id: string) {
+    return this.productsService.approveBlindbox(+id);
+  }
+
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.productsService.findOne(+id);

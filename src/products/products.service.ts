@@ -1149,6 +1149,45 @@ export class ProductsService {
 
     return results.map(item => (item as any)[key]).filter(val => val !== null && val !== "");
   }
+  async getDraftBlindboxes() {
+    return this.prisma.products.findMany({
+      where: {
+        type_code: 'BLINDBOX',
+        status_code: 'DRAFT',
+      },
+      include: {
+        product_blindboxes: true,
+        product_variants: true,
+      },
+      orderBy: { created_at: 'desc' },
+    });
+  }
+
+  async approveBlindbox(id: number) {
+    const product = await this.prisma.products.findUnique({ where: { product_id: id } });
+    if (!product || product.type_code !== 'BLINDBOX') {
+      throw new BadRequestException('Bản nháp Hộp mù không tồn tại.');
+    }
+
+    if (product.status_code !== 'DRAFT') {
+      throw new BadRequestException('Hộp mù này không ở trạng thái chờ duyệt.');
+    }
+
+    // 1. Chuyển đổi trạng thái sang ACTIVE
+    const updated = await this.prisma.products.update({
+      where: { product_id: id },
+      data: { status_code: 'ACTIVE' },
+    });
+
+    // 2. Mock hệ thống Notification (Do database chưa cấu hình bảng notifications)
+    this.logger.log(`[Notification to Manager]: Hộp mù "${product.name}" đã được kho duyệt thành công và hiện đang ACTIVE.`);
+
+    return {
+      success: true,
+      message: 'Đã duyệt Hộp mù thành công.',
+      data: updated,
+    };
+  }
 
   async generateAiDescription(dto: {
     productName: string;
