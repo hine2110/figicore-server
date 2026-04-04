@@ -10,6 +10,11 @@ import { Roles } from '../auth/decorators/roles.decorator';
 export class LivestreamsController {
   constructor(private readonly livestreamsService: LivestreamsService) {}
 
+  @Get()
+  findAll(@Query('status') status?: string) {
+    return this.livestreamsService.findAll(status);
+  }
+
   @Post()
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles('SUPER_ADMIN', 'ADMIN', 'MANAGER')
@@ -17,10 +22,6 @@ export class LivestreamsController {
     return this.livestreamsService.create(createLivestreamDto);
   }
 
-  @Get()
-  findAll(@Query('status') status?: string) {
-    return this.livestreamsService.findAll(status);
-  }
 
   @Get(':id')
   findOne(@Param('id') id: string) {
@@ -93,4 +94,12 @@ export class LivestreamsController {
   getReport(@Param('id') id: string) {
     return this.livestreamsService.getReport(+id);
   }
+
+  @Get(':id/orders')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles('SUPER_ADMIN', 'ADMIN')
+  getOrders(@Param('id') id: string) {
+    return this.livestreamsService.getOrders(+id);
+  }
+
 }
