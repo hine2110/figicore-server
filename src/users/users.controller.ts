@@ -2,9 +2,11 @@ import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, Req, Pars
 import { FileInterceptor } from '@nestjs/platform-express';
 import { AuthGuard } from '@nestjs/passport';
 import { UsersService } from './users.service';
+import { PromotionsService } from '../promotions/promotions.service';
 import { FaceValidationService } from '../upload/face-validation.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { UpdateProfileDto } from './dto/update-profile.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -14,7 +16,8 @@ import { AllowAnyIp } from '../common/decorators/allow-any-ip.decorator';
 export class UsersController {
   constructor(
     private readonly usersService: UsersService,
-    private readonly faceValidationService: FaceValidationService
+    private readonly faceValidationService: FaceValidationService,
+    private readonly promotionsService: PromotionsService,
   ) { }
 
   @Get('profile')
@@ -24,9 +27,20 @@ export class UsersController {
     return this.usersService.getProfile(req.user.user_id);
   }
 
+  /**
+   * GET /users/me/vouchers
+   * Returns the authenticated user's voucher wallet (COLLECTED + USED),
+   * including full promotion details for frontend rendering.
+   */
+  @Get('me/vouchers')
+  @UseGuards(AuthGuard('jwt'))
+  getMyVoucherWallet(@Req() req) {
+    return this.promotionsService.getMyVouchers(req.user.user_id);
+  }
+
   @Patch('profile')
   @UseGuards(AuthGuard('jwt'))
-  updateProfile(@Req() req, @Body() data: { full_name: string; phone: string }) {
+  updateProfile(@Req() req, @Body() data: UpdateProfileDto) {
     return this.usersService.updateProfile(req.user.user_id, data);
   }
 

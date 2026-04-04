@@ -668,45 +668,16 @@ export class ProductPromotionsService {
         }
       }
 
-      // Mark as expired (deleted_at = expiry timestamp, used for 10-min grace period)
+      // Mark as inactive (Expired) - we do NOT set deleted_at here 
+      // so they remain visible in the Manager's list.
       await this.prisma.product_promotions.updateMany({
         where: { promotion_id: { in: promotionIds } },
-        data: { is_active: false, deleted_at: new Date() }
+        data: { is_active: false }
       });
 
       this.logger.log(
-        `[Phase 1] Expired ${promotionIds.length} product promotions. ` +
-        `Restored ${affectedVariants.length} variant promotions. ` +
-        `IDs: [${promotionIds.join(', ')}]`
-      );
-    }
-
-    // ── PHASE 2: Hard delete promotions expired > 10 minutes ago ───────
-    const tenMinutesAgo = new Date(now.getTime() - 10 * 60 * 1000);
-    const toHardDelete = await this.prisma.product_promotions.findMany({
-      where: {
-        is_active: false,
-        deleted_at: { not: null, lt: tenMinutesAgo }
-      },
-      select: { promotion_id: true }
-    });
-
-    if (toHardDelete.length > 0) {
-      const deleteIds = toHardDelete.map(p => p.promotion_id);
-
-      // Delete promotion_items first (FK constraint)
-      await this.prisma.promotion_items.deleteMany({
-        where: { promotion_id: { in: deleteIds } }
-      });
-
-      // Hard delete the promotion records
-      await this.prisma.product_promotions.deleteMany({
-        where: { promotion_id: { in: deleteIds } }
-      });
-
-      this.logger.log(
-        `[Phase 2] Hard-deleted ${deleteIds.length} expired product promotions after 10-min grace period. ` +
-        `IDs: [${deleteIds.join(', ')}]`
+        `[AutoExpire] Deactivated ${promotionIds.length} expired product promotions. ` +
+        `Restored ${affectedVariants.length} variant promotions.`
       );
     }
   }
