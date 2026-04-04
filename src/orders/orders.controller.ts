@@ -11,10 +11,7 @@ export class OrdersController {
   @Post()
   @UseGuards(AuthGuard('jwt'))
   create(@Req() req, @Body() createOrderDto: CreateOrderDto) {
-    console.log('[OrdersController] Create Order Request:', {
-      userId: req.user.user_id,
-      dto: createOrderDto
-    });
+    console.log('[OrdersController] Create Order Request for User ID:', req.user.user_id);
     try {
       return this.ordersService.create(req.user.user_id, createOrderDto);
     } catch (e) {

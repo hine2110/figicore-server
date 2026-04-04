@@ -99,24 +99,26 @@ export class ChatService {
       }
 
       // 2. Fetch Filtered Products
-      let matchedProducts = await this.productsService.findAll({
+      let matchedProductsResult = await this.productsService.findAll({
         ...searchParams,
-      });
+      }) as any;
+      let matchedProducts = matchedProductsResult?.data || matchedProductsResult || [];
 
-      if (isCheap) {
+      if (isCheap && Array.isArray(matchedProducts)) {
         // Sort in memory for cheapest as Prisma `findAll` doesn't support complex variant price sort directly
         matchedProducts.sort((a: any, b: any) => {
-          const priceA = a.product_variants[0]?.price || 99999999;
-          const priceB = b.product_variants[0]?.price || 99999999;
+          const priceA = a.product_variants?.[0]?.price || a.variants?.[0]?.price || 99999999;
+          const priceB = b.product_variants?.[0]?.price || b.variants?.[0]?.price || 99999999;
           return Number(priceA) - Number(priceB);
         });
       }
 
       // If no filtered results, fall back to newest
-      let displayProducts = matchedProducts.length > 0 ? matchedProducts.slice(0, 10) : [];
+      let displayProducts = Array.isArray(matchedProducts) && matchedProducts.length > 0 ? matchedProducts.slice(0, 10) : [];
       if (displayProducts.length === 0) {
-        const fallback = await this.productsService.findAll({ sort: 'newest' } as any);
-        displayProducts = fallback.slice(0, 10);
+        const fallbackResult = await this.productsService.findAll({ sort: 'newest' } as any) as any;
+        const fallback = fallbackResult?.data || fallbackResult || [];
+        displayProducts = Array.isArray(fallback) ? fallback.slice(0, 10) : [];
       }
 
       const formatPrice = (price: any) => {
@@ -127,15 +129,38 @@ export class ChatService {
       const productContext = displayProducts.length > 0 
         ? displayProducts.map(p => {
             let firstImageUrl = '';
-            if (p.media_urls && typeof p.media_urls === 'object') {
-              const mediaArray = Array.isArray(p.media_urls) ? p.media_urls : (p.media_urls as any).images || [];
-              if (mediaArray.length > 0) {
-                firstImageUrl = mediaArray[0];
+            
+            // Try mapped DTO from findAll
+            if (p.thumbnail) {
+              firstImageUrl = typeof p.thumbnail === 'string' ? p.thumbnail : (p.thumbnail?.url || '');
+            } else {
+              // Try product level media_urls
+              if (p.media_urls && typeof p.media_urls === 'object') {
+                const mediaArray = Array.isArray(p.media_urls) ? p.media_urls : (p.media_urls as any).images || [];
+                if (mediaArray.length > 0) {
+                  const m = mediaArray[0];
+                  firstImageUrl = typeof m === 'string' ? m : (m?.url || '');
+                }
+              }
+
+              // Fallback to variant level media_assets
+              if (!firstImageUrl && p.product_variants && p.product_variants.length > 0) {
+                const vMedia = p.product_variants[0].media_assets;
+                if (vMedia) {
+                  try {
+                    const assets = typeof vMedia === 'string' ? JSON.parse(vMedia) : vMedia;
+                    if (Array.isArray(assets) && assets.length > 0) {
+                      const a = assets[0];
+                      firstImageUrl = typeof a === 'string' ? a : (a?.url || '');
+                    }
+                  } catch (e) {}
+                }
               }
             }
 
-            const imageMarkdown = firstImageUrl ? `![${p.name}](${firstImageUrl})` : '';
-            return `- ${imageMarkdown} **${p.name}** (${p.type_code}): ${formatPrice(p.product_variants[0]?.price)} - [Xem chi tiết](/customer/product/${p.product_id})`;
+            const imageMarkdown = firstImageUrl ? `![${p.name || p.product_name}](${firstImageUrl})` : '';
+            const price = p.variants?.[0]?.price ?? p.product_variants?.[0]?.price;
+            return `- ${imageMarkdown} **${p.name || p.product_name}** (${p.type_code || p.product_type}): ${formatPrice(price)} - [Xem chi tiết](/customer/product/${p.product_id})`;
           }).join('\n\n')
         : '--- HIỆN TẠI HỆ THỐNG CHƯA CÓ SẢN PHẨM NÀO. KHÔNG ĐƯỢC BỊA RA TÊN SẢN PHẨM. ---';
 
@@ -190,44 +215,56 @@ export class ChatService {
     } catch (error) {
       this.logger.error(`Error getting AI response: ${error.message}`);
 
-      // Fallback to Mock Response if Quota Exceeded (429) or other API issues
-      if (error.status === 429 || error.message?.includes('429')) {
-        this.logger.warn('Groq Quota Exceeded or API issue. Falling back to Mock mode.');
+      // Fallback to Mock Response if Quota Exceeded (429) or Access Denied (403) from API
+      if ([429, 403, 502, 503].includes(error.status) || error.message?.includes('429') || error.message?.includes('403')) {
+        this.logger.warn(`API issue (${error.status || 'Network Error'}). Falling back to Mock mode.`);
         return this.getMockResponse(message);
       }
 
       console.error('FULL Groq Error:', error);
-      return 'Rất tiếc, đã có lỗi xảy ra khi xử lý câu hỏi của bạn. Bạn có thể thử lại không?';
+      return 'Rất tiếc, đã có lỗi xảy ra khi kết nối máy chủ AI. Bạn có thể thử lại lúc khác không?';
     }
   }
 
   private getMockResponse(message: string): string {
     const msg = message.toLowerCase();
 
-    // Check if message is related to products or hobby
+    // On-topic keyword check
     const relatedKeywords = [
-      'chào', 'hi', 'hello', 'tạm biệt', 'bye',
-      'mô hình', 'figure', 'gundam', 'blindbox', 'art toy', 'robot',
-      'giá', 'mua', 'đặt', 'ship', 'vận chuyển', 'thanh toán', 'đơn hàng', 'order',
-      'lắp ráp', 'sưu tầm', 'chơi', 'tư vấn', 'giới thiệu', 'tìm', 'có không'
+      'chào', 'hi', 'hello', 'xin chào', 'bye', 'tạm biệt',
+      'mô hình', 'figure', 'gundam', 'gunpla', 'blindbox', 'art toy', 'robot', 'nendoroid', 'hot toys',
+      'giá', 'bao nhiêu', 'mua', 'đặt hàng', 'order', 'ship', 'vận chuyển', 'giao hàng', 'thanh toán',
+      'đơn hàng', 'lắp ráp', 'sưu tầm', 'sản phẩm', 'mới', 'tư vấn', 'giới thiệu', 'tìm', 'figicore',
     ];
 
     const isRelated = relatedKeywords.some(kw => msg.includes(kw));
 
     if (!isRelated) {
-      return 'Xin lỗi, mình là trợ lý chuyên biệt của FigiCore nên chỉ có thể hỗ trợ các vấn đề liên quan đến sản phẩm và dịch vụ của cửa hàng thôi ạ. ✨🤖';
+      return 'Xin lỗi anh/chị, câu hỏi này ngoài chuyên môn của mình. Mình chỉ hỗ trợ về mô hình, sản phẩm và dịch vụ của FigiCore thôi ạ. 😊';
     }
 
-    if (msg.includes('chào') || msg.includes('hi') || msg.includes('hello')) {
-      return 'Chào "đồng môn" nhé! ✨ Hiện tại dịch vụ AI đang bận một chút nên mình trả lời ở chế độ "giả lập" nhé. Bạn muốn hỏi gì về mô hình tại FigiCore không?';
+    if (msg.includes('chào') || msg.includes('hi') || msg.includes('hello') || msg.includes('xin chào')) {
+      return 'Xin chào! ✨ Mình là trợ lý FigiCore, sẵn sàng tư vấn về mô hình, Gundam, Blindbox và các sản phẩm sưu tầm. Bạn cần hỗ trợ gì không?';
     }
-    if (msg.includes('mua') || msg.includes('order') || msg.includes('đặt')) {
-      return 'Để mua hàng tại FigiCore, bạn chỉ cần chọn sản phẩm, thêm vào giỏ và thanh toán thôi. Rất đơn giản! 🤖';
+    if (msg.includes('mua') || msg.includes('order') || msg.includes('đặt hàng')) {
+      return 'Để mua hàng tại FigiCore, bạn chọn sản phẩm → thêm vào giỏ hàng → thanh toán là xong! Bạn đang quan tâm đến loại sản phẩm nào? 🤖';
     }
     if (msg.includes('blindbox')) {
-      return 'Blindbox là hộp bí ẩn, bạn sẽ không biết bên trong có mô hình nào cho đến khi mở ra. Cảm giác hồi hộp đó chính là linh hồn của Blindbox đấy! ✨';
+      return 'Blindbox là hộp bí ẩn - bạn không biết mô hình nào bên trong cho đến khi mở ra! Cảm giác hồi hộp đó chính là linh hồn của Blindbox đấy ✨ FigiCore có nhiều dòng Blindbox xịn, bạn muốn xem không?';
+    }
+    if (msg.includes('gundam') || msg.includes('gunpla')) {
+      return 'FigiCore có đầy đủ các dòng Gunpla từ HG, RG, MG đến PG! Đây là thiên đường cho fan Gundam. Bạn đang tìm dòng nào? ✨';
+    }
+    if (msg.includes('giá') || msg.includes('bao nhiêu')) {
+      return 'Giá sản phẩm tại FigiCore rất đa dạng, từ vài trăm nghìn đến vài triệu tùy loại. Bạn đang quan tâm đến sản phẩm nào? Mình tư vấn chi tiết hơn nhé! 🤖';
+    }
+    if (msg.includes('ship') || msg.includes('vận chuyển') || msg.includes('giao hàng')) {
+      return 'FigiCore giao hàng toàn quốc! Thời gian giao hàng thông thường 2-5 ngày làm việc. 🚚';
+    }
+    if (msg.includes('mới') || msg.includes('sản phẩm')) {
+      return 'FigiCore liên tục cập nhật sản phẩm mới mỗi tuần! Bạn có thể xem trang chủ để khám phá. Có dòng nào đang chờ đợi không? ✨';
     }
 
-    return `Bạn vừa hỏi về "${message}". Hiện tại AI đang bận một chút! ✨🤖`;
+    return 'Mình có thể hỗ trợ bạn về sản phẩm mô hình, Gundam, Blindbox, đơn hàng tại FigiCore. Bạn cần tìm hiểu về gì? 😊';
   }
 }

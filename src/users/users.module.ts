@@ -3,16 +3,15 @@ import { JwtModule } from '@nestjs/jwt';
 import { MailModule } from '../mail/mail.module';
 import { UsersService } from './users.service';
 import { UsersController } from './users.controller';
-
 import { AdminController } from './admin.controller';
-
 import { PrismaModule } from '../prisma/prisma.module';
 import { UploadModule } from '../upload/upload.module';
+import { EncryptionService } from '../common/encryption.service';
 
 @Module({
   imports: [
-    PrismaModule, 
-    UploadModule, 
+    PrismaModule,
+    UploadModule,
     MailModule,
     JwtModule.register({
       secret: process.env.JWT_SECRET || 'secretKey',
@@ -20,7 +19,7 @@ import { UploadModule } from '../upload/upload.module';
     })
   ],
   controllers: [UsersController, AdminController],
-  providers: [UsersService],
-  exports: [UsersService],
+  providers: [UsersService, EncryptionService],
+  exports: [UsersService, EncryptionService],
 })
 export class UsersModule { }
