@@ -6,6 +6,7 @@ import { UsersController } from './users.controller';
 import { AdminController } from './admin.controller';
 import { PrismaModule } from '../prisma/prisma.module';
 import { UploadModule } from '../upload/upload.module';
+import { EncryptionService } from '../common/encryption.service';
 import { PromotionsModule } from '../promotions/promotions.module';
 
 @Module({
@@ -20,7 +21,7 @@ import { PromotionsModule } from '../promotions/promotions.module';
     }),
   ],
   controllers: [UsersController, AdminController],
-  providers: [UsersService],
-  exports: [UsersService],
+  providers: [UsersService, EncryptionService],
+  exports: [UsersService, EncryptionService],
 })
 export class UsersModule { }
