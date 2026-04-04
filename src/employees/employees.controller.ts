@@ -1,4 +1,4 @@
-import { Controller, Post, Body, UseGuards, Get, Query, DefaultValuePipe, ParseIntPipe, Param } from '@nestjs/common';
+import { Controller, Post, Body, UseGuards, Get, Query, DefaultValuePipe, ParseIntPipe, Param, Request } from '@nestjs/common';
 import { EmployeesService } from './employees.service';
 import { CreateEmployeeDto } from './dto/create-employee.dto';
 import { ImportEmployeeDto } from './dto/import-employee.dto';
@@ -39,7 +39,11 @@ export class EmployeesController {
   @Get(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('SUPER_ADMIN', 'MANAGER')
-  findOne(@Param('id', ParseIntPipe) id: number) {
-    return this.employeesService.findOne(id);
+  findOne(@Param('id', ParseIntPipe) id: number, @Request() req: any) {
+    const requestingUserId = Number(req.user.userId || req.user.id || req.user.sub || req.user.user_id);
+    const requestingRole = req.user.role_code || req.user.role;
+    const ip = req.ip || req.connection.remoteAddress;
+
+    return this.employeesService.findOne(id, requestingUserId, requestingRole, ip);
   }
 }

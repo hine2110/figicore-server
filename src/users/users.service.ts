@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { Prisma } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { CreateEmployeeDto } from '../employees/dto/create-employee.dto';
+import { UpdateProfileDto } from './dto/update-profile.dto';
 import AdmZip from 'adm-zip';
 import * as XLSX from 'xlsx';
 
@@ -11,6 +12,8 @@ import { UploadService } from '../upload/upload.service';
 import { JwtService } from '@nestjs/jwt';
 import { MailService } from '../mail/mail.service';
 import * as crypto from 'crypto';
+import { EncryptionService } from '../common/encryption.service';
+import { GetAuditLogDto } from './dto/get-audit-log.dto';
 
 @Injectable()
 export class UsersService {
@@ -18,8 +21,54 @@ export class UsersService {
     private prisma: PrismaService,
     private uploadService: UploadService,
     private jwtService: JwtService,
-    private mailService: MailService
+    private mailService: MailService,
+    private encryption: EncryptionService,
   ) { }
+
+  /** Log a PII access event when staff views sensitive customer data */
+  async logPiiAccess(accessedBy: number, targetUserId: number, fieldsViewed: string[], ip?: string) {
+    try {
+      await this.prisma.pii_access_logs.create({
+        data: {
+          accessed_by: accessedBy,
+          target_user_id: targetUserId,
+          fields_viewed: fieldsViewed.join(','),
+          ip_address: ip || null,
+        }
+      });
+    } catch (e) {
+      // Non-blocking: log failure should NOT break the main request
+      console.error('[PII Audit] Failed to write audit log:', e.message);
+    }
+  }
+
+  /** Decrypt a user record's PII fields (phone, email) */
+  /** Decrypt a user record's PII fields (phone, email) - Internal Use */
+  private decryptUser(user: any): any {
+    if (!user) return user;
+    return {
+      ...user,
+      phone: user.phone ? this.encryption.decrypt(user.phone) : user.phone,
+      email: user.email ? this.encryption.decrypt(user.email) : user.email,
+    };
+  }
+
+  /** Remove sensitive internal fields before returning to client */
+  private sanitizeUser(user: any): any {
+    if (!user) return user;
+    const { password_hash, otp_code, otp_expires_at, google_id, refresh_token, ...safeUser } = user;
+    return safeUser;
+  }
+
+  /** Decrypt an address's PII fields */
+  private decryptAddress(address: any): any {
+    if (!address) return address;
+    return {
+      ...address,
+      detail_address: address.detail_address ? this.encryption.decrypt(address.detail_address) : address.detail_address,
+      recipient_phone: address.recipient_phone ? this.encryption.decrypt(address.recipient_phone) : address.recipient_phone,
+    };
+  }
 
   async updateAvatar(userId: number, file: Express.Multer.File) {
     const user = await this.findOne(userId);
@@ -36,32 +85,68 @@ export class UsersService {
 
 
   async create(data: any) {
-    return this.prisma.users.create({
-      data,
-    });
+    // Encrypt PII fields before storing
+    const safeData = { ...data };
+    if (safeData.email) safeData.email = this.encryption.encryptDeterministic(safeData.email);
+    if (safeData.phone) safeData.phone = this.encryption.encryptDeterministic(safeData.phone);
+    return this.prisma.users.create({ data: safeData });
+  }
+
+  async findAll() {
+    const users = await this.prisma.users.findMany();
+    return users.map(user => this.sanitizeUser(this.decryptUser(user)));
   }
 
   async findByEmail(email: string) {
-    return this.prisma.users.findUnique({
-      where: { email },
+    if (!email) return null;
+    const encryptedEmail = this.encryption.encryptDeterministic(email);
+
+    // 1. Try search with encrypted email
+    let user = await this.prisma.users.findUnique({
+      where: { email: encryptedEmail },
       include: { customers: true },
     });
+
+    // 2. Fallback: Try search with plaintext email (for legacy records)
+    if (!user) {
+      user = await this.prisma.users.findUnique({
+        where: { email },
+        include: { customers: true },
+      });
+    }
+
+    return this.decryptUser(user);
   }
 
   async findByPhone(phone: string) {
-    return this.prisma.users.findUnique({
-      where: { phone },
+    if (!phone) return null;
+    const encryptedPhone = this.encryption.encryptDeterministic(phone);
+
+    // 1. Try search with encrypted phone
+    let user = await this.prisma.users.findUnique({
+      where: { phone: encryptedPhone },
       include: { customers: true },
     });
+
+    // 2. Fallback: Try search with plaintext phone
+    if (!user) {
+      user = await this.prisma.users.findUnique({
+        where: { phone },
+        include: { customers: true },
+      });
+    }
+
+    return this.decryptUser(user);
   }
 
 
 
   async findOne(id: number) {
-    return this.prisma.users.findUnique({
+    const user = await this.prisma.users.findUnique({
       where: { user_id: id },
       include: { customers: true },
     });
+    return this.sanitizeUser(this.decryptUser(user));
   }
 
   async remove(id: number) {
@@ -79,12 +164,7 @@ export class UsersService {
     });
   }
 
-  // Placeholder methods for controller compatibility if needed
-  findAll() {
-    return this.prisma.users.findMany();
-  }
-
-  async getProfile(userId: number) {
+  async getProfile(userId: number, requestingUserId?: number, requestingRole?: string, ip?: string) {
     const user = await this.prisma.users.findUnique({
       where: { user_id: userId },
       include: {
@@ -102,9 +182,19 @@ export class UsersService {
       where: { user_id: userId, status_code: 'PENDING' }
     });
 
+    // Decrypt PII fields
+    const decryptedUser = this.decryptUser(user);
+    const decryptedAddresses = (user.addresses || []).map(a => this.decryptAddress(a));
+
+    // Log PII access if staff is viewing someone else's profile
+    if (requestingUserId && requestingUserId !== userId && requestingRole && requestingRole !== 'CUSTOMER') {
+      await this.logPiiAccess(requestingUserId, userId, ['phone', 'email', 'address'], ip);
+    }
+
     // Flatten Response
-    return {
-      ...user,
+    return this.sanitizeUser({
+      ...decryptedUser,
+      addresses: decryptedAddresses,
       // Employee Fields
       employee_code: user.employees?.employee_code || null,
       job_title_code: user.employees?.job_title_code || null,
@@ -114,35 +204,47 @@ export class UsersService {
       loyalty_points: user.customers?.loyalty_points || 0,
       current_rank_code: user.customers?.current_rank_code || 'UNRANKED',
       has_pending_request: !!pendingRequest,
-    };
+    });
   }
 
-  async updateProfile(userId: number, data: { full_name?: string; phone?: string }) {
-    // Check phone uniqueness if phone is provided
-    if (data.phone) {
-      const existingUser = await this.prisma.users.findUnique({
-        where: { phone: data.phone },
-      });
-
-      if (existingUser && existingUser.user_id !== userId) {
-        throw new BadRequestException('Phone number is already taken');
-      }
+  async updateProfile(userId: number, data: UpdateProfileDto) {
+    // 1. SECURITY: Prevent direct update of sensitive fields (Phone/Email) for everyone through this endpoint.
+    // These should go through createProfileUpdateRequest which requires OTP.
+    if (data.phone || data.email) {
+      throw new BadRequestException('Security: Phone and Email updates require OTP verification. Please use the "Request Update" feature.');
     }
 
-    return this.prisma.users.update({
+    // 2. DOB Locking Logic
+    const currentUser = await this.prisma.users.findUnique({
       where: { user_id: userId },
-      data: {
-        full_name: data.full_name,
-        phone: data.phone,
-      },
+      select: { dob: true }
     });
+
+    if (currentUser?.dob && data.dob && new Date(currentUser.dob).toISOString().split('T')[0] !== new Date(data.dob).toISOString().split('T')[0]) {
+      throw new BadRequestException('Date of Birth cannot be changed once set.');
+    }
+
+    const updateData: any = {};
+    if (data.full_name) updateData.full_name = data.full_name;
+    if (data.dob) updateData.dob = new Date(data.dob);
+
+    const updated = await this.prisma.users.update({
+      where: { user_id: userId },
+      data: updateData,
+    });
+    return this.sanitizeUser(this.decryptUser(updated));
   }
 
-  update(id: number, data: any) {
-    return this.prisma.users.update({
+  async update(id: number, data: any) {
+    // Encrypt PII fields if provided in update data
+    const safeData = { ...data };
+    if (safeData.email) safeData.email = this.encryption.encryptDeterministic(safeData.email);
+    if (safeData.phone) safeData.phone = this.encryption.encryptDeterministic(safeData.phone);
+    const updated = await this.prisma.users.update({
       where: { user_id: id },
-      data,
+      data: safeData,
     });
+    return this.sanitizeUser(this.decryptUser(updated));
   }
 
   async updateStatus(id: number, status: string, reason?: string) {
@@ -268,14 +370,14 @@ export class UsersService {
         const tempPassword = crypto.randomBytes(4).toString('hex');
         const passwordHash = await bcrypt.hash(tempPassword, 10);
 
-        // 4. Create Records
+        // 4. Create Records (Encrypt PII before storing)
         const newUser = await tx.users.create({
           data: {
             full_name: userDto.full_name,
-            email: email,
+            email: this.encryption.encryptDeterministic(email),
             password_hash: passwordHash,
             role_code: userDto.role_code,
-            phone: userDto.phone,
+            phone: userDto.phone ? this.encryption.encryptDeterministic(userDto.phone) : null,
             status_code: 'PENDING',
             is_verified: false,
           }
@@ -290,37 +392,88 @@ export class UsersService {
           }
         });
 
-        // 5. Send Activation Email
+        // 5. Send Activation Email (use plaintext email, NOT encrypted)
         const payload = {
           sub: newUser.user_id,
-          email: newUser.email,
+          email: email, // plaintext for JWT
           role_code: newUser.role_code
         };
         const token = this.jwtService.sign(payload, { expiresIn: '1d' });
-        if (newUser.email) {
-          await this.mailService.sendEmployeeActivation(newUser.email, tempPassword, token, newUser.full_name);
+        if (email) {
+          await this.mailService.sendEmployeeActivation(email, tempPassword, token, newUser.full_name);
         }
 
-        createdEmployees.push({ ...newUser, employee_details: newEmployee });
+        createdEmployees.push(this.sanitizeUser({ ...newUser, employee_details: newEmployee }));
       }
 
       return createdEmployees;
     });
   }
 
-  async createProfileUpdateRequest(userId: number, changes: any) {
-    // Check for existing pending request
+  async sendUpdateOtp(userId: number) {
+    const user = await this.prisma.users.findUnique({ where: { user_id: userId } });
+    if (!user || !user.email) {
+      throw new BadRequestException('Email not found for this user.');
+    }
+
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiry = new Date();
+    expiry.setMinutes(expiry.getMinutes() + 5);
+
+    await this.prisma.users.update({
+      where: { user_id: userId },
+      data: {
+        otp_code: otp,
+        otp_expires_at: expiry,
+      },
+    });
+
+    const decryptedEmail = this.encryption.decrypt(user.email);
+    await this.mailService.sendOtpEmail(decryptedEmail, otp);
+    return { success: true, message: 'OTP sent to your email.' };
+  }
+
+  async createProfileUpdateRequest(userId: number, changes: any, otp: string) {
+    const user = await this.prisma.users.findUnique({ where: { user_id: userId } });
+    if (!user) throw new NotFoundException('User not found');
+
+    // 1. Verify OTP only if sensitive fields (PII) are being changed
+    const isSensitiveUpdate = changes.phone || changes.email;
+    
+    if (isSensitiveUpdate) {
+      if (user.otp_code !== otp || !user.otp_expires_at || new Date() > user.otp_expires_at) {
+        throw new BadRequestException('Invalid or expired OTP for sensitive information update.');
+      }
+
+      // Clear OTP after use
+      await this.prisma.users.update({
+        where: { user_id: userId },
+        data: { otp_code: null, otp_expires_at: null }
+      });
+    }
+
+    // 2. Role-based Logic
+    if (user.role_code === 'CUSTOMER') {
+      // Auto-update for customers
+      const updateData: any = {};
+      if (changes.full_name) updateData.full_name = changes.full_name;
+      if (changes.phone) updateData.phone = this.encryption.encryptDeterministic(changes.phone);
+      if (changes.email) updateData.email = this.encryption.encryptDeterministic(changes.email);
+
+      await this.prisma.users.update({
+        where: { user_id: userId },
+        data: updateData,
+      });
+
+      return { success: true, message: 'Profile updated successfully.' };
+    }
+
+    // 3. For Staff: Create request for Admin approval
     const existing = await this.prisma.profile_update_requests.findFirst({
       where: { user_id: userId, status_code: 'PENDING' }
     });
 
     if (existing) {
-      // Option A: Update existing request
-      // return this.prisma.profile_update_requests.update({
-      //     where: { request_id: existing.request_id },
-      //     data: { changed_data: changes, updated_at: new Date() }
-      // });
-      // Option B: Throw error
       throw new BadRequestException('You verify have a pending profile update request.');
     }
 
@@ -334,7 +487,7 @@ export class UsersService {
   }
 
   async getPendingRequests() {
-    return this.prisma.profile_update_requests.findMany({
+    const requests = await this.prisma.profile_update_requests.findMany({
       where: { status_code: 'PENDING' },
       include: {
         users: {
@@ -351,6 +504,35 @@ export class UsersService {
         }
       },
       orderBy: { created_at: 'desc' }
+    });
+
+    return requests.map(req => {
+      // 1. Decrypt existing user info
+      const decryptedUser = this.decryptUser(req.users);
+      
+      // 2. Decrypt changed_data (candidate PII for update)
+      const changedData = req.changed_data as any;
+      if (changedData?.email) {
+        changedData.email = this.encryption.isEncrypted(changedData.email) 
+          ? this.encryption.decrypt(changedData.email) 
+          : changedData.email;
+      }
+      if (changedData?.phone) {
+        changedData.phone = this.encryption.isEncrypted(changedData.phone)
+          ? this.encryption.decrypt(changedData.phone)
+          : changedData.phone;
+      }
+      if (changedData?.address) {
+        changedData.address = this.encryption.isEncrypted(changedData.address)
+          ? this.encryption.decrypt(changedData.address)
+          : changedData.address;
+      }
+
+      return {
+        ...req,
+        users: this.sanitizeUser(decryptedUser),
+        changed_data: changedData
+      };
     });
   }
 
@@ -375,8 +557,10 @@ export class UsersService {
         const changedData = request.changed_data as Prisma.JsonObject;
         const updateData: any = {};
         if (changedData['full_name']) updateData.full_name = changedData['full_name'];
-        if (changedData['phone']) updateData.phone = changedData['phone'];
+        if (changedData['phone']) updateData.phone = this.encryption.encryptDeterministic(changedData['phone'] as string);
+        if (changedData['email']) updateData.email = this.encryption.encryptDeterministic(changedData['email'] as string);
         if (changedData['avatar_url']) updateData.avatar_url = changedData['avatar_url'];
+        if (changedData['dob']) updateData.dob = new Date(changedData['dob'] as string);
 
         if (Object.keys(updateData).length > 0) {
           await tx.users.update({
@@ -398,18 +582,16 @@ export class UsersService {
           if (defaultAddress) {
             await tx.addresses.update({
               where: { address_id: defaultAddress.address_id },
-              data: { detail_address: newAddress }
+              data: { detail_address: this.encryption.encrypt(newAddress) }
             });
           } else {
             // Create new address with fallback values for required fields
             await tx.addresses.create({
               data: {
                 user_id: request.user_id,
-                // Prefer new/updated info, fallback to existing profile info
                 recipient_name: updateData.full_name || request.users.full_name,
-                recipient_phone: updateData.phone || request.users.phone || 'N/A',
-                detail_address: newAddress,
-                // Dummy values to satisfy constraints
+                recipient_phone: this.encryption.encrypt(updateData.phone || request.users.phone || 'N/A'),
+                detail_address: this.encryption.encrypt(newAddress),
                 province_id: 0,
                 district_id: 0,
                 ward_code: 'UNMAPPED',
@@ -422,6 +604,61 @@ export class UsersService {
 
       return updatedRequest;
     });
+  }
+
+  async getPiiAccessLogs(query: GetAuditLogDto) {
+    const page = Number(query.page) || 1;
+    const limit = Number(query.limit) || 10;
+    const skip = (page - 1) * limit;
+
+    const where: any = {};
+    if (query.accessor_id) where.accessed_by = Number(query.accessor_id);
+    if (query.target_id) where.target_user_id = Number(query.target_id);
+
+    const [logs, total] = await Promise.all([
+      this.prisma.pii_access_logs.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { accessed_at: 'desc' },
+        include: {
+          accessor: {
+            select: {
+              user_id: true,
+              full_name: true,
+              email: true,
+              role_code: true
+            }
+          },
+          target: {
+            select: {
+              user_id: true,
+              full_name: true,
+              email: true,
+              phone: true
+            }
+          }
+        }
+      }),
+      this.prisma.pii_access_logs.count({ where })
+    ]);
+
+    // Decrypt fields in logs
+    const items = logs.map(log => ({
+      ...log,
+      accessor: this.sanitizeUser(this.decryptUser(log.accessor)),
+      target: this.sanitizeUser(this.decryptUser(log.target))
+    }));
+
+    return {
+      success: true,
+      items, // Add items to match common.types.ts
+      data: items, // Keep data for backward compatibility or existing logic
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit)
+    };
   }
 
   async importUsersFromZip(file: Express.Multer.File) {
@@ -529,7 +766,7 @@ export class UsersService {
               const uploadRes = await this.uploadService.uploadFile(mockFile, 'figicore_avatars');
               avatarUrl = uploadRes.url;
             } catch (err) {
-              console.error(`Failed to upload avatar for ${email}`, err);
+              console.error(`Failed to upload avatar for a user during import`, err.message);
               results.errors.push({ row: rowNum, message: `Warning: Avatar upload failed - ${err.message}` });
             }
           } else {
@@ -550,7 +787,7 @@ export class UsersService {
         results.success++;
 
       } catch (error) {
-        console.error(error);
+        console.error(`[Import] Error processing row ${rowNum}:`, error.message);
         results.failed++;
         results.errors.push({ row: rowNum, message: error.message });
       }
@@ -586,15 +823,15 @@ export class UsersService {
     const employeeCode = `${prefix}-${String(nextNum).padStart(3, '0')}`;
 
     return this.prisma.$transaction(async (tx) => {
-      // 2. Create User as PENDING
+      // 2. Create User as PENDING (Encrypt PII before storing)
       const newUser = await tx.users.create({
         data: {
           full_name: data.full_name,
-          email: data.email,
-          phone: data.phone,
+          email: this.encryption.encryptDeterministic(data.email),
+          phone: data.phone ? this.encryption.encryptDeterministic(data.phone) : null,
           password_hash: passwordHash,
           role_code: data.role_code,
-          status_code: 'PENDING', // Start as PENDING
+          status_code: 'PENDING',
           is_verified: false,
           avatar_url: data.avatar_url
         }
@@ -623,8 +860,9 @@ export class UsersService {
       // we might want to catch it to avoid rolling back the user creation? 
       // Ideally: Email failure shouldn't block creation, but for "Activation Flow", it's critical.
       // Let's allow it to fail the transaction so we don't have "orphan pending users".
-      if (newUser.email) {
-        await this.mailService.sendEmployeeActivation(newUser.email, tempPassword, token, newUser.full_name);
+      // 4. Send Activation Email (use plaintext email, NOT encrypted)
+      if (data.email) {
+        await this.mailService.sendEmployeeActivation(data.email, tempPassword, token, newUser.full_name);
       }
 
       return newUser;

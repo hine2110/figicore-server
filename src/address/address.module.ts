@@ -4,11 +4,12 @@ import { HttpModule } from '@nestjs/axios';
 import { AddressController } from './address.controller';
 import { GhnService } from './ghn.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { EncryptionService } from '../common/encryption.service';
 
 @Module({
     imports: [HttpModule],
     controllers: [AddressController],
-    providers: [GhnService, PrismaService],
+    providers: [GhnService, PrismaService, EncryptionService],
     exports: [GhnService], // Export GhnService for use in other modules
 })
 export class AddressModule { }

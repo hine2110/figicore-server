@@ -8,13 +8,43 @@ import { GetPosOrdersDto } from './dto/get-pos-orders.dto';
 import * as bcrypt from 'bcrypt';
 
 import { CustomersService } from '../customers/customers.service';
+import { EncryptionService } from '../common/encryption.service';
+import { maskEmail, maskPhone } from '../common/mask.util';
 
 @Injectable()
 export class PosOrdersService {
     constructor(
         private prisma: PrismaService,
-        private customersService: CustomersService
+        private customersService: CustomersService,
+        private encryption: EncryptionService,
     ) { }
+
+    private decryptPii(data: any, mask = false): any {
+        if (!data) return data;
+        if (Array.isArray(data)) return data.map(item => this.decryptPii(item, mask));
+
+        const { password_hash, otp_code, otp_expires_at, google_id, refresh_token, ...safeData } = data;
+        const result = { ...safeData };
+        // Decrypt direct fields (if User object)
+        if (result.phone) {
+            try {
+                const decrypted = this.encryption.decrypt(result.phone);
+                result.phone = mask ? maskPhone(decrypted) : decrypted;
+            } catch (e) { /* ignore */ }
+        }
+        if (result.email) {
+            try {
+                const decrypted = this.encryption.decrypt(result.email);
+                result.email = mask ? maskEmail(decrypted) : decrypted;
+            } catch (e) { /* ignore */ }
+        }
+        // Decrypt nested relations
+        if (result.users) result.users = this.decryptPii(result.users, mask);
+        if (result.employees?.users) result.employees.users = this.decryptPii(result.employees.users, mask);
+        if (result.orders) result.orders = this.decryptPii(result.orders, mask);
+
+        return result;
+    }
 
     /**
      * Tạo đơn hàng POS (Finalize)
@@ -51,6 +81,7 @@ export class PosOrdersService {
 
             const unitPrice = Number(variant.price);
             const totalPrice = unitPrice * item.quantity;
+            totalAmount += totalPrice; // FIX: Update totalAmount
             return {
                 variant_id: variant.variant_id,
                 quantity: item.quantity,
@@ -169,7 +200,7 @@ export class PosOrdersService {
             },
         });
 
-        return { success: true, message: 'Tạo đơn hàng thành công', data: finalOrder };
+        return { success: true, message: 'Tạo đơn hàng thành công', data: this.decryptPii(finalOrder) };
     }
 
     private generateOrderCode(): string {
@@ -234,7 +265,7 @@ export class PosOrdersService {
             throw new NotFoundException('Không tìm thấy đơn hàng');
         }
 
-        return { success: true, message: 'Lấy chi tiết đơn hàng thành công', data: order };
+        return { success: true, message: 'Lấy chi tiết đơn hàng thành công', data: this.decryptPii(order) };
     }
 
     async getOrdersByStaff(staffId: number, query: GetPosOrdersDto) {
@@ -294,7 +325,7 @@ export class PosOrdersService {
         return {
             success: true,
             count: orders.length,
-            data: orders,
+            data: orders.map(o => this.decryptPii(o, true)),
             total,
             page,
             limit,
@@ -308,12 +339,17 @@ export class PosOrdersService {
         const { phone, email, q } = query;
         const where: any = { deleted_at: null, role_code: 'CUSTOMER' };
 
-        if (phone) where.phone = { contains: phone };
-        else if (email) where.email = { contains: email, mode: 'insensitive' };
-        else if (q) {
+        if (phone) {
+            const encryptedPhone = this.encryption.encryptDeterministic(phone);
+            where.phone = encryptedPhone; // Exact match for encrypted phone
+        } else if (email) {
+            const encryptedEmail = this.encryption.encryptDeterministic(email);
+            where.email = encryptedEmail; // Exact match for encrypted email
+        } else if (q) {
+            const encryptedQ = this.encryption.encryptDeterministic(q);
             where.OR = [
-                { phone: { contains: q } },
-                { email: { contains: q, mode: 'insensitive' } },
+                { phone: encryptedQ }, // Exact match for encrypted phone
+                { email: encryptedQ }, // Exact match for encrypted email
                 { full_name: { contains: q, mode: 'insensitive' } },
             ];
         }
@@ -339,7 +375,7 @@ export class PosOrdersService {
             _count: undefined
         }));
 
-        return { success: true, count: formatted.length, data: formatted, total, page, limit };
+        return { success: true, count: formatted.length, data: formatted.map(f => this.decryptPii(f, true)), total, page, limit };
     }
 
     async getCustomerOrderHistory(customerId: number, staffId: number) {
@@ -402,8 +438,8 @@ export class PosOrdersService {
         return {
             success: true,
             data: {
-                customer: formattedCustomer,
-                orders,
+                customer: this.decryptPii(formattedCustomer),
+                orders: orders.map(o => this.decryptPii(o)),
                 statistics: {
                     total_spent: totalSpent,
                     total_orders: totalOrders,
@@ -416,8 +452,9 @@ export class PosOrdersService {
 
     async registerCustomer(dto: RegisterCustomerDto) {
         // 1. Check if user exists
+        const encryptedPhone = this.encryption.encryptDeterministic(dto.phone);
         let user = await this.prisma.users.findFirst({
-            where: { phone: dto.phone, deleted_at: null },
+            where: { phone: encryptedPhone, deleted_at: null },
             include: { customers: true }
         });
 
@@ -430,16 +467,16 @@ export class PosOrdersService {
                     include: { customers: true }
                 });
             }
-            return { success: true, message: 'Khách hàng đã tồn tại.', data: user };
+            return { success: true, message: 'Khách hàng đã tồn tại.', data: this.decryptPii(user) };
         }
 
         // 2. Create new GUEST_POS user
         const newUser = await this.prisma.users.create({
             data: {
-                email: dto.email || null,
+                email: dto.email ? this.encryption.encryptDeterministic(dto.email) : null,
                 password_hash: null,
                 full_name: dto.full_name || 'Khách POS',
-                phone: dto.phone,
+                phone: encryptedPhone,
                 role_code: 'CUSTOMER',
                 status_code: 'GUEST_POS',
                 is_verified: false
@@ -453,7 +490,7 @@ export class PosOrdersService {
         return {
             success: true,
             message: 'Đăng ký khách hàng mới thành công.',
-            data: { ...newUser, customers: profile }
+            data: { ...this.decryptPii(newUser), customers: profile }
         };
     }
 
@@ -464,10 +501,11 @@ export class PosOrdersService {
         });
         if (!activeSession) return null;
 
-        return this.prisma.orders.findFirst({
+        const order = await this.prisma.orders.findFirst({
             where: { session_id: activeSession.session_id, created_by_staff_id: staffId, status_code: 'PENDING', channel_code: 'POS', deleted_at: null },
             include: { order_items: { include: { product_variants: { include: { products: true } } } }, users: true }
         });
+        return this.decryptPii(order);
     }
 
     async syncActiveOrder(staffId: number, dto: SyncPosOrderDto) {
@@ -603,7 +641,7 @@ export class PosOrdersService {
             if (!variant) throw new BadRequestException('Sản phẩm không tồn tại');
             const unitPrice = Number(variant.price);
             const totalPrice = unitPrice * item.quantity;
-            totalAmount += totalPrice;
+            totalAmount += totalPrice; // FIX: Update totalAmount
             return { variant_id: variant.variant_id, quantity: item.quantity, unit_price: unitPrice, total_price: totalPrice };
         });
 
@@ -714,7 +752,7 @@ export class PosOrdersService {
         return {
             success: true,
             message: 'Đơn hàng QR đã được tạo, đang chờ thanh toán.',
-            data: { ...finalOrder, payment_ref_code: paymentRefCode },
+            data: { ...this.decryptPii(finalOrder), payment_ref_code: paymentRefCode },
         };
     }
 
