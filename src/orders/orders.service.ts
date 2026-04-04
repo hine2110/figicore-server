@@ -11,6 +11,7 @@ import { WalletService } from '../wallet/wallet.service';
 import { BlindboxesService } from '../blindboxes/blindboxes.service';
 import { AuctionsService } from '../auctions/auctions.service';
 import { LivestreamLiveGateway } from '../livestreams/livestream-live.gateway';
+import { EncryptionService } from '../common/encryption.service';
 
 @Injectable()
 export class OrdersService {
@@ -24,8 +25,35 @@ export class OrdersService {
     private walletService: WalletService,
     private blindboxesService: BlindboxesService,
     @Inject(forwardRef(() => AuctionsService)) private auctionsService: AuctionsService,
-    private livestreamLiveGateway: LivestreamLiveGateway
+    private livestreamLiveGateway: LivestreamLiveGateway,
+    private encryption: EncryptionService,
   ) { }
+
+  private decryptUser(user: any) {
+    if (!user) return null;
+    const decrypted = { ...user };
+    if (decrypted.phone) decrypted.phone = this.encryption.decrypt(decrypted.phone);
+    if (decrypted.email) decrypted.email = this.encryption.decrypt(decrypted.email);
+    return decrypted;
+  }
+
+  private decryptAddress(addresses: any): any {
+    if (!addresses) return addresses;
+    if (Array.isArray(addresses)) {
+      return addresses.map(a => this.decryptAddress(a));
+    }
+    const dec = { ...addresses };
+    if (dec.detail_address) {
+      try {
+        dec.detail_address = this.encryption.decrypt(dec.detail_address);
+      } catch (e) {
+        // Fallback for plaintext
+      }
+    }
+    // Note: recipient_phone is usually stored in users table or addresses table? 
+    // In our schema, it's detail_address that is encrypted.
+    return dec;
+  }
 
   // NEW: Anti-scalping Helper
   private async validateAntiScalping(tx: any, userId: number, variantId: number, quantity: number, limit: number) {
@@ -63,10 +91,11 @@ export class OrdersService {
     preOrderDeadline.setMinutes(preOrderDeadline.getMinutes() + 15);
 
     try {
-      const address = await this.prisma.addresses.findUnique({
+      const rawAddress = await this.prisma.addresses.findUnique({
         where: { address_id: shipping_address_id }
       });
-      if (!address) throw new BadRequestException("Address not found");
+      if (!rawAddress) throw new BadRequestException("Address not found");
+      const address = this.decryptAddress(rawAddress);
 
       // 1. Backend Authoritative Pricing & Flash Sale Evaluation
       let cartTotalAmountDiscounted = 0;
@@ -631,8 +660,9 @@ export class OrdersService {
 
       for (const order of updatedOrders) {
         if (order.users && order.users.email) {
-          // Send Email
-          this.mailService.sendOrderConfirmation(order.users, order).catch(e => console.error("Mail Error", e));
+          // Send Email (Decrypt user first)
+          const decryptedUser = this.decryptUser(order.users);
+          this.mailService.sendOrderConfirmation(decryptedUser, order).catch(e => console.error("Mail Error", e));
         }
         // Emit Socket
         this.eventsGateway.notifyNewOrder(order);
@@ -728,7 +758,8 @@ export class OrdersService {
 
       for (const order of updatedOrders) {
         if (order.users && order.users.email) {
-          this.mailService.sendOrderConfirmation(order.users, order).catch(e => console.error("Mail Error", e));
+          const decryptedUser = this.decryptUser(order.users);
+          this.mailService.sendOrderConfirmation(decryptedUser, order).catch(e => console.error("Mail Error", e));
         }
         this.eventsGateway.notifyNewOrder(order);
       }
@@ -776,7 +807,8 @@ export class OrdersService {
     }
 
     // Now TypeScript knows 'fullOrder' and 'fullOrder.users' are NOT null
-    this.mailService.sendOrderConfirmation(fullOrder.users, fullOrder);
+    const decryptedUser = this.decryptUser(fullOrder.users);
+    this.mailService.sendOrderConfirmation(decryptedUser, fullOrder);
     // FIX: Trigger Realtime Notification for Warehouse HERE (Processing/Paid only)
     this.eventsGateway.notifyNewOrder(fullOrder);
 
@@ -946,7 +978,7 @@ export class OrdersService {
 
   async findAll(params?: { status?: string }) {
     const { status } = params || {};
-    return this.prisma.orders.findMany({
+    const orders = await this.prisma.orders.findMany({
       where: status ? { status_code: status } : {},
       orderBy: { created_at: 'asc' }, // FIFO: Oldest First
       include: {
@@ -963,10 +995,15 @@ export class OrdersService {
         addresses: true,
       }
     });
+
+    return orders.map(o => ({
+      ...o,
+      addresses: this.decryptAddress(o.addresses)
+    }));
   }
 
   async findAllByUser(userId: number) {
-    return this.prisma.orders.findMany({
+    const orders = await this.prisma.orders.findMany({
       where: { user_id: userId },
       orderBy: { created_at: 'desc' },
       include: {
@@ -990,6 +1027,11 @@ export class OrdersService {
         }
       }
     });
+
+    return orders.map(o => ({
+      ...o,
+      addresses: this.decryptAddress(o.addresses)
+    }));
   }
 
   // FIX: Allow Staff to see censored video if needed.
@@ -1025,6 +1067,15 @@ export class OrdersService {
     // FIX: Only censor if the order is NOT completed (User hasn't received it yet)
     // AND User is NOT Staff/Admin
     const isStaff = user?.role === 'ADMIN' || user?.role?.startsWith('STAFF');
+
+    // Audit Logging if staff accesses someone else's order
+    if (isStaff && order.user_id !== user?.userId) {
+      const requestingUserId = Number(user.userId || user.id || user.sub || user.user_id);
+      await this.logPiiAccess(requestingUserId, order.user_id, ['order_address'], user.ip);
+    }
+
+    // Decrypt Address
+    order.addresses = this.decryptAddress(order.addresses) as any;
 
     if (hasUnopened && order.status_code !== 'COMPLETED' && !isStaff) {
       // CENSOR THE VIDEO
@@ -1523,5 +1574,21 @@ export class OrdersService {
     }
 
     return { success: true, message: `Order ${trackingCode} completed and points added.` };
+  }
+  /** Log a PII access event when staff views sensitive order data */
+  private async logPiiAccess(accessedBy: number, targetUserId: number | null, fieldsViewed: string[], ip?: string) {
+    if (!targetUserId) return;
+    try {
+      await this.prisma.pii_access_logs.create({
+        data: {
+          accessed_by: accessedBy,
+          target_user_id: targetUserId,
+          fields_viewed: fieldsViewed.join(','),
+          ip_address: ip || null,
+        }
+      });
+    } catch (e) {
+      console.error('[PII Audit] Failed to write audit log:', e.message);
+    }
   }
 }

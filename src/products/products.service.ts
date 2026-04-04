@@ -40,7 +40,7 @@ export class ProductsService {
 
     try {
       this.logger.log('--- VISUAL SEARCH START (Llama 4 Scout) ---');
-      
+
       const imageData = base64Image.replace(/^data:image\/\w+;base64,/, '');
       const mimeTypeMatch = base64Image.match(/^data:(image\/\w+);base64,/);
       const mimeType = mimeTypeMatch ? mimeTypeMatch[1] : 'image/jpeg';
@@ -69,8 +69,8 @@ export class ProductsService {
         attempts++;
         this.logger.log(`Visual Search Attempt ${attempts}...`);
 
-        const dynamicPrompt = attempts === 1 
-          ? prompt 
+        const dynamicPrompt = attempts === 1
+          ? prompt
           : `${prompt}\n\nGHI CHÚ: Lần tìm kiếm trước không có kết quả. Hãy nhìn THẬT KỸ các chữ nhỏ nhất trên hộp, các mã số (như CC, SP, No.), hoặc các ký tự đặc biệt có thể định danh SKU sản phẩm.`;
 
         // -- STEP 1: AI Analysis (Llama 4 -> Gemini Fallback) --
@@ -115,7 +115,7 @@ export class ProductsService {
 
           // Layer 1: Strict (AND + Color)
           results = await this.findAll({ search: searchTerms, color: aiHint.color });
-          
+
           if (results.length > 0) {
             isExactMatch = true;
           } else {
@@ -140,20 +140,20 @@ export class ProductsService {
           // -- STEP 3: Relevance Sorting & Filtering (Custom Ranking) --
           if (results.length > 1) {
             const keywords = finalSearchTerm.toLowerCase().split(/\s+/).filter(k => k.length > 1);
-            
+
             // Map results to their scores for filtering
             const scoredResults = results.map(p => {
               const name = p.name.toLowerCase();
               const brandName = p.brands?.name?.toLowerCase() || '';
               const seriesName = p.series?.name?.toLowerCase() || '';
-              
-              const keywordScore = keywords.reduce((acc, kw) => 
+
+              const keywordScore = keywords.reduce((acc, kw) =>
                 acc + (name.includes(kw) || brandName.includes(kw) || seriesName.includes(kw) ? 1 : 0), 0);
-              
+
               // Extra weight for SKU matches
-              const skuScore = p.product_variants?.some((v: any) => 
+              const skuScore = p.product_variants?.some((v: any) =>
                 keywords.some(kw => v.sku.toLowerCase().includes(kw))) ? 2 : 0;
-              
+
               return { product: p, score: keywordScore + skuScore };
             });
 
@@ -161,7 +161,7 @@ export class ProductsService {
             scoredResults.sort((a, b) => b.score - a.score);
 
             const maxScore = scoredResults[0].score;
-            
+
             // Filtering: Keep only results with high relevance relative to the top match
             // If top matches are weak (score < 2), be very strict.
             // If top matches are strong, allow some variation but filter out low scores.
@@ -242,7 +242,7 @@ export class ProductsService {
           const isPreorder = productData.type_code === 'PREORDER';
 
           if (!isPreorder && variantDto.cost_price >= variantDto.price && variantDto.price > 0) {
-              throw new BadRequestException('Cost price must be less than retail price');
+            throw new BadRequestException('Cost price must be less than retail price');
           }
 
           const variantData: any = {
@@ -769,8 +769,8 @@ export class ProductsService {
         const agg = await this.prisma.product_variants.aggregate({
           _sum: { stock_available: true, stock_defect: true },
           where: {
-            products: { 
-              type_code: 'RETAIL', 
+            products: {
+              type_code: 'RETAIL',
               status_code: 'ACTIVE',
               product_id: { not: product.product_id } // EXCLUDE the blindbox itself
             },
@@ -791,8 +791,8 @@ export class ProductsService {
       const aggregation = await this.prisma.product_variants.aggregate({
         _sum: { stock_available: true, stock_defect: true },
         where: {
-          products: { 
-            type_code: 'RETAIL', 
+          products: {
+            type_code: 'RETAIL',
             status_code: 'ACTIVE',
             product_id: { not: product.product_id }
           },
@@ -815,12 +815,12 @@ export class ProductsService {
   // Shared helper to safely check Promo active state and timestamps
   private isActivePromo(promo: any, now: Date = new Date()): boolean {
     if (!promo || !promo.is_active) return false;
-    
+
     const startDateBase = promo.start_date ? new Date(promo.start_date) : now;
-    const endDateBase   = promo.end_date   ? new Date(promo.end_date)   : now;
+    const endDateBase = promo.end_date ? new Date(promo.end_date) : now;
 
     const [startHH, startMM] = promo.start_time.split(':').map(Number);
-    const [endHH,   endMM  ] = promo.end_time.split(':').map(Number);
+    const [endHH, endMM] = promo.end_time.split(':').map(Number);
 
     const promoStart = new Date(startDateBase);
     promoStart.setHours(startHH, startMM, 0, 0);
@@ -853,23 +853,23 @@ export class ProductsService {
 
         if (isValidPromo) {
           if (promo.is_flash_sale) {
-             const fsItem = promo.promotion_items?.find((i: any) => i.variant_id === variant.variant_id);
-             if (fsItem) {
-                 final_price = Number(fsItem.flash_sale_price);
-                 is_on_sale = true;
-                 discount_percentage = Math.round(( (Number(variant.price) - final_price) / Number(variant.price) ) * 100);
-             }
+            const fsItem = promo.promotion_items?.find((i: any) => i.variant_id === variant.variant_id);
+            if (fsItem) {
+              final_price = Number(fsItem.flash_sale_price);
+              is_on_sale = true;
+              discount_percentage = Math.round(((Number(variant.price) - final_price) / Number(variant.price)) * 100);
+            }
           } else {
-             is_on_sale = true;
-             if (promo.type_code === 'PERCENTAGE') {
-               discount_percentage = Number(promo.value);
-               discount_amount = final_price * (discount_percentage / 100);
-               final_price = final_price - discount_amount;
-             } else if (promo.type_code === 'FIXED_AMOUNT') {
-               discount_amount = Number(promo.value);
-               final_price = Math.max(0, final_price - discount_amount);
-               discount_percentage = Math.round((discount_amount / Number(variant.price)) * 100);
-             }
+            is_on_sale = true;
+            if (promo.type_code === 'PERCENTAGE') {
+              discount_percentage = Number(promo.value);
+              discount_amount = final_price * (discount_percentage / 100);
+              final_price = final_price - discount_amount;
+            } else if (promo.type_code === 'FIXED_AMOUNT') {
+              discount_amount = Number(promo.value);
+              final_price = Math.max(0, final_price - discount_amount);
+              discount_percentage = Math.round((discount_amount / Number(variant.price)) * 100);
+            }
           }
         }
 
@@ -923,7 +923,7 @@ export class ProductsService {
       if ((type === 'RETAIL' || type === 'AUCTION') && variants && variants.length > 0) {
         for (const v of variants) {
           if (v.cost_price !== undefined && v.cost_price >= v.price && v.price > 0) {
-              throw new BadRequestException('Cost price must be less than retail price');
+            throw new BadRequestException('Cost price must be less than retail price');
           }
 
           const existingVariant = await tx.product_variants.findUnique({

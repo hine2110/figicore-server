@@ -43,10 +43,16 @@ export class UsersController {
     return this.usersService.updateAvatar(req.user.user_id, file);
   }
 
+  @Post('profile/request-update-otp')
+  @UseGuards(AuthGuard('jwt'))
+  requestUpdateOtp(@Req() req) {
+    return this.usersService.sendUpdateOtp(req.user.user_id);
+  }
+
   @Post('profile/request-update')
   @UseGuards(AuthGuard('jwt'))
-  requestUpdate(@Req() req, @Body() data: any) {
-    return this.usersService.createProfileUpdateRequest(req.user.user_id, data);
+  requestUpdate(@Req() req, @Body() body: { changes: any; otp: string }) {
+    return this.usersService.createProfileUpdateRequest(req.user.user_id, body.changes, body.otp);
   }
 
   @Post('bulk')

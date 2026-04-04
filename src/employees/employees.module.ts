@@ -6,6 +6,8 @@ import { MailModule } from '../mail/mail.module';
 import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 
+import { EncryptionService } from '../common/encryption.service';
+
 @Module({
   imports: [
     PrismaModule,
@@ -20,6 +22,6 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
       }),
 ],
   controllers: [EmployeesController],
-  providers: [EmployeesService],
+  providers: [EmployeesService, EncryptionService],
 })
 export class EmployeesModule {}

@@ -785,6 +785,8 @@ model users {
   wallets                 wallets?
   auction_chat_messages   auction_chat_messages[]
   livestream_interactions livestream_interactions[]
+  pii_accessed_by_me      pii_access_logs[]         @relation("PiiAccessor")
+  pii_accessed_about_me   pii_access_logs[]         @relation("PiiTarget")
 }
 
 model wallet_transactions {
@@ -1055,3 +1057,24 @@ model livestream_broadcast_messages {
   
   livestream    livestreams @relation(fields: [livestream_id], references: [id], onDelete: Cascade)
 }
+
+// ----------------------------------------------------------------------------
+// PII SECURITY — Audit Access Log
+// ----------------------------------------------------------------------------
+
+model pii_access_logs {
+  log_id          Int      @id @default(autoincrement())
+  accessed_by     Int      // employee/admin user_id who viewed the data
+  target_user_id  Int      // customer user_id whose data was viewed
+  fields_viewed   String   @db.VarChar(255) // e.g. "phone,email,address"
+  ip_address      String?  @db.VarChar(45)
+  accessed_at     DateTime @default(now()) @db.Timestamp(6)
+
+  accessor        users    @relation("PiiAccessor", fields: [accessed_by], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  target          users    @relation("PiiTarget", fields: [target_user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([accessed_by], map: "idx_pii_log_accessor")
+  @@index([target_user_id], map: "idx_pii_log_target")
+  @@index([accessed_at], map: "idx_pii_log_time")
+}
+

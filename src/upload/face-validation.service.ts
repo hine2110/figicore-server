@@ -57,7 +57,7 @@ export class FaceValidationService implements OnModuleInit {
       if (error instanceof BadRequestException) {
         throw error;
       }
-      console.error('[FaceValidationService] ❌ Processing Error:', error);
+      console.error('[FaceValidationService] ❌ Processing Error:', error.message);
       throw new BadRequestException('An error occurred during facial analysis using AI.');
     }
   }
