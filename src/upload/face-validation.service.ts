@@ -159,7 +159,7 @@ export class FaceValidationService implements OnModuleInit {
       if (error instanceof BadRequestException) {
         throw error; // Quăng nguyên mã 400 và message về cho Client
       }
-      console.error('[FaceValidationService] ❌ Processing Error:', error);
+      console.error('[FaceValidationService] ❌ Processing Error:', error.message);
       throw new BadRequestException('An error occurred during facial analysis using AI.');
     }
   }

@@ -132,6 +132,8 @@ export class AuthService {
       throw new UnauthorizedException('Invalid email');
     }
 
+
+
     if (user.password_hash) {
       const isMatch = await bcrypt.compare(loginDto.password, user.password_hash);
       if (!isMatch) {
@@ -180,7 +182,7 @@ export class AuthService {
 
     if (user) {
       // Link Google ID to existing account
-      console.log(`Linking Google ID for user ${user.email}`);
+      console.log(`Linking Google ID for user ID: ${user.user_id}`);
       return this.usersService.update(user.user_id, {
         google_id: details.googleId,
         avatar_url: details.picture || user.avatar_url, // Update avatar if available
@@ -230,14 +232,10 @@ export class AuthService {
   }
 
   async getUserById(userId: number) {
-    const user = await this.prisma.users.findUnique({
-      where: { user_id: userId },
-      include: { customers: true }
-    });
+    const user = await this.usersService.findOne(userId);
     if (!user) {
       throw new NotFoundException('User not found');
     }
-    // Return user without sensitive data if needed, or full user object
     return user;
   }
 

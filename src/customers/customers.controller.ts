@@ -23,15 +23,21 @@ export class CustomersController {
   findAll(
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
+    @Request() req: any,
     @Query('search') search?: string,
   ) {
-    return this.customersService.findAll(page, limit, search);
+    const requestingRole = req.user.role_code || req.user.role;
+    return this.customersService.findAll(page, limit, search, requestingRole);
   }
 
   @Get(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('SUPER_ADMIN', 'MANAGER', 'STAFF_POS')
-  findOne(@Param('id', ParseIntPipe) id: number) {
-    return this.customersService.findOne(id);
+  findOne(@Param('id', ParseIntPipe) id: number, @Request() req: any) {
+    const requestingUserId = Number(req.user.userId || req.user.id || req.user.sub || req.user.user_id);
+    const requestingRole = req.user.role_code || req.user.role;
+    const ip = req.ip || req.connection.remoteAddress;
+
+    return this.customersService.findOne(id, requestingUserId, requestingRole, ip);
   }
 }
