@@ -146,14 +146,35 @@ export class LivestreamLiveGateway implements OnGatewayConnection, OnGatewayDisc
     livestreamId: number; 
     variantId: number; 
     price: number; 
-    stock: number 
+    stock: number;
+    durationSeconds?: number;
   }) {
+    const duration = payload.durationSeconds || 300; // Default 5 mins
+    const endTime = new Date(Date.now() + duration * 1000).toISOString();
+
     await this.livestreamsService.triggerFlashSale(payload.livestreamId, payload.variantId, payload.price, payload.stock);
+    
     this.server.to(payload.roomId).emit('flash_sale_started', {
       variant_id: payload.variantId,
       price: payload.price,
       stock: payload.stock,
+      end_time: endTime,
     });
+
+    // Auto-revert flash sale when time is up
+    setTimeout(async () => {
+      try {
+        await this.livestreamsService.triggerFlashSale(payload.livestreamId, payload.variantId, 0, 0);
+        this.server.to(payload.roomId).emit('flash_sale_ended', {
+          variant_id: payload.variantId
+        });
+        // Signal clients to refresh prices
+        this.broadcastProductUpdate(payload.roomId, payload.variantId);
+        console.log(`[Socket] Auto-reverted flash sale for variant ${payload.variantId} in room ${payload.roomId} after ${duration}s`);
+      } catch (err) {
+        console.error(`Failed to auto-revert flash sale:`, err);
+      }
+    }, duration * 1000);
   }
 
   @SubscribeMessage('pin_product')
@@ -210,7 +231,6 @@ export class LivestreamLiveGateway implements OnGatewayConnection, OnGatewayDisc
     });
   }
 
-  @SubscribeMessage('new_order')
   broadcastOrder(roomId: string, order: {
     customer_name: string;
     product_name: string;
@@ -219,5 +239,11 @@ export class LivestreamLiveGateway implements OnGatewayConnection, OnGatewayDisc
     time: string;
   }) {
     this.server.to(roomId).emit('new_order', order);
+  }
+
+  // --- NEW: Signal a price/stock update to all viewers ---
+  broadcastProductUpdate(roomId: string, variantId: number) {
+    this.server.to(roomId).emit('product_update', { variant_id: variantId });
+    console.log(`[Socket] Room ${roomId}: Product ${variantId} update signal sent.`);
   }
 }

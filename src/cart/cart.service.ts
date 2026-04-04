@@ -229,14 +229,28 @@ export class CartService {
           throw new BadRequestException(`Cannot add ${quantity} more. Max available: ${variant.stock_available}, In Cart: ${existingItem.quantity}`);
         }
 
-        // Flash Sale Quota Check for new total
+// Standard Flash Sale Quota Check (Promotions Module)
         const promo = variant.product_promotions;
         if (this.isActivePromo(promo) && promo?.is_flash_sale) {
           const fsItem = promo.promotion_items?.find((i: any) => i.variant_id === variantId);
           if (fsItem) {
             const limit = fsItem.quota - fsItem.sold;
             if (newQuantity > limit) {
-              throw new BadRequestException(`Sản phẩm Flash Sale chỉ được mua tối đa ${limit} suất (Kể cả giỏ hàng cũ). Bạn không thể thêm nữa.`);
+              throw new BadRequestException(`Sản phẩm Flash Sale này chỉ được mua tối đa ${limit} suất (Kể cả giỏ hàng cũ). Bạn không thể thêm nữa.`);
+            }
+          }
+        }
+
+        // LIVESTREAM FLASH SALE Check (Livestream Module)
+        const activeLivestreamId = dto.livestreamId || existingItem.livestream_id;
+        if (activeLivestreamId) {
+          const liveConfig = await this.prisma.livestream_products.findUnique({
+            where: { livestream_id_variant_id: { livestream_id: Number(activeLivestreamId), variant_id: variantId } }
+          });
+          if (liveConfig && liveConfig.flash_sale_price && Number(liveConfig.flash_sale_price) > 0) {
+            const fsStockAvailable = liveConfig.flash_sale_stock || 0;
+            if (newQuantity > fsStockAvailable) {
+              throw new BadRequestException(`Suất Flash Sale hiện tại chỉ còn ${fsStockAvailable} suất. Bạn không thể tăng số lượng thêm nữa.`);
             }
           }
         }
@@ -251,6 +265,18 @@ export class CartService {
         }
       });
     } else {
+      // NEW: Fresh Add - Check Current Flash Sale stock before creating
+      if (dto.livestreamId) {
+        const liveConfig = await this.prisma.livestream_products.findUnique({
+          where: { livestream_id_variant_id: { livestream_id: Number(dto.livestreamId), variant_id: variantId } }
+        });
+        if (liveConfig && liveConfig.flash_sale_price && Number(liveConfig.flash_sale_price) > 0) {
+          if (quantity > (liveConfig.flash_sale_stock || 0)) {
+            throw new BadRequestException(`Suất Flash Sale hiện tại chỉ còn ${liveConfig.flash_sale_stock || 0} sản phẩm. Vui lòng giảm số lượng.`);
+          }
+        }
+      }
+
       await this.prisma.cart_items.create({
         data: {
           cart_id: cart.cart_id,
@@ -273,6 +299,7 @@ export class CartService {
           where: { deleted_at: null },
           orderBy: { created_at: 'desc' },
           include: {
+            livestreams: { select: { status: true } },
             product_variants: {
               include: {
                 product_preorder_configs: true, // Included for correct price calculation
@@ -342,7 +369,8 @@ export class CartService {
             }
           });
 
-          const isLive = liveProduct?.livestream?.status === 'LIVE';
+          // Also we can just rely on item.livestreams.status if we included it!
+          const isLive = (item as any).livestreams?.status === 'LIVE';
 
           if (isLive && liveProduct && liveProduct.flash_sale_price && (liveProduct.flash_sale_stock || 0) > 0) {
             effectivePrice = Number(liveProduct.flash_sale_price);
@@ -387,7 +415,8 @@ export class CartService {
         sku: variant.sku,
         maxStock: variant.stock_available,
         promotion: variant.product_promotions,
-        livestream_id: item.livestream_id
+        livestream_id: item.livestream_id,
+        is_live: (item as any).livestreams?.status === 'LIVE'
       };
     }));
 
@@ -469,16 +498,17 @@ export class CartService {
       }
     } else if (item.product_variants.stock_available < quantity) {
       throw new BadRequestException(`Insufficient stock. Max: ${item.product_variants.stock_available}`);
-    } else {
-      // Flash Sale Quota Check
-      const promo: any = item.product_variants.product_promotions;
-      if (this.isActivePromo(promo) && promo.is_flash_sale) {
-        const fsItem = promo.promotion_items?.find((i: any) => i.variant_id === item.product_variants.variant_id);
-        if (fsItem) {
-          const limit = fsItem.quota - fsItem.sold;
-          if (quantity > limit) {
-            throw new BadRequestException(`Sản phẩm Flash Sale này chỉ còn ${limit} suất. Không thể cật nhật thành ${quantity}.`);
-          }
+    }
+
+    // LIVESTREAM FLASH SALE Check (Livestream Module)
+    if (item.livestream_id) {
+      const liveConfig = await this.prisma.livestream_products.findUnique({
+        where: { livestream_id_variant_id: { livestream_id: Number(item.livestream_id), variant_id: item.variant_id } }
+      });
+      if (liveConfig && liveConfig.flash_sale_price && Number(liveConfig.flash_sale_price) > 0) {
+        const fsStock = liveConfig.flash_sale_stock || 0;
+        if (quantity > fsStock) {
+          throw new BadRequestException(`Suất Flash Sale hiện tại chỉ còn ${fsStock} sản phẩm. Bạn không thể tăng thêm lên ${quantity} suất.`);
         }
       }
     }
