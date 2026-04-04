@@ -32,6 +32,10 @@ export class CreatePromotionDto {
   is_public?: boolean;
 
   @IsOptional()
+  @IsBoolean()
+  is_active?: boolean;
+
+  @IsOptional()
   @IsDateString()
   start_date?: string;
 
