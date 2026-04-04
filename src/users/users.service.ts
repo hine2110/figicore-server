@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { Prisma } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { CreateEmployeeDto } from '../employees/dto/create-employee.dto';
+import { UpdateProfileDto } from './dto/update-profile.dto';
 import AdmZip from 'adm-zip';
 import * as XLSX from 'xlsx';
 
@@ -117,8 +118,18 @@ export class UsersService {
     };
   }
 
-  async updateProfile(userId: number, data: { full_name?: string; phone?: string }) {
-    // Check phone uniqueness if phone is provided
+  async updateProfile(userId: number, data: UpdateProfileDto) {
+    // 1. Check if DOB is already set (Locking for security)
+    const currentUser = await this.prisma.users.findUnique({
+      where: { user_id: userId },
+      select: { dob: true }
+    });
+
+    if (currentUser?.dob && data.dob && new Date(currentUser.dob).toISOString().split('T')[0] !== new Date(data.dob).toISOString().split('T')[0]) {
+      throw new BadRequestException('Date of Birth cannot be changed once set.');
+    }
+
+    // 2. Check phone uniqueness if phone is provided
     if (data.phone) {
       const existingUser = await this.prisma.users.findUnique({
         where: { phone: data.phone },
@@ -134,6 +145,7 @@ export class UsersService {
       data: {
         full_name: data.full_name,
         phone: data.phone,
+        dob: data.dob ? new Date(data.dob) : undefined,
       },
     });
   }
@@ -377,6 +389,7 @@ export class UsersService {
         if (changedData['full_name']) updateData.full_name = changedData['full_name'];
         if (changedData['phone']) updateData.phone = changedData['phone'];
         if (changedData['avatar_url']) updateData.avatar_url = changedData['avatar_url'];
+        if (changedData['dob']) updateData.dob = new Date(changedData['dob'] as string);
 
         if (Object.keys(updateData).length > 0) {
           await tx.users.update({

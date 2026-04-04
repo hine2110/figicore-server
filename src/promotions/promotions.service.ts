@@ -1,6 +1,7 @@
-import { Injectable, BadRequestException, NotFoundException, Logger } from '@nestjs/common';
+import { Injectable, BadRequestException, ForbiddenException, NotFoundException, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
+import { MailService } from '../mail/mail.service';
 import { CreatePromotionDto } from './dto/create-promotion.dto';
 import { UpdatePromotionDto } from './dto/update-promotion.dto';
 
@@ -8,37 +9,83 @@ import { UpdatePromotionDto } from './dto/update-promotion.dto';
 export class PromotionsService {
   private readonly logger = new Logger(PromotionsService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly mailService: MailService,
+  ) {}
+
+  // ─── Manager APIs ──────────────────────────────────────────────────────────
 
   async create(createPromotionDto: CreatePromotionDto) {
     if (createPromotionDto.discount_type === 'FIXED_AMOUNT') {
       const discountVal = Number(createPromotionDto.discount_value || 0);
       const minVal = Number(createPromotionDto.min_order_value || 0);
-      if (discountVal > minVal && minVal > 0) {
-        throw new BadRequestException('Fixed discount amount cannot be greater than the minimum order value required.');
-      }
-      if (discountVal > minVal && minVal === 0) {
-        // Warning: giving away money without minimum. Still risky, but depends on logic.
-        // Let's enforce that if min_order_value is 0, they can't have a discount > 0 (store gives away money for free items)
+      if (discountVal > minVal) {
         throw new BadRequestException('Fixed discount amount cannot be greater than the minimum order value required.');
       }
     }
 
-    return this.prisma.promotions.create({
+    const promotion = await this.prisma.promotions.create({
       data: createPromotionDto,
     });
+
+    // ── Fire-and-forget: Send targeted emails without blocking the HTTP response ──
+    this._dispatchTargetedPromotionEmails(promotion).catch(err =>
+      this.logger.error(`[PromotionsService] Background email dispatch failed for promotion #${promotion.promotion_id}`, err)
+    );
+
+    return promotion;
+  }
+
+  /**
+   * Async background job: Queries eligible customers and sends bulk emails.
+   * This is intentionally NOT awaited by the create() caller.
+   */
+  private async _dispatchTargetedPromotionEmails(promotion: any) {
+    this.logger.log(`[EmailDispatch] Starting for promotion #${promotion.promotion_id} (rank: ${promotion.apply_rank_code || 'ALL'})`);
+
+    // Build the customer filter based on rank targeting
+    const customerFilter: any = { deleted_at: null };
+    if (promotion.apply_rank_code) {
+      customerFilter.current_rank_code = promotion.apply_rank_code;
+    }
+
+    const eligibleCustomers = await this.prisma.customers.findMany({
+      where: customerFilter,
+      include: {
+        users: {
+          select: { email: true, full_name: true },
+        },
+      },
+    });
+
+    const usersWithEmails = eligibleCustomers
+      .map(c => c.users)
+      .filter(u => u && u.email);
+
+    this.logger.log(`[EmailDispatch] Found ${eligibleCustomers.length} eligible customer(s), mapped to ${usersWithEmails.length} user(s) with valid emails.`);
+
+    if (usersWithEmails.length === 0) {
+      this.logger.warn(`[EmailDispatch] No users with valid emails found for rank: ${promotion.apply_rank_code || 'ALL'}`);
+      return;
+    }
+
+    // Send emails sequentially to avoid overwhelming SMTP
+    for (const user of usersWithEmails) {
+      try {
+        await this.mailService.sendTargetedPromotionEmail(user as any, promotion);
+      } catch (err) {
+        this.logger.error(`[EmailDispatch] Failed to send to ${user.email}`, err);
+      }
+    }
+
+    this.logger.log(`[EmailDispatch] Completed for promotion #${promotion.promotion_id}`);
   }
 
   async findAll() {
-    const now = new Date();
     return this.prisma.promotions.findMany({
-      where: {
-        OR: [
-          { end_date: null },          // No expiry = always valid
-          { end_date: { gt: now } }    // Not yet expired
-        ]
-      },
-      orderBy: { created_at: 'desc' }
+      where: { deleted_at: null },
+      orderBy: { created_at: 'desc' },
     });
   }
 
@@ -78,31 +125,28 @@ export class PromotionsService {
     });
   }
 
-  // --- Customer APIs ---
+  // ─── Customer APIs ─────────────────────────────────────────────────────────
 
   async getCollectibleVouchers(userId: number) {
-    // 1. Get user rank
     const customer = await this.prisma.customers.findUnique({
       where: { user_id: userId },
     });
     const rankCode = customer?.current_rank_code || 'BRONZE';
 
-    // 2. Get public vouchers that apply to this rank (or all ranks)
     const promotions = await this.prisma.promotions.findMany({
       where: {
         is_public: true,
         OR: [
           { apply_rank_code: null },
-          { apply_rank_code: rankCode }
-        ]
+          { apply_rank_code: rankCode },
+        ],
       },
-      orderBy: { created_at: 'desc' }
+      orderBy: { created_at: 'desc' },
     });
 
-    // 3. Check what has been collected
     const collected = await this.prisma.user_vouchers.findMany({
       where: { user_id: userId },
-      select: { promotion_id: true }
+      select: { promotion_id: true },
     });
     const collectedIds = new Set(collected.map(c => c.promotion_id));
 
@@ -115,139 +159,187 @@ export class PromotionsService {
         ...p,
         is_collected: false,
         can_collect: true,
-        is_out_of_stock: false
+        is_out_of_stock: false,
       }));
   }
-
+  /**
+   * POST /promotions/:id/collect
+   * Strict validation: active check, rank check, duplicate check.
+   */
   async collectVoucher(userId: number, promotionId: number) {
-    // 1. Check if promotion exists
+    const now = new Date();
+
+    // 1. Fetch promotion with validation
     const promotion = await this.prisma.promotions.findUnique({
-      where: { promotion_id: promotionId }
+      where: { promotion_id: promotionId },
     });
     if (!promotion) throw new NotFoundException('Voucher not found');
 
-    // 2. Check stock
+    // 2. Window validation
+    if (promotion.start_date && new Date(promotion.start_date) > now) {
+      throw new BadRequestException('This voucher is not yet active.');
+    }
+    if (promotion.end_date && new Date(promotion.end_date) < now) {
+      throw new BadRequestException('This voucher has already expired.');
+    }
+
+    // 3. Quota check
     if (promotion.max_quantity && (promotion.collected_quantity || 0) >= promotion.max_quantity) {
       throw new BadRequestException('Voucher is out of stock.');
     }
 
-    // 3. Check duplicate
-    const existing = await this.prisma.user_vouchers.findFirst({
-      where: { user_id: userId, promotion_id: promotionId }
-    });
-    if (existing) {
-      throw new BadRequestException('You have already collected this voucher');
-    }
-
-    // 4. Check rank if needed
+    // 4. Rank targeting check
     if (promotion.apply_rank_code) {
       const customer = await this.prisma.customers.findUnique({
-        where: { user_id: userId }
+        where: { user_id: userId },
       });
-      if (!customer || customer.current_rank_code !== promotion.apply_rank_code) {
-        throw new BadRequestException('Voucher not applicable for your rank');
+      if (!customer) {
+        throw new ForbiddenException('Customer profile not found.');
+      }
+      if (customer.current_rank_code !== promotion.apply_rank_code) {
+        throw new ForbiddenException(
+          `This voucher is exclusively for ${promotion.apply_rank_code} members. Your current rank is ${customer.current_rank_code || 'BRONZE'}.`
+        );
       }
     }
 
-    // 5. Transaction to save (Atomic Update / Optimistic Concurrency Control)
+    // 5. Existing collection check (using unique compound key)
+    const existing = await this.prisma.user_vouchers.findUnique({
+      where: {
+        user_id_promotion_id: {
+          user_id: userId,
+          promotion_id: promotionId,
+        },
+      },
+    });
+    if (existing) {
+      throw new BadRequestException('You have already collected this voucher.');
+    }
+
+    // 6. Transactional collection
     return this.prisma.$transaction(async (tx) => {
+      // Re-verify quota inside transaction for Atomic increment
       if (promotion.max_quantity) {
-        // OCC: Attempt to increment ONLY IF collected_quantity < max_quantity atomically
         const result = await tx.promotions.updateMany({
           where: {
             promotion_id: promotionId,
-            // the database atomically ensures it only increments if condition is met
-            collected_quantity: { lt: promotion.max_quantity }
+            collected_quantity: { lt: promotion.max_quantity },
           },
-          data: {
-            collected_quantity: { increment: 1 }
-          }
+          data: { collected_quantity: { increment: 1 } },
         });
-
         if (result.count === 0) {
-          // If count is 0, it means another transaction beat us to the last slot
           throw new BadRequestException('Voucher is out of stock.');
         }
       } else {
-        // Unlimited vouchers: just increment
         await tx.promotions.update({
           where: { promotion_id: promotionId },
-          data: { collected_quantity: { increment: 1 } }
+          data: { collected_quantity: { increment: 1 } },
         });
       }
 
-      // Only if the atomic increment succeeded do we assign it to the user
-      await tx.user_vouchers.create({
+      // Create user voucher (wallet entry)
+      const wallet = await tx.user_vouchers.create({
         data: {
           user_id: userId,
           promotion_id: promotionId,
-          is_used: false,
-        }
+          status: 'COLLECTED', // Explicitly set status from enum
+        },
+        include: { promotions: true },
       });
 
-      return { success: true, message: 'Voucher collected successfully' };
-    });
-  }
-
-  async getMyVouchers(userId: number) {
-    const now = new Date();
-    return this.prisma.user_vouchers.findMany({
-      where: { 
-        user_id: userId,
-        is_used: false,
-        promotions: {
-          OR: [
-            { end_date: null },       // No expiry = always valid
-            { end_date: { gt: now } } // Not yet expired
-          ]
-        }
-      },
-      include: {
-        promotions: true
-      },
-      orderBy: { created_at: 'desc' }
+      return { success: true, message: 'Voucher collected successfully', voucher: wallet };
     });
   }
 
   /**
+   * GET /promotions/my-vouchers  (also accessible via GET /users/me/vouchers)
+   * Returns full voucher wallet with promotion details.
+   * Auto-marks EXPIRED vouchers in background.
+   */
+  async getMyVouchers(userId: number) {
+    const now = new Date();
+
+    // Auto-expire stale COLLECTED vouchers (fire-and-forget)
+    this._autoExpireVouchers(userId, now).catch(err =>
+      this.logger.error('[AutoExpire] Failed to expire vouchers', err)
+    );
+
+    return this.prisma.user_vouchers.findMany({
+      where: {
+        user_id: userId,
+        status: { in: ['COLLECTED', 'USED'] },
+      },
+      include: {
+        promotions: {
+          select: {
+            promotion_id: true,
+            code: true,
+            discount_value: true,
+            discount_type: true,
+            min_order_value: true,
+            apply_rank_code: true,
+            start_date: true,
+            end_date: true,
+            is_public: true,
+          },
+        },
+      },
+      orderBy: { collected_at: 'desc' },
+    });
+  }
+
+  /**
+   * Background job: marks COLLECTED vouchers EXPIRED if their promotion has ended.
+   */
+  private async _autoExpireVouchers(userId: number, now: Date) {
+    await this.prisma.user_vouchers.updateMany({
+      where: {
+        user_id: userId,
+        status: 'COLLECTED',
+        promotions: {
+          end_date: { lt: now, not: null },
+        },
+      },
+      data: { status: 'EXPIRED' },
+    });
+  }
+
+  // ─── Cron Jobs ─────────────────────────────────────────────────────────────
+
+  /**
    * CRON: Runs every minute.
-   * Auto-delete Order Vouchers & Free Ship that expired > 10 minutes ago.
-   *
-   * Flow:
-   *   1. Find promotions where end_date + 10min < now (hard-expired)
-   *   2. Delete associated user_vouchers first (FK constraint)
-   *   3. Hard-delete the promotion records from DB
+   * Global auto-expire for all users' COLLECTED vouchers whose promotions ended.
    */
   @Cron(CronExpression.EVERY_MINUTE)
   async handleExpiredVouchers() {
     const now = new Date();
-    const tenMinutesAgo = new Date(now.getTime() - 10 * 60 * 1000);
 
-    // Find vouchers whose end_date passed more than 10 minutes ago
-    const expiredVouchers = await this.prisma.promotions.findMany({
-      where: {
-        end_date: { not: null, lt: tenMinutesAgo }
+    const expiredPromos = await this.prisma.promotions.findMany({
+      where: { 
+        end_date: { not: null, lt: now },
+        is_active: true
       },
-      select: { promotion_id: true, code: true }
+      select: { promotion_id: true, code: true },
     });
 
-    if (expiredVouchers.length > 0) {
-      const ids = expiredVouchers.map(v => v.promotion_id);
-      const codes = expiredVouchers.map(v => v.code).join(', ');
+    if (expiredPromos.length > 0) {
+      const ids = expiredPromos.map(v => v.promotion_id);
+      const codes = expiredPromos.map(v => v.code).join(', ');
 
-      // Delete user_vouchers first (child records, FK constraint)
-      await this.prisma.user_vouchers.deleteMany({
-        where: { promotion_id: { in: ids } }
+      // 1. Mark collected-but-unused vouchers as EXPIRED
+      await this.prisma.user_vouchers.updateMany({
+        where: { promotion_id: { in: ids }, status: 'COLLECTED' },
+        data: { status: 'EXPIRED' },
       });
 
-      // Hard delete the promotions
-      await this.prisma.promotions.deleteMany({
-        where: { promotion_id: { in: ids } }
+      // 2. Mark promotions as Inactive (Expired)
+      await this.prisma.promotions.updateMany({
+        where: { promotion_id: { in: ids } },
+        data: { is_active: false },
       });
 
       this.logger.log(
-        `[AutoDelete] Hard-deleted ${ids.length} expired vouchers after 10-min grace period. ` +
-        `Codes: [${codes}]`
+        `[AutoExpire] Marked ${ids.length} promotions as inactive. Codes: [${codes}]`
       );
     }
   }
