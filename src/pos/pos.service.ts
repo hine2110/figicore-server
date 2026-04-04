@@ -1,11 +1,41 @@
 import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { EncryptionService } from '../common/encryption.service';
+import { maskEmail, maskPhone } from '../common/mask.util';
 import { OpenSessionDto } from './dto/open-session.dto';
 import { CloseSessionDto } from './dto/close-session.dto';
 
 @Injectable()
 export class PosService {
-  constructor(private prisma: PrismaService) { }
+  constructor(
+    private prisma: PrismaService,
+    private encryption: EncryptionService,
+  ) { }
+
+  private decryptPii(data: any, mask = false): any {
+    if (!data) return data;
+    if (Array.isArray(data)) return data.map(item => this.decryptPii(item, mask));
+
+    const { password_hash, otp_code, otp_expires_at, google_id, refresh_token, ...safeData } = data;
+    const result = { ...safeData };
+    if (result.phone) {
+      try { 
+        const decrypted = this.encryption.decrypt(result.phone); 
+        result.phone = mask ? maskPhone(decrypted) : decrypted;
+      } catch (e) { }
+    }
+    if (result.email) {
+      try { 
+        const decrypted = this.encryption.decrypt(result.email);
+        result.email = mask ? maskEmail(decrypted) : decrypted;
+      } catch (e) { }
+    }
+    if (result.users) result.users = this.decryptPii(result.users, mask);
+    if (result.employees?.users) result.employees.users = this.decryptPii(result.employees.users, mask);
+    if (result.orders) result.orders = this.decryptPii(result.orders, mask);
+    
+    return result;
+  }
 
   /**
    * Mở ca làm việc mới
@@ -38,11 +68,8 @@ export class PosService {
 
     console.log('  - User exists in DB:', !!userExists);
     if (userExists) {
-      console.log('  - User email:', userExists.email);
-      console.log('  - User role:', userExists.role_code);
-    } else {
-      console.log('  - ❌ USER NOT FOUND IN DATABASE!');
     }
+
 
     // Tạo session mới
     const session = await this.prisma.pos_sessions.create({
@@ -423,7 +450,7 @@ export class PosService {
 
     return {
       success: true,
-      data: session,
+      data: this.decryptPii(session, true),
     };
   }
 }

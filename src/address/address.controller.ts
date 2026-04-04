@@ -3,13 +3,23 @@ import { Controller, Get, Post, Body, Param, Delete, UseGuards, Req, BadRequestE
 import { GhnService } from './ghn.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthGuard } from '@nestjs/passport';
+import { EncryptionService } from '../common/encryption.service';
 
 @Controller('address')
 export class AddressController {
     constructor(
         private readonly ghnService: GhnService,
         private readonly prisma: PrismaService,
+        private readonly encryption: EncryptionService,
     ) { }
+
+    private decryptAddress(address: any) {
+        if (!address) return null;
+        const decrypted = { ...address };
+        if (decrypted.detail_address) decrypted.detail_address = this.encryption.decrypt(decrypted.detail_address);
+        if (decrypted.recipient_phone) decrypted.recipient_phone = this.encryption.decrypt(decrypted.recipient_phone);
+        return decrypted;
+    }
 
     // --- Master Data (Proxy to GHN) ---
 
@@ -84,18 +94,20 @@ export class AddressController {
             }
         }
 
+        const encryptedPhone = this.encryption.encryptDeterministic(data.recipient_phone);
+
         return this.prisma.addresses.create({
             data: {
                 user_id: userId,
                 recipient_name: data.recipient_name,
-                recipient_phone: data.recipient_phone,
+                recipient_phone: encryptedPhone,
                 province_id: Number(data.province_id),
                 province_name: data.province_name,
                 district_id: Number(data.district_id),
                 district_name: data.district_name,
                 ward_code: String(data.ward_code),
                 ward_name: data.ward_name,
-                detail_address: data.detail_address,
+                detail_address: this.encryption.encrypt(data.detail_address),
                 is_default: data.is_default || false,
             },
         });
@@ -103,14 +115,15 @@ export class AddressController {
 
     @Get()
     @UseGuards(AuthGuard('jwt'))
-    getMyAddresses(@Req() req) {
-        return this.prisma.addresses.findMany({
+    async getMyAddresses(@Req() req) {
+        const addresses = await this.prisma.addresses.findMany({
             where: {
                 user_id: req.user.user_id,
                 deleted_at: null
             },
             orderBy: { is_default: 'desc' },
         });
+        return addresses.map(a => this.decryptAddress(a));
     }
 
     @Put(':id')
@@ -140,11 +153,11 @@ export class AddressController {
             where: { address_id: addressId },
             data: {
                 recipient_name: data.recipient_name,
-                recipient_phone: data.recipient_phone,
+                recipient_phone: data.recipient_phone ? this.encryption.encryptDeterministic(data.recipient_phone) : undefined,
                 province_id: Number(data.province_id),
                 district_id: Number(data.district_id),
                 ward_code: String(data.ward_code),
-                detail_address: data.detail_address,
+                detail_address: data.detail_address ? this.encryption.encrypt(data.detail_address) : undefined,
                 is_default: data.is_default,
                 updated_at: new Date(),
             },

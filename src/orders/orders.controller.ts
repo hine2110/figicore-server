@@ -11,10 +11,7 @@ export class OrdersController {
   @Post()
   @UseGuards(AuthGuard('jwt'))
   create(@Req() req, @Body() createOrderDto: CreateOrderDto) {
-    console.log('[OrdersController] Create Order Request:', {
-      userId: req.user.user_id,
-      dto: createOrderDto
-    });
+    console.log('[OrdersController] Create Order Request for User ID:', req.user.user_id);
     try {
       return this.ordersService.create(req.user.user_id, createOrderDto);
     } catch (e) {
@@ -73,14 +70,14 @@ export class OrdersController {
 
   @Post('mock-pay-group')
   @UseGuards(AuthGuard('jwt'))
-  mockPayGroup(@Req() req, @Body() body: { payment_ref_code: string }) {
-    return this.ordersService.mockPayGroup(body.payment_ref_code, req.user.user_id);
+  mockPayGroup(@Req() req, @Body() body: { payment_ref_code: string, voucher_id?: number }) {
+    return this.ordersService.mockPayGroup(body.payment_ref_code, req.user.user_id, body.voucher_id);
   }
 
   @Post('pay-with-wallet')
   @UseGuards(AuthGuard('jwt'))
-  payWithWallet(@Req() req, @Body() body: { payment_ref_code: string }) {
-    return this.ordersService.payWithWallet(body.payment_ref_code, req.user.user_id);
+  payWithWallet(@Req() req, @Body() body: { payment_ref_code: string, voucher_id?: number }) {
+    return this.ordersService.payWithWallet(body.payment_ref_code, req.user.user_id, body.voucher_id);
   }
 
   @Get('contracts/my-contracts') // Matches the route Frontend is calling

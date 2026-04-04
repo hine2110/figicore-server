@@ -23,7 +23,7 @@ model addresses {
   address_id      Int       @id @default(autoincrement())
   user_id         Int
   recipient_name  String    @db.VarChar(100)
-  recipient_phone String    @db.VarChar(15)
+  recipient_phone String    @db.VarChar(255) // Expanded for encryption
   province_id     Int
   district_id     Int
   ward_code       String    @db.VarChar(20)
@@ -39,7 +39,6 @@ model addresses {
   orders          orders[]
 }
 
-
 model brands {
   brand_id   Int        @id @default(autoincrement())
   name       String     @unique @db.VarChar(100)
@@ -54,15 +53,15 @@ model cart_items {
   item_id          Int              @id @default(autoincrement())
   cart_id          Int
   variant_id       Int
-  livestream_id    Int?             // NEW: Link to livestream session for price validation
+  livestream_id    Int?
   quantity         Int?             @default(1)
-  payment_option   String           @default("DEPOSIT") @db.VarChar(20) // 'DEPOSIT' or 'FULL_PAYMENT'
+  payment_option   String           @default("DEPOSIT") @db.VarChar(20)
   created_at       DateTime?        @default(now()) @db.Timestamp(6)
   updated_at       DateTime?        @default(now()) @db.Timestamp(6)
   deleted_at       DateTime?        @db.Timestamp(6)
   carts            carts            @relation(fields: [cart_id], references: [cart_id], onDelete: NoAction, onUpdate: NoAction)
+  livestreams      livestreams?     @relation(fields: [livestream_id], references: [id], onUpdate: NoAction)
   product_variants product_variants @relation(fields: [variant_id], references: [variant_id], onDelete: Cascade, onUpdate: NoAction)
-  livestreams      livestreams?     @relation(fields: [livestream_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
 }
 
 model carts {
@@ -129,31 +128,29 @@ model customers {
 }
 
 model employees {
-  user_id        Int     @id
-  employee_code  String  @unique @db.VarChar(20)
-  job_title_code String  @db.VarChar(50)
-  base_salary    Decimal @default(0) @db.Decimal(15, 2)
-
-  start_date         DateTime?            @db.Date
-  created_at         DateTime?            @default(now()) @db.Timestamp(6)
-  updated_at         DateTime?            @default(now()) @db.Timestamp(6)
-  deleted_at         DateTime?            @db.Timestamp(6)
-  users              users                @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
-  inventory_receipts inventory_receipts[]
-  orders             orders[]
-  payrolls           payrolls[]
-  pos_sessions       pos_sessions[]
-  store_expenses     store_expenses[]
-  work_schedules     work_schedules[]
-
+  user_id                 Int                       @id
+  employee_code           String                    @unique @db.VarChar(20)
+  job_title_code          String                    @db.VarChar(50)
+  base_salary             Decimal                   @default(0) @db.Decimal(15, 2)
+  start_date              DateTime?                 @db.Date
+  created_at              DateTime?                 @default(now()) @db.Timestamp(6)
+  updated_at              DateTime?                 @default(now()) @db.Timestamp(6)
+  deleted_at              DateTime?                 @db.Timestamp(6)
   employee_salary_configs employee_salary_configs[]
-  salary_change_histories salary_change_histories[] @relation("EmployeeSalaryHistory")
+  users                   users                     @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  inventory_receipts      inventory_receipts[]
   leave_requests          leave_requests[]
+  orders                  orders[]
   payroll_disputes        payroll_disputes[]
-  reviewed_payrolls       payrolls[]                @relation("PayrollReviewer")
   approved_payrolls       payrolls[]                @relation("PayrollApprover")
-  timesheet_corrections   timesheet_corrections[]   @relation("CorrectionRequester")
+  reviewed_payrolls       payrolls[]                @relation("PayrollReviewer")
+  payrolls                payrolls[]
+  pos_sessions            pos_sessions[]
+  salary_change_histories salary_change_histories[] @relation("EmployeeSalaryHistory")
+  store_expenses          store_expenses[]
   reviewed_corrections    timesheet_corrections[]   @relation("CorrectionReviewer")
+  timesheet_corrections   timesheet_corrections[]   @relation("CorrectionRequester")
+  work_schedules          work_schedules[]
 }
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
@@ -201,8 +198,8 @@ model inventory_receipt_items {
   created_at         DateTime?          @default(now()) @db.Timestamp(6)
   updated_at         DateTime?          @default(now()) @db.Timestamp(6)
   deleted_at         DateTime?          @db.Timestamp(6)
-  product_variants   product_variants   @relation(fields: [variant_id], references: [variant_id], onDelete: NoAction, onUpdate: NoAction)
   inventory_receipts inventory_receipts @relation(fields: [receipt_id], references: [receipt_id], onDelete: Cascade, onUpdate: NoAction)
+  product_variants   product_variants   @relation(fields: [variant_id], references: [variant_id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model inventory_receipts {
@@ -242,15 +239,14 @@ model order_items {
   total_price          Decimal           @db.Decimal(15, 2)
   tax_rate             Float?            @default(0)
   tax_amount           Decimal?          @default(0) @db.Decimal(15, 2)
-  
   livestream_id        Int?
   metadata             Json?
   created_at           DateTime?         @default(now()) @db.Timestamp(6)
   updated_at           DateTime?         @default(now()) @db.Timestamp(6)
   deleted_at           DateTime?         @db.Timestamp(6)
+  allocated_variant    product_variants? @relation("AllocatedVariantRel", fields: [allocated_product_id], references: [variant_id], onDelete: NoAction, onUpdate: NoAction)
   orders               orders            @relation(fields: [order_id], references: [order_id], onDelete: Cascade, onUpdate: NoAction)
   product_variants     product_variants  @relation(fields: [variant_id], references: [variant_id], onDelete: NoAction, onUpdate: NoAction)
-  allocated_variant    product_variants? @relation("AllocatedVariantRel", fields: [allocated_product_id], references: [variant_id], onDelete: NoAction, onUpdate: NoAction)
   return_items         return_items[]
 }
 
@@ -265,7 +261,7 @@ model order_status_history {
   orders             orders    @relation(fields: [order_id], references: [order_id], onDelete: Cascade, onUpdate: NoAction)
 }
 
-model orders {           
+model orders {
   order_id              Int                    @id @default(autoincrement())
   order_code            String                 @unique @db.VarChar(50)
   user_id               Int?
@@ -278,7 +274,6 @@ model orders {
   paid_amount           Decimal?               @default(0) @db.Decimal(15, 2)
   discount_amount       Decimal?               @default(0) @db.Decimal(15, 2)
   shipping_fee          Decimal?               @default(0) @db.Decimal(15, 2)
-
   original_shipping_fee Decimal?               @default(0) @db.Decimal(15, 2)
   payment_deadline      DateTime?              @db.Timestamp(6)
   channel_code          String                 @db.VarChar(20)
@@ -298,16 +293,15 @@ model orders {
   order_status_history  order_status_history[]
   employees             employees?             @relation(fields: [created_by_staff_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
   promotions            promotions?            @relation("DiscountPromotionRel", fields: [promotion_id], references: [promotion_id], onDelete: NoAction, onUpdate: NoAction)
-  shipping_promotions   promotions?            @relation("ShippingPromotionRel", fields: [shipping_promotion_id], references: [promotion_id], onDelete: NoAction, onUpdate: NoAction)
   pos_sessions          pos_sessions?          @relation(fields: [session_id], references: [session_id], onDelete: NoAction, onUpdate: NoAction)
   addresses             addresses?             @relation(fields: [shipping_address_id], references: [address_id], onDelete: NoAction, onUpdate: NoAction)
+  shipping_promotions   promotions?            @relation("ShippingPromotionRel", fields: [shipping_promotion_id], references: [promotion_id], onDelete: NoAction, onUpdate: NoAction)
   users                 users?                 @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
-  return_requests       return_requests[]
-  shipments             shipments?
-  // Inverse Relations
+  payment_transactions  payment_transactions[]
   contract_deposit      preorder_contracts[]   @relation("DepositOrderRel")
   contract_final        preorder_contracts[]   @relation("FinalOrderRel")
-  payment_transactions  payment_transactions[]
+  return_requests       return_requests[]
+  shipments             shipments?
 
   @@index([order_code], map: "idx_orders_code")
 }
@@ -320,35 +314,33 @@ model payment_transactions {
   account_number      String?   @db.VarChar(50)
   transaction_date    DateTime? @db.Timestamp(6)
   amount              Decimal   @db.Decimal(15, 2)
-  transaction_content String?   @db.Text
+  transaction_content String?
   reference_number    String?   @db.VarChar(100)
   created_at          DateTime? @default(now()) @db.Timestamp(6)
-
-  orders orders @relation(fields: [order_id], references: [order_id], onDelete: NoAction, onUpdate: NoAction)
+  orders              orders    @relation(fields: [order_id], references: [order_id], onDelete: NoAction, onUpdate: NoAction)
 
   @@index([order_id], map: "idx_payment_trx_order")
   @@index([sepay_id], map: "idx_payment_trx_sepay")
 }
 
 model payrolls {
-  payroll_id       Int        @id @default(autoincrement())
+  payroll_id       Int                @id @default(autoincrement())
   user_id          Int
   month            Int
   year             Int
-  total_work_hours Float?     @default(0)
-  final_salary     Decimal?   @default(0) @db.Decimal(15, 2)
-  status_code      String?    @default("DRAFT") @db.VarChar(20)
+  total_work_hours Float?             @default(0)
+  final_salary     Decimal?           @default(0) @db.Decimal(15, 2)
+  status_code      String?            @default("DRAFT") @db.VarChar(20)
   reviewer_id      Int?
   approver_id      Int?
-  created_at       DateTime?  @default(now()) @db.Timestamp(6)
-  updated_at       DateTime?  @default(now()) @db.Timestamp(6)
-  deleted_at       DateTime?  @db.Timestamp(6)
-  employees        employees  @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
-  reviewer         employees? @relation("PayrollReviewer", fields: [reviewer_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
-  approver         employees? @relation("PayrollApprover", fields: [approver_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
-
-  payroll_items    payroll_items[]
+  created_at       DateTime?          @default(now()) @db.Timestamp(6)
+  updated_at       DateTime?          @default(now()) @db.Timestamp(6)
+  deleted_at       DateTime?          @db.Timestamp(6)
   payroll_disputes payroll_disputes[]
+  payroll_items    payroll_items[]
+  approver         employees?         @relation("PayrollApprover", fields: [approver_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  reviewer         employees?         @relation("PayrollReviewer", fields: [reviewer_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  employees        employees          @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model pos_sessions {
@@ -385,55 +377,38 @@ model product_blindboxes {
   products    products  @relation(fields: [product_id], references: [product_id], onDelete: Cascade, onUpdate: NoAction)
 }
 
-// 1. Unified Config Table (Replaces definitions & legacy preorders)
 model product_preorder_configs {
   config_id        Int              @id @default(autoincrement())
   variant_id       Int              @unique
+  deposit_amount   Decimal          @default(0) @db.Decimal(15, 2)
+  full_price       Decimal          @default(0) @db.Decimal(15, 2)
+  release_date     DateTime?        @db.Timestamp(6)
+  total_slots      Int              @default(0)
+  sold_slots       Int              @default(0)
+  max_qty_per_user Int              @default(1)
+  stock_held       Int              @default(0)
+  created_at       DateTime?        @default(now())
+  updated_at       DateTime?        @default(now())
   product_variants product_variants @relation(fields: [variant_id], references: [variant_id], onDelete: Cascade)
-
-  // Business Rules
-  deposit_amount Decimal   @default(0) @db.Decimal(15, 2)
-  full_price     Decimal   @default(0) @db.Decimal(15, 2)
-  release_date   DateTime? @db.Timestamp(6)
-
-  // Inventory & Slots
-  total_slots      Int @default(0)
-  sold_slots       Int @default(0)
-  max_qty_per_user Int @default(1)
-
-  // The "Virtual Warehouse" for arriving stock
-  stock_held Int @default(0)
-
-  created_at DateTime? @default(now())
-  updated_at DateTime? @default(now())
 }
 
-// 2. Optimized Contract (Direct Links, No Payment Table)
 model preorder_contracts {
-  contract_id Int    @id @default(autoincrement())
-  order_code  String @unique @db.VarChar(50) // Generate: "PO-{OrderId}-{VariantId}"
-
-  user_id     Int
-  variant_id  Int
-  quantity    Int    @default(1)
-  status_code String @default("WAITING_DEPOSIT")
-
-  // Direct Order Links
+  contract_id            Int              @id @default(autoincrement())
+  order_code             String           @unique @db.VarChar(50)
+  user_id                Int
+  variant_id             Int
+  quantity               Int              @default(1)
+  status_code            String           @default("WAITING_DEPOSIT")
   deposit_order_id       Int?
   final_payment_order_id Int?
-
-  // Financials
-  deposit_amount_paid Decimal? @default(0)
-  remaining_amount    Decimal? @default(0)
-
-  // Relations
-  users            users            @relation(fields: [user_id], references: [user_id])
-  product_variants product_variants @relation(fields: [variant_id], references: [variant_id])
-  deposit_order    orders?          @relation("DepositOrderRel", fields: [deposit_order_id], references: [order_id])
-  final_order      orders?          @relation("FinalOrderRel", fields: [final_payment_order_id], references: [order_id])
-
-  created_at DateTime? @default(now())
-  updated_at DateTime? @default(now())
+  deposit_amount_paid    Decimal?         @default(0)
+  remaining_amount       Decimal?         @default(0)
+  created_at             DateTime?        @default(now())
+  updated_at             DateTime?        @default(now())
+  deposit_order          orders?          @relation("DepositOrderRel", fields: [deposit_order_id], references: [order_id])
+  final_order            orders?          @relation("FinalOrderRel", fields: [final_payment_order_id], references: [order_id])
+  users                  users            @relation(fields: [user_id], references: [user_id])
+  product_variants       product_variants @relation(fields: [variant_id], references: [variant_id])
 }
 
 model products {
@@ -442,7 +417,7 @@ model products {
   brand_id           Int?
   series_id          Int?
   name               String              @db.VarChar(255)
-  type_code          String              @db.VarChar(50) // RETAIL, BLINDBOX, PREORDER, AUCTION
+  type_code          String              @db.VarChar(50)
   status_code        String?             @default("DRAFT") @db.VarChar(50)
   specifications     Json?
   media_urls         Json?
@@ -453,75 +428,53 @@ model products {
   deleted_at         DateTime?           @db.Timestamp(6)
   feedbacks          feedbacks[]
   product_blindboxes product_blindboxes?
-
-  product_variants     product_variants[]
-  brands               brands?             @relation(fields: [brand_id], references: [brand_id], onDelete: NoAction, onUpdate: NoAction)
-  categories           categories?         @relation(fields: [category_id], references: [category_id], onDelete: NoAction, onUpdate: NoAction)
-  series               series?             @relation(fields: [series_id], references: [series_id], onDelete: NoAction, onUpdate: NoAction)
+  product_variants   product_variants[]
+  brands             brands?             @relation(fields: [brand_id], references: [brand_id], onDelete: NoAction, onUpdate: NoAction)
+  categories         categories?         @relation(fields: [category_id], references: [category_id], onDelete: NoAction, onUpdate: NoAction)
+  series             series?             @relation(fields: [series_id], references: [series_id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model product_variants {
-  variant_id  Int    @id @default(autoincrement())
-  product_id  Int
-  sku         String @unique @db.VarChar(50)
-  option_name String @db.VarChar(100)
-  
-  auctions    auctions[]
-
-  // RETAIL FIELDS
-  price                Decimal @default(0) @db.Decimal(15, 2) // Retail Price
-  cost_price           Decimal @default(0) @db.Decimal(15, 2) // NEW: Import/Cost Price
-  stock_available      Int     @default(0) // Physical Stock
-  stock_defect         Int     @default(0)
-  stock_factory_defect Int     @default(0)
-
-
-  // PHYSICAL SPECS
-  weight_g  Int @default(200)
-  length_cm Int @default(10)
-  width_cm  Int @default(10)
-  height_cm Int @default(10)
-
-  // NEW SPECS
-  scale          String? @db.VarChar(50) // VD: 1/144, 1/100, Non-scale
-  material       String? @db.VarChar(100) // PVC, ABS, Resin
-  included_items Json? // ["Base", "Decal", "LED Unit"]
-
-  // METADATA
-  barcode      String? @unique @db.VarChar(50)
-  description  String? @db.Text
-  media_assets Json?   @default("[]")
-
-  // TIMESTAMPS
-  created_at DateTime? @default(now()) @db.Timestamp(6)
-  updated_at DateTime? @default(now()) @db.Timestamp(6)
-  deleted_at DateTime? @db.Timestamp(6)
-
-  // RELATIONS
-  products products @relation(fields: [product_id], references: [product_id], onDelete: Cascade, onUpdate: NoAction)
-
-  // NEW: Extension Relation
-  product_preorder_configs product_preorder_configs? // Unified Pre-order Config
-  preorder_contracts       preorder_contracts[] // Contracts linked to this variant
-
-  // PROMOTIONS
+  variant_id                Int                         @id @default(autoincrement())
+  product_id                Int
+  sku                       String                      @unique @db.VarChar(50)
+  option_name               String                      @db.VarChar(100)
+  price                     Decimal                     @default(0) @db.Decimal(15, 2)
+  cost_price                Decimal                     @default(0) @db.Decimal(15, 2)
+  stock_available           Int                         @default(0)
+  stock_defect              Int                         @default(0)
+  stock_factory_defect      Int                         @default(0)
+  weight_g                  Int                         @default(200)
+  length_cm                 Int                         @default(10)
+  width_cm                  Int                         @default(10)
+  height_cm                 Int                         @default(10)
+  scale                     String?                     @db.VarChar(50)
+  material                  String?                     @db.VarChar(100)
+  included_items            Json?
+  barcode                   String?                     @unique @db.VarChar(50)
+  description               String?
+  media_assets              Json?                       @default("[]")
+  created_at                DateTime?                   @default(now()) @db.Timestamp(6)
+  updated_at                DateTime?                   @default(now()) @db.Timestamp(6)
+  deleted_at                DateTime?                   @db.Timestamp(6)
   product_promotion_id      Int?
-  previous_promotion_id     Int?  // Saves the pre-Flash-Sale promotion for restore
-  product_promotions   product_promotions? @relation(fields: [product_promotion_id], references: [promotion_id], onDelete: SetNull, onUpdate: NoAction)
-  promotion_items      promotion_items[]
-
-  // ... Keep existing relations (cart_items, order_items, etc.)
-  cart_items               cart_items[]
-  inventory_logs           inventory_logs[]
-  inventory_receipt_items  inventory_receipt_items[]
-  order_items              order_items[]
-  allocated_in_order_items order_items[]             @relation("AllocatedVariantRel")
-  livestream_products      livestream_products[]
+  previous_promotion_id     Int?
+  auctions                  auctions[]
+  cart_items                cart_items[]
+  inventory_logs            inventory_logs[]
+  inventory_receipt_items   inventory_receipt_items[]
+  inventory_recommendations inventory_recommendations[]
+  livestream_products       livestream_products[]
+  allocated_in_order_items  order_items[]               @relation("AllocatedVariantRel")
+  order_items               order_items[]
+  preorder_contracts        preorder_contracts[]
+  product_preorder_configs  product_preorder_configs?
+  products                  products                    @relation(fields: [product_id], references: [product_id], onDelete: Cascade, onUpdate: NoAction)
+  product_promotions        product_promotions?         @relation(fields: [product_promotion_id], references: [promotion_id], onUpdate: NoAction)
+  promotion_items           promotion_items[]
 
   @@index([sku], map: "idx_variants_sku")
 }
-
-// NEW TABLE
 
 model profile_update_requests {
   request_id   Int       @id @default(autoincrement())
@@ -536,34 +489,33 @@ model profile_update_requests {
 }
 
 model product_promotions {
-  promotion_id    Int        @id @default(autoincrement())
-  name            String     @db.VarChar(255)
-  type_code       String     @db.VarChar(50) // PERCENTAGE | FIXED_AMOUNT
-  value           Decimal    @db.Decimal(15, 2)
-  start_time      String     @db.VarChar(5)  // HH:mm e.g. "09:00"
-  end_time        String     @db.VarChar(5)  // HH:mm e.g. "11:00"
-  is_recurring    Boolean    @default(false) // If true, runs every day in the time window
-  is_active       Boolean?   @default(true)
-  min_apply_price Decimal?           @db.Decimal(15, 2)
-  max_apply_price Decimal?           @db.Decimal(15, 2)
-  is_flash_sale   Boolean    @default(false)
-  start_date      DateTime?          @db.Timestamp(6)
-  end_date        DateTime?          @db.Timestamp(6)
-  created_at      DateTime?          @default(now()) @db.Timestamp(6)
-  updated_at      DateTime?          @default(now()) @db.Timestamp(6)
-  deleted_at      DateTime?          @db.Timestamp(6)
+  promotion_id     Int                @id @default(autoincrement())
+  name             String             @db.VarChar(255)
+  type_code        String             @db.VarChar(50)
+  value            Decimal            @db.Decimal(15, 2)
+  start_time       String             @db.VarChar(5)
+  end_time         String             @db.VarChar(5)
+  is_recurring     Boolean            @default(false)
+  is_active        Boolean?           @default(true)
+  min_apply_price  Decimal?           @db.Decimal(15, 2)
+  max_apply_price  Decimal?           @db.Decimal(15, 2)
+  is_flash_sale    Boolean            @default(false)
+  start_date       DateTime?          @db.Timestamp(6)
+  end_date         DateTime?          @db.Timestamp(6)
+  created_at       DateTime?          @default(now()) @db.Timestamp(6)
+  updated_at       DateTime?          @default(now()) @db.Timestamp(6)
+  deleted_at       DateTime?          @db.Timestamp(6)
   product_variants product_variants[]
   promotion_items  promotion_items[]
 }
 
 model promotion_items {
-  item_id          Int                @id @default(autoincrement())
-  promotion_id     Int
-  variant_id       Int
-  flash_sale_price Decimal            @db.Decimal(15, 2)
-  quota            Int                @default(0)
-  sold             Int                @default(0)
-
+  item_id            Int                @id @default(autoincrement())
+  promotion_id       Int
+  variant_id         Int
+  flash_sale_price   Decimal            @db.Decimal(15, 2)
+  quota              Int                @default(0)
+  sold               Int                @default(0)
   product_promotions product_promotions @relation(fields: [promotion_id], references: [promotion_id], onDelete: Cascade)
   product_variants   product_variants   @relation(fields: [variant_id], references: [variant_id], onDelete: Cascade)
 }
@@ -578,6 +530,7 @@ model promotions {
   max_quantity       Int?
   collected_quantity Int?            @default(0)
   is_public          Boolean?        @default(true)
+  is_active          Boolean?        @default(true)
   start_date         DateTime?       @db.Timestamp(6)
   end_date           DateTime?       @db.Timestamp(6)
   created_at         DateTime?       @default(now()) @db.Timestamp(6)
@@ -647,8 +600,8 @@ model store_expenses {
   user_id      Int
   title        String?       @db.VarChar(255)
   amount       Decimal       @db.Decimal(15, 2)
-  reason       String? // Deprecated in favor of description, keeping for backwards compat if needed, or map to description
-  description  String?       @db.Text
+  reason       String?
+  description  String?
   expense_date DateTime?     @default(now()) @db.Timestamp(6)
   created_at   DateTime?     @default(now()) @db.Timestamp(6)
   updated_at   DateTime?     @default(now()) @db.Timestamp(6)
@@ -677,8 +630,6 @@ model system_configurations {
   deleted_at   DateTime? @db.Timestamp(6)
 }
 
-
-
 model system_lookups {
   id         Int       @id @default(autoincrement())
   type       String    @db.VarChar(50)
@@ -694,26 +645,22 @@ model system_lookups {
 }
 
 model timesheets {
-  timesheet_id Int  @id @default(autoincrement())
-  schedule_id  Int?
-
-  check_in_at         DateTime? @db.Timestamp(6)
-  check_out_at        DateTime? @db.Timestamp(6)
-  real_work_hours     Float?    @default(0)
-  applied_hourly_rate Decimal?  @db.Decimal(15, 2)
-  status_code         String?   @db.VarChar(20)
-
-  // Face Check-in Evidence
-  check_in_img_url  String? @db.Text
-  check_in_score    Float?
-  check_out_img_url String? @db.Text
-  check_out_score   Float?
-
+  timesheet_id          Int                     @id @default(autoincrement())
+  schedule_id           Int?
+  check_in_at           DateTime?               @db.Timestamp(6)
+  check_out_at          DateTime?               @db.Timestamp(6)
+  real_work_hours       Float?                  @default(0)
+  applied_hourly_rate   Decimal?                @db.Decimal(15, 2)
+  status_code           String?                 @db.VarChar(20)
+  check_in_img_url      String?
+  check_in_score        Float?
+  check_out_img_url     String?
+  check_out_score       Float?
   created_at            DateTime?               @default(now()) @db.Timestamp(6)
   updated_at            DateTime?               @default(now()) @db.Timestamp(6)
   deleted_at            DateTime?               @db.Timestamp(6)
-  work_schedules        work_schedules?         @relation(fields: [schedule_id], references: [schedule_id], onDelete: NoAction, onUpdate: NoAction)
   timesheet_corrections timesheet_corrections[]
+  work_schedules        work_schedules?         @relation(fields: [schedule_id], references: [schedule_id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model user_login_logs {
@@ -737,21 +684,26 @@ model user_login_logs {
 }
 
 model user_vouchers {
-  id           Int        @id @default(autoincrement())
+  id           Int           @id @default(autoincrement())
   user_id      Int
   promotion_id Int
-  is_used      Boolean?   @default(false)
-  created_at   DateTime?  @default(now()) @db.Timestamp(6)
-  updated_at   DateTime?  @default(now()) @db.Timestamp(6)
-  deleted_at   DateTime?  @db.Timestamp(6)
-  promotions   promotions @relation(fields: [promotion_id], references: [promotion_id], onDelete: NoAction, onUpdate: NoAction)
-  users        users      @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  created_at   DateTime?     @default(now()) @db.Timestamp(6)
+  updated_at   DateTime?     @default(now()) @db.Timestamp(6)
+  deleted_at   DateTime?     @db.Timestamp(6)
+  collected_at DateTime      @default(now()) @db.Timestamp(6)
+  status       VoucherStatus @default(COLLECTED)
+  used_at      DateTime?     @db.Timestamp(6)
+  promotions   promotions    @relation(fields: [promotion_id], references: [promotion_id], onDelete: NoAction, onUpdate: NoAction)
+  users        users         @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([user_id, promotion_id])
+  @@index([user_id, status])
 }
 
 model users {
   user_id                 Int                       @id @default(autoincrement())
-  phone                   String?                   @unique @db.VarChar(15)
-  email                   String?                   @unique @db.VarChar(100)
+  phone                   String?                   @unique @db.VarChar(255) // Expanded for encryption
+  email                   String?                   @unique @db.VarChar(255) // Expanded for encryption
   password_hash           String?                   @db.VarChar(255)
   full_name               String                    @db.VarChar(100)
   avatar_url              String?                   @db.Text
@@ -762,6 +714,7 @@ model users {
   otp_code                String?                   @db.VarChar(10)
   otp_expires_at          DateTime?                 @db.Timestamp(6)
   ban_reason              String?                   @db.Text
+  dob                     DateTime?                 @db.Date // From main
   created_at              DateTime?                 @default(now()) @db.Timestamp(6)
   updated_at              DateTime?                 @default(now()) @db.Timestamp(6)
   deleted_at              DateTime?                 @db.Timestamp(6)
@@ -785,6 +738,8 @@ model users {
   wallets                 wallets?
   auction_chat_messages   auction_chat_messages[]
   livestream_interactions livestream_interactions[]
+  pii_accessed_by_me      pii_access_logs[]         @relation("PiiAccessor")
+  pii_accessed_about_me   pii_access_logs[]         @relation("PiiTarget")
 }
 
 model wallet_transactions {
@@ -793,82 +748,66 @@ model wallet_transactions {
   type_code      String    @db.VarChar(50)
   amount         Decimal   @db.Decimal(15, 2)
   reference_code String?   @db.VarChar(100)
-  description    String?   @db.Text
+  description    String?
   created_at     DateTime? @default(now()) @db.Timestamp(6)
   updated_at     DateTime? @default(now()) @db.Timestamp(6)
   deleted_at     DateTime? @db.Timestamp(6)
   wallets        wallets   @relation(fields: [wallet_id], references: [wallet_id], onDelete: NoAction, onUpdate: NoAction)
 }
 
-// ----------------------------------------------------------------------------
-// AUCTION TABLES (B2C)
-// ----------------------------------------------------------------------------
-
 model auctions {
-  auction_id      Int       @id @default(autoincrement())
-  variant_id      Int
-  start_price     Decimal   @db.Decimal(15, 2)
-  step_price      Decimal   @db.Decimal(15, 2)
-  deposit_fee     Decimal   @db.Decimal(15, 2) // Phí giữ chỗ (Khóa ví)
-  max_participants Int      @default(50) // Giới hạn số lượng người được tham gia
-  
-  start_time      DateTime  @db.Timestamp(6)
-  end_time        DateTime  @db.Timestamp(6) // Có thể bị phình ra bởi Anti-Snipe
-  
-  // Status: DRAFT, UPCOMING, ACTIVE, AWAITING_PAYMENT, COMPLETED, CANCELLED, FAILED_NO_BUYER
-  status_code     String    @default("DRAFT") @db.VarChar(50) 
-  
-  winner_id       Int?      // Người đang giữ quyền thanh toán (Top 1 hoặc Top 2)
-  final_price     Decimal?  @db.Decimal(15, 2)
-  payment_deadline  DateTime? @db.Timestamp(6) // Timestamp giới hạn 24h
-  
-  created_at      DateTime? @default(now())
-  updated_at      DateTime? @default(now())
-
-  product_variants product_variants @relation(fields: [variant_id], references: [variant_id])
-  users            users?           @relation(fields: [winner_id], references: [user_id])
-  auction_bids     auction_bids[]
-  auction_participants auction_participants[]
+  auction_id            Int                     @id @default(autoincrement())
+  variant_id            Int
+  start_price           Decimal                 @db.Decimal(15, 2)
+  step_price            Decimal                 @db.Decimal(15, 2)
+  deposit_fee           Decimal                 @db.Decimal(15, 2)
+  max_participants      Int                     @default(50)
+  start_time            DateTime                @db.Timestamp(6)
+  end_time              DateTime                @db.Timestamp(6)
+  status_code           String                  @default("DRAFT") @db.VarChar(50)
+  winner_id             Int?
+  final_price           Decimal?                @db.Decimal(15, 2)
+  payment_deadline      DateTime?               @db.Timestamp(6)
+  created_at            DateTime?               @default(now())
+  updated_at            DateTime?               @default(now())
+  auction_bids          auction_bids[]
   auction_chat_messages auction_chat_messages[]
+  auction_participants  auction_participants[]
+  product_variants      product_variants        @relation(fields: [variant_id], references: [variant_id])
+  users                 users?                  @relation(fields: [winner_id], references: [user_id])
 }
 
-// Bảng Quản Lý Những Người Đã Nộp Cọc Vào Chơi
 model auction_participants {
-  id         Int      @id @default(autoincrement())
+  id             Int      @id @default(autoincrement())
+  auction_id     Int
+  user_id        Int
+  deposit_amount Decimal  @db.Decimal(15, 2)
+  status         String   @default("JOINED")
+  created_at     DateTime @default(now())
+  auctions       auctions @relation(fields: [auction_id], references: [auction_id])
+  users          users    @relation(fields: [user_id], references: [user_id])
+
+  @@unique([auction_id, user_id])
+}
+
+model auction_bids {
+  bid_id     Int      @id @default(autoincrement())
   auction_id Int
   user_id    Int
-  deposit_amount Decimal @db.Decimal(15, 2)
-  status     String   @default("JOINED") // JOINED, REFUNDED, FORFEITED, RETAINED_AS_BACKUP
-  
+  bid_amount Decimal  @db.Decimal(15, 2)
   created_at DateTime @default(now())
-
   auctions   auctions @relation(fields: [auction_id], references: [auction_id])
   users      users    @relation(fields: [user_id], references: [user_id])
-  
-  @@unique([auction_id, user_id]) // Một người chỉ bị khóa ví 1 lần mỗi phòng
-}
-
-// Bảng Ghi Nhận Từng "Lần Giơ Biển" Báo Giá
-model auction_bids {
-  bid_id      Int      @id @default(autoincrement())
-  auction_id  Int
-  user_id     Int
-  bid_amount  Decimal  @db.Decimal(15, 2)
-  created_at  DateTime @default(now())
-
-  auctions    auctions @relation(fields: [auction_id], references: [auction_id])
-  users       users    @relation(fields: [user_id], references: [user_id])
 }
 
 model auction_chat_messages {
-  message_id  Int      @id @default(autoincrement())
-  auction_id  Int
-  user_id     Int
-  message     String   @db.Text
-  created_at  DateTime @default(now())
-  
-  auctions    auctions @relation(fields: [auction_id], references: [auction_id])
-  users       users    @relation(fields: [user_id], references: [user_id])
+  message_id Int      @id @default(autoincrement())
+  auction_id Int
+  user_id    Int
+  message    String
+  created_at DateTime @default(now())
+  auctions   auctions @relation(fields: [auction_id], references: [auction_id])
+  users      users    @relation(fields: [user_id], references: [user_id])
 }
 
 model wallets {
@@ -890,8 +829,8 @@ model work_schedules {
   user_id        Int
   date           DateTime     @db.Date
   shift_code     String       @db.VarChar(20)
-  expected_start DateTime?    @db.Timestamp(6) 
-  expected_end   DateTime?    @db.Timestamp(6)  
+  expected_start DateTime?    @db.Timestamp(6)
+  expected_end   DateTime?    @db.Timestamp(6)
   created_at     DateTime?    @default(now()) @db.Timestamp(6)
   updated_at     DateTime?    @default(now()) @db.Timestamp(6)
   deleted_at     DateTime?    @db.Timestamp(6)
@@ -900,18 +839,17 @@ model work_schedules {
 }
 
 model employee_salary_configs {
-  config_id    Int       @id @default(autoincrement())
-  user_id      Int
-  type_code    String    @db.VarChar(50)
-  name         String    @db.VarChar(255)
-  amount       Decimal   @db.Decimal(15, 2)
-  is_recurring Boolean?  @default(true)
+  config_id      Int       @id @default(autoincrement())
+  user_id        Int
+  type_code      String    @db.VarChar(50)
+  name           String    @db.VarChar(255)
+  amount         Decimal   @db.Decimal(15, 2)
+  is_recurring   Boolean?  @default(true)
   effective_from DateTime? @default(now()) @db.Timestamp(6)
   effective_to   DateTime? @db.Timestamp(6)
-  created_at   DateTime? @default(now()) @db.Timestamp(6)
-  updated_at   DateTime? @default(now()) @db.Timestamp(6)
-
-  employees employees @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  created_at     DateTime? @default(now()) @db.Timestamp(6)
+  updated_at     DateTime? @default(now()) @db.Timestamp(6)
+  employees      employees @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model salary_change_histories {
@@ -922,11 +860,10 @@ model salary_change_histories {
   new_salary     Decimal   @db.Decimal(15, 2)
   effective_date DateTime  @db.Date
   reason         String?   @db.VarChar(255)
-  note           String?   @db.Text
+  note           String?
   created_at     DateTime? @default(now()) @db.Timestamp(6)
-
+  users          users?    @relation("SalaryChanger", fields: [changed_by_id], references: [user_id], onUpdate: NoAction)
   employees      employees @relation("EmployeeSalaryHistory", fields: [user_id], references: [user_id], onDelete: Cascade, onUpdate: NoAction)
-  users          users?    @relation("SalaryChanger", fields: [changed_by_id], references: [user_id], onDelete: SetNull, onUpdate: NoAction)
 
   @@index([user_id, effective_date])
 }
@@ -937,121 +874,171 @@ model payroll_items {
   title       String   @db.VarChar(255)
   amount      Decimal  @db.Decimal(15, 2)
   is_addition Boolean? @default(true)
-
-  payrolls payrolls @relation(fields: [payroll_id], references: [payroll_id], onDelete: Cascade, onUpdate: NoAction)
+  payrolls    payrolls @relation(fields: [payroll_id], references: [payroll_id], onDelete: Cascade, onUpdate: NoAction)
 }
 
 model leave_requests {
-  request_id  Int       @id @default(autoincrement())
-  user_id     Int
-  type_code   String    @db.VarChar(50)
-  start_date  DateTime  @db.Timestamp(6)
-  end_date    DateTime  @db.Timestamp(6)
-  reason      String?   @db.Text
-  status_code String?   @default("PENDING") @db.VarChar(50)
-  created_at  DateTime? @default(now()) @db.Timestamp(6)
-  updated_at  DateTime? @default(now()) @db.Timestamp(6)
-  evidence_url String?   @db.Text
-  employees employees @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  request_id   Int       @id @default(autoincrement())
+  user_id      Int
+  type_code    String    @db.VarChar(50)
+  start_date   DateTime  @db.Timestamp(6)
+  end_date     DateTime  @db.Timestamp(6)
+  reason       String?
+  status_code  String?   @default("PENDING") @db.VarChar(50)
+  created_at   DateTime? @default(now()) @db.Timestamp(6)
+  updated_at   DateTime? @default(now()) @db.Timestamp(6)
+  evidence_url String?
+  employees    employees @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model payroll_disputes {
   dispute_id  Int       @id @default(autoincrement())
   payroll_id  Int
   user_id     Int
-  content     String    @db.Text
-  response    String?   @db.Text
+  content     String
+  response    String?
   status_code String?   @default("OPEN") @db.VarChar(50)
   created_at  DateTime? @default(now()) @db.Timestamp(6)
   updated_at  DateTime? @default(now()) @db.Timestamp(6)
-
-  payrolls  payrolls  @relation(fields: [payroll_id], references: [payroll_id], onDelete: Cascade, onUpdate: NoAction)
-  employees employees @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  payrolls    payrolls  @relation(fields: [payroll_id], references: [payroll_id], onDelete: Cascade, onUpdate: NoAction)
+  employees   employees @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model timesheet_corrections {
-  correction_id Int       @id @default(autoincrement())
+  correction_id Int        @id @default(autoincrement())
   timesheet_id  Int
   user_id       Int
-  reason        String    @db.Text
-  evidence_url  String?   @db.Text
-  status_code   String?   @default("PENDING") @db.VarChar(50)
-  manager_note  String?   @db.Text
+  reason        String
+  evidence_url  String?
+  status_code   String?    @default("PENDING") @db.VarChar(50)
+  manager_note  String?
   reviewer_id   Int?
-  created_at    DateTime? @default(now()) @db.Timestamp(6)
-  updated_at    DateTime? @default(now()) @db.Timestamp(6)
-
-  timesheets timesheets @relation(fields: [timesheet_id], references: [timesheet_id], onDelete: Cascade, onUpdate: NoAction)
-  employees  employees  @relation("CorrectionRequester", fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
-  reviewer   employees? @relation("CorrectionReviewer", fields: [reviewer_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  created_at    DateTime?  @default(now()) @db.Timestamp(6)
+  updated_at    DateTime?  @default(now()) @db.Timestamp(6)
+  reviewer      employees? @relation("CorrectionReviewer", fields: [reviewer_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  timesheets    timesheets @relation(fields: [timesheet_id], references: [timesheet_id], onDelete: Cascade, onUpdate: NoAction)
+  employees     employees  @relation("CorrectionRequester", fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
 }
 
-// ----------------------------------------------------------------------------
-// LIVESTREAM SELLING TABLES (SHOOPE-STYLE)
-// ----------------------------------------------------------------------------
-
 model livestreams {
-  id              Int       @id @default(autoincrement())
-  title           String    @db.VarChar(255)
-  description     String?   @db.Text
-  cover_url       String?   @db.Text
-  
-  start_time      DateTime? @db.Timestamp(6)
-  end_time        DateTime? @db.Timestamp(6)
-  
-  // Status: DRAFT, UPCOMING, LIVE, ENDED
-  status          String    @default("DRAFT") @db.VarChar(20)
-  
-  pinned_product_id Int?      // current variant_id being pinned
-  
-  hearts_count    Int       @default(0)
-  shares_count    Int       @default(0)
-
-  created_at      DateTime? @default(now()) @db.Timestamp(6)
-  updated_at      DateTime? @default(now()) @db.Timestamp(6)
-  deleted_at      DateTime? @db.Timestamp(6)
-
-  products           livestream_products[]
-  interactions       livestream_interactions[]
-  broadcast_messages livestream_broadcast_messages[]
+  id                 Int                             @id @default(autoincrement())
+  title              String                          @db.VarChar(255)
+  description        String?
+  cover_url          String?
+  start_time         DateTime?                       @db.Timestamp(6)
+  end_time           DateTime?                       @db.Timestamp(6)
+  status             String                          @default("DRAFT") @db.VarChar(20)
+  pinned_product_id  Int?
+  hearts_count       Int                             @default(0)
+  shares_count       Int                             @default(0)
+  created_at         DateTime?                       @default(now()) @db.Timestamp(6)
+  updated_at         DateTime?                       @default(now()) @db.Timestamp(6)
+  deleted_at         DateTime?                       @db.Timestamp(6)
   cart_items         cart_items[]
+  broadcast_messages livestream_broadcast_messages[]
+  interactions       livestream_interactions[]
+  products           livestream_products[]
 }
 
 model livestream_products {
-  id            Int      @id @default(autoincrement())
-  livestream_id Int
-  variant_id    Int
-  
-  // Custom price for this livestream if provided, otherwise use variant price
-  live_price    Decimal? @db.Decimal(15, 2)
-  
-  flash_sale_price Decimal? @db.Decimal(15, 2)
-  flash_sale_stock Int?     @default(0)
-  
-  created_at    DateTime @default(now()) @db.Timestamp(6)
-
-  livestream    livestreams      @relation(fields: [livestream_id], references: [id], onDelete: Cascade)
+  id               Int              @id @default(autoincrement())
+  livestream_id    Int
+  variant_id       Int
+  live_price       Decimal?         @db.Decimal(15, 2)
+  flash_sale_price Decimal?         @db.Decimal(15, 2)
+  flash_sale_stock Int?             @default(0)
+  created_at       DateTime         @default(now()) @db.Timestamp(6)
+  livestream       livestreams      @relation(fields: [livestream_id], references: [id], onDelete: Cascade)
   product_variants product_variants @relation(fields: [variant_id], references: [variant_id], onDelete: Cascade)
 
   @@unique([livestream_id, variant_id])
 }
 
 model livestream_interactions {
-  interaction_id Int       @id @default(autoincrement())
+  interaction_id Int         @id @default(autoincrement())
   livestream_id  Int
   user_id        Int?
-  type_code      String    @db.VarChar(50) // HEART, SHARE
-  created_at     DateTime? @default(now()) @db.Timestamp(6)
-  
+  type_code      String      @db.VarChar(50)
+  created_at     DateTime?   @default(now()) @db.Timestamp(6)
   livestream     livestreams @relation(fields: [livestream_id], references: [id], onDelete: Cascade)
   user           users?      @relation(fields: [user_id], references: [user_id])
 }
 
 model livestream_broadcast_messages {
-  message_id    Int       @id @default(autoincrement())
+  message_id    Int         @id @default(autoincrement())
   livestream_id Int
-  content       String    @db.Text
-  created_at    DateTime? @default(now()) @db.Timestamp(6)
-  
+  content       String
+  created_at    DateTime?   @default(now()) @db.Timestamp(6)
   livestream    livestreams @relation(fields: [livestream_id], references: [id], onDelete: Cascade)
+}
+
+// ----------------------------------------------------------------------------
+// PII SECURITY — Audit Access Log
+// ----------------------------------------------------------------------------
+
+model pii_access_logs {
+  log_id          Int      @id @default(autoincrement())
+  accessed_by     Int      // employee/admin user_id who viewed the data
+  target_user_id  Int      // customer user_id whose data was viewed
+  fields_viewed   String   @db.VarChar(255) // e.g. "phone,email,address"
+  ip_address      String?  @db.VarChar(45)
+  accessed_at     DateTime @default(now()) @db.Timestamp(6)
+
+  accessor        users    @relation("PiiAccessor", fields: [accessed_by], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  target          users    @relation("PiiTarget", fields: [target_user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([accessed_by], map: "idx_pii_log_accessor")
+  @@index([target_user_id], map: "idx_pii_log_target")
+  @@index([accessed_at], map: "idx_pii_log_time")
+}
+
+model inventory_recommendations {
+  id                     Int                  @id @default(autoincrement())
+  variant_id             Int
+  type                   RecommendationType
+  reason                 String
+  suggested_action_value String?              @db.VarChar(255)
+  status                 RecommendationStatus @default(PENDING)
+  created_at             DateTime             @default(now()) @db.Timestamp(6)
+  updated_at             DateTime             @default(now()) @db.Timestamp(6)
+  financial_note         String?
+  product_variants       product_variants     @relation(fields: [variant_id], references: [variant_id], onDelete: Cascade)
+
+  @@index([variant_id, status], map: "idx_recommendations_lookup")
+}
+
+model system_settings {
+  id          Int      @id @default(autoincrement())
+  key         String   @unique @db.VarChar(100)
+  value       Json
+  description String?
+  created_at  DateTime @default(now()) @db.Timestamp(6)
+  updated_at  DateTime @default(now()) @db.Timestamp(6)
+}
+
+model system_settings_logs {
+  id         Int      @id @default(autoincrement())
+  key        String   @db.VarChar(100)
+  old_value  Json?
+  new_value  Json?
+  user_id    Int
+  created_at DateTime @default(now()) @db.Timestamp(6)
+}
+
+enum VoucherStatus {
+  COLLECTED
+  USED
+  EXPIRED
+}
+
+enum RecommendationType {
+  CLEARANCE
+  RESTOCK
+}
+
+enum RecommendationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  SUPERSEDED
 }

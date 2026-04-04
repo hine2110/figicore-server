@@ -9,6 +9,8 @@ import { WalletModule } from '../wallet/wallet.module';
 import { AuctionsModule } from '../auctions/auctions.module';
 import { BlindboxesModule } from '../blindboxes/blindboxes.module';
 import { LivestreamsModule } from '../livestreams/livestreams.module';
+import { EncryptionService } from '../common/encryption.service';
+
 @Module({
   imports: [
     AddressModule,
@@ -21,7 +23,7 @@ import { LivestreamsModule } from '../livestreams/livestreams.module';
     forwardRef(() => AuctionsModule)
   ],
   controllers: [OrdersController],
-  providers: [OrdersService],
+  providers: [OrdersService, EncryptionService],
   exports: [OrdersService],
 })
 export class OrdersModule { }

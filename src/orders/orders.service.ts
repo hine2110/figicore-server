@@ -11,6 +11,7 @@ import { WalletService } from '../wallet/wallet.service';
 import { BlindboxesService } from '../blindboxes/blindboxes.service';
 import { AuctionsService } from '../auctions/auctions.service';
 import { LivestreamLiveGateway } from '../livestreams/livestream-live.gateway';
+import { EncryptionService } from '../common/encryption.service';
 
 @Injectable()
 export class OrdersService {
@@ -24,8 +25,35 @@ export class OrdersService {
     private walletService: WalletService,
     private blindboxesService: BlindboxesService,
     @Inject(forwardRef(() => AuctionsService)) private auctionsService: AuctionsService,
-    private livestreamLiveGateway: LivestreamLiveGateway
+    private livestreamLiveGateway: LivestreamLiveGateway,
+    private encryption: EncryptionService,
   ) { }
+
+  private decryptUser(user: any) {
+    if (!user) return null;
+    const decrypted = { ...user };
+    if (decrypted.phone) decrypted.phone = this.encryption.decrypt(decrypted.phone);
+    if (decrypted.email) decrypted.email = this.encryption.decrypt(decrypted.email);
+    return decrypted;
+  }
+
+  private decryptAddress(addresses: any): any {
+    if (!addresses) return addresses;
+    if (Array.isArray(addresses)) {
+      return addresses.map(a => this.decryptAddress(a));
+    }
+    const dec = { ...addresses };
+    if (dec.detail_address) {
+      try {
+        dec.detail_address = this.encryption.decrypt(dec.detail_address);
+      } catch (e) {
+        // Fallback for plaintext
+      }
+    }
+    // Note: recipient_phone is usually stored in users table or addresses table? 
+    // In our schema, it's detail_address that is encrypted.
+    return dec;
+  }
 
   // NEW: Anti-scalping Helper
   private async validateAntiScalping(tx: any, userId: number, variantId: number, quantity: number, limit: number) {
@@ -63,10 +91,11 @@ export class OrdersService {
     preOrderDeadline.setMinutes(preOrderDeadline.getMinutes() + 15);
 
     try {
-      const address = await this.prisma.addresses.findUnique({
+      const rawAddress = await this.prisma.addresses.findUnique({
         where: { address_id: shipping_address_id }
       });
-      if (!address) throw new BadRequestException("Address not found");
+      if (!rawAddress) throw new BadRequestException("Address not found");
+      const address = this.decryptAddress(rawAddress);
 
       // 1. Backend Authoritative Pricing & Flash Sale Evaluation
       let cartTotalAmountDiscounted = 0;
@@ -155,7 +184,7 @@ export class OrdersService {
             },
             include: { livestream: true }
           });
-          
+
           if (liveProduct?.livestream?.status === 'LIVE') {
             if (liveProduct.flash_sale_price && (liveProduct.flash_sale_stock || 0) > 0) {
               finalUnitPrice = Number(liveProduct.flash_sale_price);
@@ -188,7 +217,7 @@ export class OrdersService {
         const userDiscountVoucher = await this.prisma.user_vouchers.findFirst({
           where: {
             user_id: userId,
-            is_used: false,
+            status: 'COLLECTED',
             promotions: { code: discountVoucherCode }
           },
           include: { promotions: true }
@@ -225,7 +254,7 @@ export class OrdersService {
         const userFreeShipVoucher = await this.prisma.user_vouchers.findFirst({
           where: {
             user_id: userId,
-            is_used: false,
+            status: 'COLLECTED',
             promotions: { code: freeShipVoucherCode, discount_type: 'FREE_SHIP' }
           },
           include: { promotions: true }
@@ -522,14 +551,14 @@ export class OrdersService {
 
         if (usedDiscountPromotionId) {
           await tx.user_vouchers.updateMany({
-            where: { user_id: userId, promotion_id: usedDiscountPromotionId, is_used: false },
-            data: { is_used: true }
+            where: { user_id: userId, promotion_id: usedDiscountPromotionId, status: 'COLLECTED' },
+            data: { status: 'USED', used_at: new Date() }
           });
         }
         if (usedFreeShipPromotionId) {
           await tx.user_vouchers.updateMany({
-            where: { user_id: userId, promotion_id: usedFreeShipPromotionId, is_used: false },
-            data: { is_used: true }
+            where: { user_id: userId, promotion_id: usedFreeShipPromotionId, status: 'COLLECTED' },
+            data: { status: 'USED', used_at: new Date() }
           });
         }
 
@@ -607,13 +636,136 @@ export class OrdersService {
     if (!orders || orders.length === 0) {
       throw new NotFoundException(`No order found with code: ${code}`);
     }
-
     // Return array for compatibility with Checkout.tsx (legacyAuction path sets fetchedOrders = res.data)
     return orders;
   }
 
+  // --- NEW: PRIVATE HELPER TO APPLY VOUCHER TO A GROUP OF ORDERS ---
+  private async _applyVoucherToGroup(tx: any, userId: number, orders: any[], voucherId: number) {
+    const voucher = await tx.user_vouchers.findFirst({
+      where: { id: voucherId, user_id: userId, status: 'COLLECTED' },
+      include: { promotions: true }
+    });
+
+    if (!voucher) throw new BadRequestException("Voucher not found, expired, or already used.");
+    const promo = voucher.promotions;
+    if (!promo) throw new BadRequestException("Invalid promotion data.");
+
+    // 1. Expiry Check
+    const now = new Date();
+    if (promo.end_date && new Date(promo.end_date) < now) {
+      await tx.user_vouchers.update({ where: { id: voucherId }, data: { status: 'EXPIRED' } });
+      throw new BadRequestException("This voucher has expired.");
+    }
+
+    // 2. Rank Check (Final Safety)
+    if (promo.apply_rank_code) {
+      const customer = await tx.customers.findUnique({ where: { user_id: userId } });
+      if (customer?.current_rank_code !== promo.apply_rank_code) {
+        throw new BadRequestException(`Voucher requires ${promo.apply_rank_code} rank.`);
+      }
+    }
+
+    // 3. Min Order Value Check
+    const groupSubtotal = orders.reduce((sum, o) => sum + (Number(o.total_amount) - Number(o.shipping_fee || 0) + Number(o.discount_amount || 0)), 0);
+    if (promo.min_order_value && groupSubtotal < Number(promo.min_order_value)) {
+      throw new BadRequestException(`Minimum order value of ${new Intl.NumberFormat('vi-VN').format(Number(promo.min_order_value))}đ not met.`);
+    }
+
+    // 4. Calculate Discount
+    let totalDiscount = 0;
+    if (promo.discount_type === 'PERCENTAGE') {
+      totalDiscount = Math.round(groupSubtotal * (Number(promo.discount_value) / 100));
+    } else if (promo.discount_type === 'FIXED_AMOUNT') {
+      totalDiscount = Number(promo.discount_value);
+    } else if (promo.discount_type === 'FREE_SHIP') {
+      // Handled separately below
+    }
+
+    // 5. Apply to orders
+    if (promo.discount_type === 'FREE_SHIP') {
+      for (const order of orders) {
+        await tx.orders.update({
+          where: { order_id: order.order_id },
+          data: {
+            shipping_fee: 0,
+            total_amount: { decrement: order.shipping_fee || 0 },
+            shipping_promotion_id: promo.promotion_id
+          }
+        });
+        // Update local ref for subsequent payment logic
+        order.total_amount = Number(order.total_amount) - Number(order.shipping_fee || 0);
+      }
+    } else if (totalDiscount > 0) {
+      // Apply discount to the first order that has enough total_amount, or divide it
+      let remainingDiscount = totalDiscount;
+      for (const order of orders) {
+        if (remainingDiscount <= 0) break;
+        const currentOrderTotal = Number(order.total_amount);
+        const applyNow = Math.min(remainingDiscount, currentOrderTotal);
+
+        await tx.orders.update({
+          where: { order_id: order.order_id },
+          data: {
+            discount_amount: { increment: applyNow },
+            total_amount: { decrement: applyNow },
+            promotion_id: promo.promotion_id
+          }
+        });
+
+        order.total_amount = Number(order.total_amount) - applyNow;
+        remainingDiscount -= applyNow;
+      }
+    }
+
+    // 6. Mark Voucher as USED
+    await tx.user_vouchers.update({
+      where: { id: voucherId },
+      data: { status: 'USED', used_at: new Date() }
+    });
+
+    return true;
+  }
+
+  // --- NEW: PRIVATE HELPER TO SEND NOTIFICATIONS FOR A GROUP ---
+  private async _sendGroupNotifications(paymentRefCode: string, userId: number) {
+    try {
+      const updatedOrders = await this.prisma.orders.findMany({
+        where: { payment_ref_code: paymentRefCode, user_id: userId },
+        include: {
+          users: true,
+          order_items: { include: { product_variants: { include: { products: true } } } }
+        }
+      });
+
+      for (const order of updatedOrders) {
+        // Sync Auction status if applicable
+        if (order.order_code && order.order_code.startsWith('AUC-')) {
+          try {
+            const auctionId = parseInt(order.order_code.split('-')[1], 10);
+            await this.prisma.auctions.update({
+              where: { auction_id: auctionId },
+              data: { status_code: 'COMPLETED' }
+            });
+            this.logger.log(`Synced Auction #${auctionId} to COMPLETED`);
+          } catch (err) {
+            this.logger.error(`Auction sync error for ${order.order_code}:`, err);
+          }
+        }
+
+        // Send Email & Socket
+        if (order.users && order.users.email) {
+          this.mailService.sendOrderConfirmation(order.users, order).catch(e => this.logger.error("Mail Error", e));
+        }
+        this.eventsGateway.notifyNewOrder(order);
+      }
+    } catch (error) {
+      this.logger.error("Failed to send group notifications", error);
+    }
+  }
+
   // --- NEW: MOCK PAYMENT FOR GROUP ---
-  async mockPayGroup(paymentRefCode: string, userId: number) {
+  async mockPayGroup(paymentRefCode: string, userId: number, voucherId?: number) {
     if (!paymentRefCode) throw new BadRequestException("Payment Ref Code required");
 
     const orders = await this.prisma.orders.findMany({
@@ -622,36 +774,30 @@ export class OrdersService {
 
     if (orders.length === 0) throw new NotFoundException("No orders found for this payment ref");
 
-    // Verify all are pending
     const validStatuses = ['PENDING_PAYMENT', 'WAITING_DEPOSIT'];
     const invalid = orders.find(o => !validStatuses.includes(o.status_code || ''));
-    if (invalid) {
-      throw new BadRequestException("Some orders in this group are already processed or cancelled.");
-    }
+    if (invalid) throw new BadRequestException("Some orders in this group are already processed or cancelled.");
 
-    await this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
+      if (voucherId) {
+        await this._applyVoucherToGroup(tx, userId, orders, voucherId);
+      }
+
       for (const order of orders) {
         const newStatus = order.status_code === 'PENDING_PAYMENT' ? 'PROCESSING' : 'DEPOSITED';
-
-        // Update Order
         await tx.orders.update({
           where: { order_id: order.order_id },
           data: {
             status_code: newStatus,
-            paid_amount: order.total_amount, // Paid in full (or deposit full)
+            paid_amount: order.total_amount,
             payment_method_code: 'MOCK_PAY'
           }
         });
 
-        // If Pre-order, update pending contract/payment entry if needed?
-        // Status 'WAITING_DEPOSIT' -> 'DEPOSITED' is managed via Order Status for now?
-        // Ideally update Contract status too.
         if (newStatus === 'DEPOSITED') {
-          // New Schema: Direct Link
           const contract = await tx.preorder_contracts.findFirst({
             where: { deposit_order_id: order.order_id }
           });
-
           if (contract) {
             await tx.preorder_contracts.update({
               where: { contract_id: contract.contract_id },
@@ -660,9 +806,11 @@ export class OrdersService {
           }
         }
       }
+      return { success: true, count: orders.length };
     });
 
-
+    // Notify in background
+    this._sendGroupNotifications(paymentRefCode, userId).catch(() => { });
 
     // --- FIX: SEND NOTIFICATIONS AFTER TRANSACTION ---
     try {
@@ -693,8 +841,9 @@ export class OrdersService {
 
       for (const order of updatedOrders) {
         if (order.users && order.users.email) {
-          // Send Email
-          this.mailService.sendOrderConfirmation(order.users, order).catch(e => console.error("Mail Error", e));
+          // Send Email (Decrypt user first)
+          const decryptedUser = this.decryptUser(order.users);
+          this.mailService.sendOrderConfirmation(decryptedUser, order).catch(e => console.error("Mail Error", e));
         }
         // Emit Socket (warehouse)
         this.eventsGateway.notifyNewOrder(order);
@@ -707,45 +856,36 @@ export class OrdersService {
       console.error("Failed to send notifications for group payment", error);
     }
 
-    return { success: true, message: `Payment successful for group ${paymentRefCode}` };
+    return result;
   }
 
   // --- NEW: WALLET PAYMENT FOR GROUP ---
-  async payWithWallet(paymentRefCode: string, userId: number) {
+  async payWithWallet(paymentRefCode: string, userId: number, voucherId?: number) {
     if (!paymentRefCode) throw new BadRequestException("Payment Ref Code required");
 
     try {
-      await this.prisma.$transaction(async (tx) => {
-        // 1. Fetch orders in the group that are pending payment
+      const result = await this.prisma.$transaction(async (tx) => {
         const orders = await tx.orders.findMany({
           where: { payment_ref_code: paymentRefCode, user_id: userId, status_code: 'PENDING_PAYMENT' }
         });
 
-        if (!orders.length) throw new BadRequestException("No pending orders found for this reference");
+        if (!orders.length) throw new BadRequestException("No pending orders found");
 
-        // 2. Calculate Total Required
+        if (voucherId) {
+          await this._applyVoucherToGroup(tx, userId, orders, voucherId);
+        }
+
         const totalAmount = orders.reduce((sum, o) => sum + Number(o.total_amount), 0);
+        const wallet = await tx.wallets.findUnique({ where: { user_id: userId } });
 
-        // 3. Fetch Wallet & Verify Balance
-        const wallet = await tx.wallets.findUnique({
-          where: { user_id: userId }
-        });
+        if (!wallet) throw new BadRequestException("Wallet not found.");
+        if (Number(wallet.balance_available) < totalAmount) throw new BadRequestException("Insufficient balance.");
 
-        if (!wallet) {
-          throw new BadRequestException("Wallet not found. Please activate your FigiWallet.");
-        }
-
-        if (Number(wallet.balance_available) < totalAmount) {
-          throw new BadRequestException("Insufficient wallet balance.");
-        }
-
-        // 4. Deduct Balance
         await tx.wallets.update({
           where: { wallet_id: wallet.wallet_id },
           data: { balance_available: { decrement: totalAmount } }
         });
 
-        // 5. Update Orders to PROCESSING and Create Payment Transactions
         for (const order of orders) {
           await tx.orders.update({
             where: { order_id: order.order_id },
@@ -753,29 +893,29 @@ export class OrdersService {
           });
         }
 
-        // 6. Record Wallet Deduction Transaction
         await tx.wallet_transactions.create({
           data: {
             wallet_id: wallet.wallet_id,
             type_code: 'PAYMENT',
             amount: -totalAmount,
             reference_code: paymentRefCode,
-            description: `Payment for order group ${paymentRefCode}`
+            description: `Payment for group ${paymentRefCode}`
           }
         });
+
+        return { success: true, totalPaid: totalAmount };
       });
 
-      // 7. Post-Transaction Actions (Notifications, Socket)
-      const updatedOrders = await this.prisma.orders.findMany({
-        where: { payment_ref_code: paymentRefCode, user_id: userId },
-        include: {
-          users: true,
-          order_items: { include: { product_variants: { include: { products: true } } } }
-        }
-      });
+      // Notify in background
+      this._sendGroupNotifications(paymentRefCode, userId).catch(() => { });
 
       // --- NEW: SYNC AUCTION STATUS ---
-      for (const order of updatedOrders) {
+      const updatedOrdersForAuction = await this.prisma.orders.findMany({
+        where: { payment_ref_code: paymentRefCode, user_id: userId },
+        include: { users: true }
+      });
+
+      for (const order of updatedOrdersForAuction) {
         if (order.order_code && order.order_code.startsWith('AUC-')) {
           try {
             const auctionId = parseInt(order.order_code.split('-')[1], 10);
@@ -790,7 +930,7 @@ export class OrdersService {
         }
       }
 
-      for (const order of updatedOrders) {
+      for (const order of updatedOrdersForAuction) {
         if (order.users && order.users.email) {
           this.mailService.sendOrderConfirmation(order.users, order).catch(e => console.error("Mail Error", e));
         }
@@ -799,14 +939,12 @@ export class OrdersService {
         await this._broadcastLivestreamOrder(order);
       }
       this.logger.log(`Wallet Payment successful for group ${paymentRefCode}`);
+      return result;
 
     } catch (error) {
       this.logger.error("Wallet Payment Error:", error);
       if (error instanceof BadRequestException) throw error;
-      throw new InternalServerErrorException('Payment processing failed');
     }
-
-    return { success: true, message: `Wallet payment successful for group ${paymentRefCode}` };
   }
 
   /**
@@ -867,7 +1005,8 @@ export class OrdersService {
     }
 
     // Now TypeScript knows 'fullOrder' and 'fullOrder.users' are NOT null
-    this.mailService.sendOrderConfirmation(fullOrder.users, fullOrder);
+    const decryptedUser = this.decryptUser(fullOrder.users);
+    this.mailService.sendOrderConfirmation(decryptedUser, fullOrder);
     // FIX: Trigger Realtime Notification for Warehouse HERE (Processing/Paid only)
     this.eventsGateway.notifyNewOrder(fullOrder);
 
@@ -943,12 +1082,12 @@ export class OrdersService {
         // 4. Restore Livestream Flash Sale Quota
         if (item.livestream_id) {
           const livePromo = await tx.livestream_products.findUnique({
-             where: { livestream_id_variant_id: { livestream_id: item.livestream_id, variant_id: item.variant_id } }
+            where: { livestream_id_variant_id: { livestream_id: item.livestream_id, variant_id: item.variant_id } }
           });
           if (livePromo && livePromo.flash_sale_price) {
             await tx.livestream_products.update({
-               where: { livestream_id_variant_id: { livestream_id: item.livestream_id, variant_id: item.variant_id } },
-               data: { flash_sale_stock: { increment: item.quantity } }
+              where: { livestream_id_variant_id: { livestream_id: item.livestream_id, variant_id: item.variant_id } },
+              data: { flash_sale_stock: { increment: item.quantity } }
             });
             this.logger.log(`[Expire] Restored ${item.quantity} quota to Livestream Product Flash Sale!`);
           }
@@ -985,12 +1124,12 @@ export class OrdersService {
       const usedPromotions = [order.promotion_id, order.shipping_promotion_id].filter(Boolean) as number[];
       if (order.user_id && usedPromotions.length > 0) {
         for (const promoId of usedPromotions) {
-          // Find the user_voucher record and set is_used back to false
+          // Find the user_voucher record and restore status to COLLECTED
           const usedVoucher = await tx.user_vouchers.findFirst({
             where: {
               user_id: order.user_id,
               promotion_id: promoId,
-              is_used: true
+              status: 'USED'
             },
             orderBy: {
               updated_at: 'desc' // Try to get the one most recently used
@@ -1000,7 +1139,7 @@ export class OrdersService {
           if (usedVoucher) {
             await tx.user_vouchers.update({
               where: { id: usedVoucher.id },
-              data: { is_used: false }
+              data: { status: 'COLLECTED', used_at: null }
             });
           }
         }
@@ -1052,7 +1191,7 @@ export class OrdersService {
 
   async findAll(params?: { status?: string }) {
     const { status } = params || {};
-    return this.prisma.orders.findMany({
+    const orders = await this.prisma.orders.findMany({
       where: status ? { status_code: status } : {},
       orderBy: { created_at: 'asc' }, // FIFO: Oldest First
       include: {
@@ -1069,10 +1208,15 @@ export class OrdersService {
         addresses: true,
       }
     });
+
+    return orders.map(o => ({
+      ...o,
+      addresses: this.decryptAddress(o.addresses)
+    }));
   }
 
   async findAllByUser(userId: number) {
-    return this.prisma.orders.findMany({
+    const orders = await this.prisma.orders.findMany({
       where: { user_id: userId },
       orderBy: { created_at: 'desc' },
       include: {
@@ -1096,6 +1240,11 @@ export class OrdersService {
         }
       }
     });
+
+    return orders.map(o => ({
+      ...o,
+      addresses: this.decryptAddress(o.addresses)
+    }));
   }
 
   // FIX: Allow Staff to see censored video if needed.
@@ -1131,6 +1280,15 @@ export class OrdersService {
     // FIX: Only censor if the order is NOT completed (User hasn't received it yet)
     // AND User is NOT Staff/Admin
     const isStaff = user?.role === 'ADMIN' || user?.role?.startsWith('STAFF');
+
+    // Audit Logging if staff accesses someone else's order
+    if (isStaff && order.user_id !== user?.userId) {
+      const requestingUserId = Number(user.userId || user.id || user.sub || user.user_id);
+      await this.logPiiAccess(requestingUserId, order.user_id, ['order_address'], user.ip);
+    }
+
+    // Decrypt Address
+    order.addresses = this.decryptAddress(order.addresses) as any;
 
     if (hasUnopened && order.status_code !== 'COMPLETED' && !isStaff) {
       // CENSOR THE VIDEO
@@ -1392,16 +1550,16 @@ export class OrdersService {
             });
             this.logger.log(`[Cancel] Restored ${item.quantity} quota to Flash Sale Item #${promoItem.item_id}`);
           }
-          
+
           // FIX: Restore Livestream Flash Sale Quota
           if (item.livestream_id) {
             const livePromo = await tx.livestream_products.findUnique({
-               where: { livestream_id_variant_id: { livestream_id: item.livestream_id, variant_id: item.variant_id } }
+              where: { livestream_id_variant_id: { livestream_id: item.livestream_id, variant_id: item.variant_id } }
             });
             if (livePromo && livePromo.flash_sale_price) {
               await tx.livestream_products.update({
-                 where: { livestream_id_variant_id: { livestream_id: item.livestream_id, variant_id: item.variant_id } },
-                 data: { flash_sale_stock: { increment: item.quantity } }
+                where: { livestream_id_variant_id: { livestream_id: item.livestream_id, variant_id: item.variant_id } },
+                data: { flash_sale_stock: { increment: item.quantity } }
               });
               this.logger.log(`[Cancel] Restored ${item.quantity} quota to Livestream Product Flash Sale!`);
             }
@@ -1440,7 +1598,7 @@ export class OrdersService {
             where: {
               user_id: order.user_id,
               promotion_id: promoId,
-              is_used: true
+              status: 'USED'
             },
             orderBy: {
               updated_at: 'desc'
@@ -1450,7 +1608,7 @@ export class OrdersService {
           if (usedVoucher) {
             await tx.user_vouchers.update({
               where: { id: usedVoucher.id },
-              data: { is_used: false }
+              data: { status: 'COLLECTED', used_at: null }
             });
           }
         }
@@ -1643,5 +1801,21 @@ export class OrdersService {
     }
 
     return { success: true, message: `Order ${trackingCode} completed and points added.` };
+  }
+  /** Log a PII access event when staff views sensitive order data */
+  private async logPiiAccess(accessedBy: number, targetUserId: number | null, fieldsViewed: string[], ip?: string) {
+    if (!targetUserId) return;
+    try {
+      await this.prisma.pii_access_logs.create({
+        data: {
+          accessed_by: accessedBy,
+          target_user_id: targetUserId,
+          fields_viewed: fieldsViewed.join(','),
+          ip_address: ip || null,
+        }
+      });
+    } catch (e) {
+      console.error('[PII Audit] Failed to write audit log:', e.message);
+    }
   }
 }
