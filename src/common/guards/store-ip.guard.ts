@@ -6,6 +6,7 @@ import {
     ForbiddenException,
     Logger,
 } from '@nestjs/common';
+// @ts-ignore
 import { Reflector } from '@nestjs/core';
 import { ALLOW_ANY_IP_KEY } from '../decorators/allow-any-ip.decorator';
 import { PrismaService } from '../../prisma/prisma.service';
