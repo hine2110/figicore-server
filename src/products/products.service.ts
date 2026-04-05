@@ -241,7 +241,7 @@ export class ProductsService {
         for (const variantDto of variants) {
           const isPreorder = productData.type_code === 'PREORDER';
 
-          if (!isPreorder && variantDto.cost_price >= variantDto.price && variantDto.price > 0) {
+          if (!isPreorder && variantDto.cost_price !== undefined && variantDto.cost_price >= variantDto.price && variantDto.price > 0) {
             throw new BadRequestException('Cost price must be less than retail price');
           }
 
