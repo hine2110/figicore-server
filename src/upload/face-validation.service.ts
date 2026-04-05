@@ -1,6 +1,4 @@
 import { Injectable, OnModuleInit, BadRequestException } from '@nestjs/common';
-// @ts-ignore - 'canvas' types might conflict slightly with DOM types in face-api
-import { Canvas, Image, ImageData, loadImage } from 'canvas';
 import * as path from 'path';
 // 1. Import bản pure JavaScript của TensorFlow để tránh lỗi C++ trên Windows
 import * as tf from '@tensorflow/tfjs'; 
@@ -11,9 +9,20 @@ export class FaceValidationService implements OnModuleInit {
   private faceapi: any = null;
   private nsfwModel: any = null;
   private mobilenetModel: any = null;
+  private canvasModule: any = null;
 
   async onModuleInit() {
     try {
+      // 🚀 BƯỚC QUAN TRỌNG: Load 'canvas' động để tránh crash server trên Windows/Node 22
+      try {
+        this.canvasModule = require('canvas');
+        console.log(`[FaceValidationService] ✅ Canvas module loaded successfully.`);
+      } catch (canvasErr: any) {
+        console.warn(`[FaceValidationService] ⚠️ Native 'canvas' module could not be loaded. AI validation will be skipped.`, canvasErr?.message);
+        this.isModelLoaded = false;
+        return; // Dừng khởi tạo AI nếu không có canvas
+      }
+
       // 1. Khởi tạo engine TensorFlow thuần JavaScript (CPU Backend)
       await tf.ready();
       console.log(`[FaceValidationService] ✅ TensorFlow.js (Pure JS) initialized.`);
@@ -33,7 +42,11 @@ export class FaceValidationService implements OnModuleInit {
       // 2. Khởi tạo Face-API bằng require (kích hoạt bẫy đã giăng ở trên)
       const faceApiModule = require('@vladmandic/face-api');
       this.faceapi = faceApiModule.default || faceApiModule;
-      this.faceapi.env.monkeyPatch({ Canvas, Image, ImageData } as any);
+      this.faceapi.env.monkeyPatch({ 
+        Canvas: this.canvasModule.Canvas, 
+        Image: this.canvasModule.Image, 
+        ImageData: this.canvasModule.ImageData 
+      } as any);
 
       // 3. CLEANUP: Khôi phục require về nguyên bản ngay lập tức
       // (Best Practice để tránh Side-effect làm hỏng các module khác của NestJS)
@@ -76,12 +89,12 @@ export class FaceValidationService implements OnModuleInit {
     }
 
     try {
-      const image = await loadImage(buffer);
+      const image = await this.canvasModule.loadImage(buffer);
 
       // Chuẩn bị Canvas dùng chung cho các model phân loại (NSFW & MobileNet)
       let canvas: any = null;
       if (this.nsfwModel || this.mobilenetModel) {
-        canvas = new Canvas(image.width, image.height);
+        canvas = new this.canvasModule.Canvas(image.width, image.height);
         const ctx = canvas.getContext('2d');
         ctx.drawImage(image as any, 0, 0, image.width, image.height);
       }
