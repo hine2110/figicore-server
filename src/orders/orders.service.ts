@@ -765,8 +765,11 @@ export class OrdersService {
         }
 
         // Send Email & Socket
-        if (order.users && order.users.email) {
-          this.mailService.sendOrderConfirmation(order.users, order).catch(e => this.logger.error("Mail Error", e));
+        if (order.users) {
+          const decryptedUser = this.decryptUser(order.users);
+          if (decryptedUser && decryptedUser.email) {
+            this.mailService.sendOrderConfirmation(decryptedUser, order).catch(e => this.logger.error("Mail Error", e));
+          }
         }
         this.eventsGateway.notifyNewOrder(order);
       }
@@ -942,8 +945,9 @@ export class OrdersService {
       }
 
       for (const order of updatedOrdersForAuction) {
-        if (order.users && order.users.email) {
-          this.mailService.sendOrderConfirmation(order.users, order).catch(e => console.error("Mail Error", e));
+        if (order.users) {
+          const decryptedUser = this.decryptUser(order.users);
+          this.mailService.sendOrderConfirmation(decryptedUser, order).catch(e => console.error("Mail Error", e));
         }
         this.eventsGateway.notifyNewOrder(order);
         // Emit Socket (livestream room) — ONLY on successful payment
@@ -1325,7 +1329,7 @@ export class OrdersService {
 
   // --- NEW: FETCH MY CONTRACTS ---
   async findMyContracts(userId: number) {
-    return this.prisma.preorder_contracts.findMany({
+    const contracts = await this.prisma.preorder_contracts.findMany({
       where: { user_id: userId },
       orderBy: { created_at: 'desc' },
       include: {
@@ -1344,6 +1348,14 @@ export class OrdersService {
         final_order: true
       }
     });
+
+    return contracts.map(c => ({
+      ...c,
+      deposit_order: c.deposit_order ? {
+        ...c.deposit_order,
+        addresses: this.decryptAddress(c.deposit_order.addresses)
+      } : null
+    }));
   }
 
   // --- NEW: PHASE 3 - FINAL PAYMENT LOGIC (SINGLE ORDER LIFECYCLE) ---
@@ -1460,6 +1472,11 @@ export class OrdersService {
     });
 
     if (!contract) throw new NotFoundException(`Contract #${contractId} not found`);
+
+    if (contract.deposit_order) {
+      (contract.deposit_order as any).addresses = this.decryptAddress(contract.deposit_order.addresses);
+    }
+
     return contract;
   }
 
@@ -1706,7 +1723,8 @@ export class OrdersService {
     // Trigger Shipping Email
     if (status === 'SHIPPING' && order.users) {
       // Run async
-      this.mailService.sendShippingUpdate(order.users, order);
+      const decryptedUser = this.decryptUser(order.users);
+      this.mailService.sendShippingUpdate(decryptedUser, order);
     }
 
     // Sync RETURNED to corresponding return_requests
@@ -1794,7 +1812,8 @@ export class OrdersService {
 
     // C. Trigger Delivery Success Email
     if (order.users) {
-      this.mailService.sendDeliverySuccess(order.users, order, earnedPoints);
+      const decryptedUser = this.decryptUser(order.users);
+      this.mailService.sendDeliverySuccess(decryptedUser, order, earnedPoints);
     }
 
     // D. Sync Auction Status if it is an auction order
