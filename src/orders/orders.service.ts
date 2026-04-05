@@ -612,7 +612,10 @@ export class OrdersService {
         addresses: true
       }
     });
-    return orders;
+    return orders.map(o => ({
+      ...o,
+      addresses: this.decryptAddress(o.addresses) as any
+    }));
   }
 
   // --- NEW: FETCH SINGLE ORDER BY CODE (or code prefix for auction orders) ---
@@ -642,7 +645,10 @@ export class OrdersService {
       throw new NotFoundException(`No order found with code: ${code}`);
     }
     // Return array for compatibility with Checkout.tsx (legacyAuction path sets fetchedOrders = res.data)
-    return orders;
+    return orders.map(o => ({
+      ...o,
+      addresses: this.decryptAddress(o.addresses) as any
+    }));
   }
 
   // --- NEW: PRIVATE HELPER TO APPLY VOUCHER TO A GROUP OF ORDERS ---
