@@ -1,4 +1,5 @@
 import { Injectable, CanActivate, ExecutionContext } from '@nestjs/common';
+// @ts-ignore
 import { Reflector } from '@nestjs/core';
 import { ROLES_KEY } from '../decorators/roles.decorator';
 
