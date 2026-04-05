@@ -4,6 +4,7 @@ import { UpdateShipmentDto } from './dto/update-shipment.dto';
 import { PrismaService } from '../prisma/prisma.service';
 import { HttpService } from '@nestjs/axios';
 import { ConfigService } from '@nestjs/config';
+import { EncryptionService } from '../common/encryption.service';
 import { firstValueFrom } from 'rxjs';
 
 @Injectable()
@@ -14,7 +15,8 @@ export class ShipmentsService {
   constructor(
     private prisma: PrismaService,
     private httpService: HttpService,
-    private configService: ConfigService
+    private configService: ConfigService,
+    private encryptionService: EncryptionService
   ) { }
 
   async calculateOrderWeight(orderId: number): Promise<number> {
@@ -117,8 +119,8 @@ export class ShipmentsService {
       from_district_id: 1534,  // Explicit: Da Nang Warehouse
 
       to_name: order.addresses.recipient_name,
-      to_phone: order.addresses.recipient_phone,
-      to_address: order.addresses.detail_address,
+      to_phone: this.encryptionService.decrypt(order.addresses.recipient_phone),
+      to_address: this.encryptionService.decrypt(order.addresses.detail_address),
       to_ward_code: order.addresses.ward_code,
       to_district_id: Number(order.addresses.district_id),
 
