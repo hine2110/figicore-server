@@ -50,8 +50,13 @@ export class OrdersService {
         // Fallback for plaintext
       }
     }
-    // Note: recipient_phone is usually stored in users table or addresses table? 
-    // In our schema, it's detail_address that is encrypted.
+    if (dec.recipient_phone) {
+      try {
+        dec.recipient_phone = this.encryption.decrypt(dec.recipient_phone);
+      } catch (e) {
+        // Fallback for plaintext
+      }
+    }
     return dec;
   }
 
