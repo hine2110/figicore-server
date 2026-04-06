@@ -477,7 +477,11 @@ export class ProductsService {
         product_variants: {
           include: {
             product_preorder_configs: true,
-            product_promotions: true
+            product_promotions: {
+              include: {
+                promotion_items: true
+              }
+            }
           }
         },
         product_blindboxes: true,
@@ -486,7 +490,17 @@ export class ProductsService {
     });
 
     // [NEW] Apply Dynamic Pricing & Dynamic Blindbox Stock
-    const results = await Promise.all(products.map(product => this.enrichProductData(product)));
+    const enrichedProducts = await Promise.all(products.map(product => this.enrichProductData(product)));
+
+    // [NEW] Hoist products with active promotions to the top
+    const results = enrichedProducts.sort((a, b) => {
+      const aSale = a.product_variants?.some((v: any) => v.is_on_sale);
+      const bSale = b.product_variants?.some((v: any) => v.is_on_sale);
+      if (aSale && !bSale) return -1;
+      if (!aSale && bSale) return 1;
+      return 0; // maintain original order
+    });
+
     return results;
   }
 
@@ -816,24 +830,49 @@ export class ProductsService {
   private isActivePromo(promo: any, now: Date = new Date()): boolean {
     if (!promo || !promo.is_active) return false;
 
-    const startDateBase = promo.start_date ? new Date(promo.start_date) : now;
-    const endDateBase = promo.end_date ? new Date(promo.end_date) : now;
-
-    const [startHH, startMM] = promo.start_time.split(':').map(Number);
-    const [endHH, endMM] = promo.end_time.split(':').map(Number);
-
-    const promoStart = new Date(startDateBase);
-    promoStart.setHours(startHH, startMM, 0, 0);
-
-    const promoEnd = new Date(endDateBase);
-    promoEnd.setHours(endHH, endMM, 59, 999);
-
-    if (promo.is_recurring && !promo.start_date && !promo.end_date) {
-      promoStart.setFullYear(now.getFullYear(), now.getMonth(), now.getDate());
-      promoEnd.setFullYear(now.getFullYear(), now.getMonth(), now.getDate());
+    // 1. Master Date Range Guard (Check if today is within the allowed month/range)
+    if (promo.start_date) {
+        const start = new Date(promo.start_date);
+        start.setHours(0, 0, 0, 0); // Include the full start day
+        if (now < start) return false;
+    }
+    if (promo.end_date) {
+        const end = new Date(promo.end_date);
+        end.setHours(23, 59, 59, 999); // Include the full end day
+        if (now > end) return false;
     }
 
-    return now >= promoStart && now <= promoEnd;
+    const startStr = promo.start_time || "00:00";
+    const endStr = promo.end_time || "23:59";
+
+    if (promo.is_recurring) {
+      // 2. Daily Time Window Check (e.g., 13:00 - 15:00 EVERY DAY)
+      const h = now.getHours();
+      const m = now.getMinutes();
+      const currentTimeStr = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+
+      if (startStr === endStr) return true; // 24h behavior
+      
+      if (startStr < endStr) {
+        // Normal Window (e.g., 10:00 - 12:00)
+        return currentTimeStr >= startStr && currentTimeStr < endStr;
+      } else {
+        // Overnight Window (e.g., 22:00 - 02:00)
+        return currentTimeStr >= startStr || currentTimeStr < endStr;
+      }
+    } else {
+      // 3. Non-recurring: Strict absolute LocalDateTime comparison
+      const [startHH, startMM] = startStr.split(':').map(Number);
+      const [endHH, endMM] = endStr.split(':').map(Number);
+
+      const promoStart = promo.start_date ? new Date(promo.start_date) : new Date(now);
+      promoStart.setHours(startHH, startMM, 0, 0);
+
+      const promoEnd = promo.end_date ? new Date(promo.end_date) : new Date(now);
+      promoEnd.setHours(endHH, endMM, 59, 999);
+
+      return now >= promoStart && now <= promoEnd;
+    }
   }
 
   // [NEW] Helper: Dynamic Pricing Logic (Flash Sale Time-based)
@@ -880,6 +919,16 @@ export class ProductsService {
           discount_percentage,
         };
       });
+
+      // [NEW] Sort variants so on-sale variants are first
+      product.product_variants.sort((a: any, b: any) => {
+        if (a.is_on_sale && !b.is_on_sale) return -1;
+        if (!a.is_on_sale && b.is_on_sale) return 1;
+        return 0;
+      });
+
+      // [NEW] Expose promotion natively to product root for frontend compatibility
+      product.product_promotions = product.product_variants[0]?.product_promotions || product.product_promotions;
     }
 
     return product;

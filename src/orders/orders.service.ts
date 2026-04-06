@@ -213,7 +213,22 @@ export class OrdersService {
       let usedDiscountPromotionId: number | null = null;
       let orderVoucherDiscountAmount = 0;
 
+      // ── Retail-only voucher guard ──────────────────────────────────────────
+      // Compute retail subtotal separately (excludes blindbox & preorder items)
+      const retailSubtotal = validatedItems
+        .filter(item => {
+          const tc = item.variant?.products?.type_code;
+          return tc !== 'BLINDBOX' && tc !== 'PREORDER' && !item.variant?.product_preorder_configs;
+        })
+        .reduce((sum, item) => sum + (item._backendVerifiedPrice ?? Number(item.variant.price)) * Number(item.quantity), 0);
+
+      const hasOnlyNonRetailItems = retailSubtotal === 0 && validatedItems.length > 0;
+
       if (discountVoucherCode) {
+        if (hasOnlyNonRetailItems) {
+          throw new BadRequestException('Discount vouchers can only be applied to retail products. Blind Box and Pre-Order items are not eligible.');
+        }
+
         const userDiscountVoucher = await this.prisma.user_vouchers.findFirst({
           where: {
             user_id: userId,
@@ -227,17 +242,18 @@ export class OrdersService {
           if (userDiscountVoucher.promotions.start_date && new Date(userDiscountVoucher.promotions.start_date) > now) {
             throw new BadRequestException("This discount voucher is not yet active.");
           }
-          if (userDiscountVoucher.promotions.min_order_value && cartTotalAmountDiscounted < Number(userDiscountVoucher.promotions.min_order_value)) {
-            throw new BadRequestException("Order total does not meet the minimum required for this voucher.");
+          // Validate min_order_value against RETAIL subtotal only
+          if (userDiscountVoucher.promotions.min_order_value && retailSubtotal < Number(userDiscountVoucher.promotions.min_order_value)) {
+            throw new BadRequestException("Order total (retail items only) does not meet the minimum required for this voucher.");
           }
           usedDiscountPromotionId = userDiscountVoucher.promotion_id;
 
           const discountType = userDiscountVoucher.promotions.discount_type;
           const discountValue = Number(userDiscountVoucher.promotions.discount_value);
 
-          // Calculate actual discount money
+          // Calculate actual discount money based on retail subtotal
           if (discountType === 'PERCENTAGE') {
-            orderVoucherDiscountAmount = cartTotalAmountDiscounted * (discountValue / 100);
+            orderVoucherDiscountAmount = retailSubtotal * (discountValue / 100);
           } else if (discountType === 'FIXED_AMOUNT') {
             orderVoucherDiscountAmount = discountValue;
           }
@@ -251,6 +267,10 @@ export class OrdersService {
       let isVoucherFreeShip = false;
 
       if (freeShipVoucherCode) {
+        if (hasOnlyNonRetailItems) {
+          throw new BadRequestException('Free shipping vouchers can only be applied to retail products. Blind Box and Pre-Order items are not eligible.');
+        }
+
         const userFreeShipVoucher = await this.prisma.user_vouchers.findFirst({
           where: {
             user_id: userId,
@@ -261,8 +281,8 @@ export class OrdersService {
         });
 
         if (userFreeShipVoucher && (!userFreeShipVoucher.promotions.end_date || userFreeShipVoucher.promotions.end_date > now)) {
-          if (userFreeShipVoucher.promotions.min_order_value && cartTotalAmountDiscounted < Number(userFreeShipVoucher.promotions.min_order_value)) {
-            throw new BadRequestException("Order total does not meet minimum required for free shipping.");
+          if (userFreeShipVoucher.promotions.min_order_value && retailSubtotal < Number(userFreeShipVoucher.promotions.min_order_value)) {
+            throw new BadRequestException("Order total (retail items only) does not meet minimum required for free shipping.");
           }
           usedFreeShipPromotionId = userFreeShipVoucher.promotion_id;
           isVoucherFreeShip = true;
@@ -270,6 +290,7 @@ export class OrdersService {
           throw new BadRequestException("Free shipping voucher invalid or expired.");
         }
       }
+
 
       const paymentRefCode = `PAY${Date.now()}${Math.floor(Math.random() * 1000)}`;
 
@@ -280,7 +301,7 @@ export class OrdersService {
         const blindboxItems: any[] = []; // NEW
 
         // Pre-fetch variants to classify
-        for (const item of items) {
+        for (const item of validatedItems) {
           const variant = await tx.product_variants.findUnique({
             where: { variant_id: item.variant_id },
             include: {
@@ -420,7 +441,7 @@ export class OrdersService {
           const rtOrderItemsData: any[] = [];
 
           for (const rItem of retailItems) {
-            const { variant, quantity, price, _allocated_product_id, _is_opened, _metadata } = rItem;
+            const { variant, quantity, price, _allocated_product_id, _is_opened, _metadata, _backendVerifiedPrice } = rItem;
             const livestreamId = rItem.livestreamId ? Number(rItem.livestreamId) : null;
 
             // --- 1. ATOMIC RETAIL STOCK DEDUCTION (Global Pool) ---
@@ -437,7 +458,8 @@ export class OrdersService {
             }
 
             // --- 2. AUTHORITATIVE PRICE CALCULATION (Zero-Trust) ---
-            let authoritativePrice = Number(variant.price); // Base Retail
+            // Fix: Fallback to _backendVerifiedPrice to respect AI Clearance & Promotions
+            let authoritativePrice = _backendVerifiedPrice !== undefined ? _backendVerifiedPrice : Number(variant.price);
             let shouldCheckFlashStock = false;
 
             if (livestreamId) {
@@ -458,6 +480,7 @@ export class OrdersService {
 
             // SECURITY: Reject if price deviates
             if (Math.abs(Number(price) - authoritativePrice) > 1) {
+              this.logger.error(`[PRICE MISMATCH] SKU: ${variant.sku} | Client Sent: ${price} | Backend Expected: ${authoritativePrice} | _backendVerifiedPrice: ${_backendVerifiedPrice} | LivestreamId: ${livestreamId}`);
               throw new BadRequestException(`Product price for ${variant.sku} has changed. Please update your cart.`);
             }
 
