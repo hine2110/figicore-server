@@ -65,6 +65,13 @@ export class ProductPromotionsController {
     return this.service.applyToVariants(id, body.variant_ids);
   }
 
+  @Patch(':id/resume')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('MANAGER')
+  resume(@Param('id', ParseIntPipe) id: number) {
+    return this.service.resume(id);
+  }
+
   @Delete(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('MANAGER')
