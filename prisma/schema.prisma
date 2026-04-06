@@ -221,6 +221,7 @@ model notifications {
   user_id         Int
   title           String?   @db.VarChar(255)
   content         String?
+  target_url      String?   @db.Text
   is_read         Boolean?  @default(false)
   created_at      DateTime? @default(now()) @db.Timestamp(6)
   updated_at      DateTime? @default(now()) @db.Timestamp(6)

@@ -84,7 +84,6 @@ export class PromotionsService {
 
   async findAll() {
     return this.prisma.promotions.findMany({
-      where: { deleted_at: null },
       orderBy: { created_at: 'desc' },
     });
   }
@@ -115,13 +114,28 @@ export class PromotionsService {
 
     return this.prisma.promotions.update({
       where: { promotion_id: id },
-      data: updatePromotionDto,
+      data: {
+        ...updatePromotionDto,
+        // Never allow manager update to reset the collection counter
+        collected_quantity: undefined,
+        // Never allow manager update to deactivate via regular update endpoint
+        // (deactivation only happens via cron or remove())
+        is_active: updatePromotionDto.is_active === false ? existing.is_active : (updatePromotionDto.is_active ?? existing.is_active),
+      },
+    });
+  }
+
+  async resume(id: number) {
+    return this.prisma.promotions.update({
+      where: { promotion_id: id },
+      data: { is_active: true },
     });
   }
 
   async remove(id: number) {
-    return this.prisma.promotions.delete({
+    return this.prisma.promotions.update({
       where: { promotion_id: id },
+      data: { is_active: false },
     });
   }
 
@@ -267,7 +281,7 @@ export class PromotionsService {
     return this.prisma.user_vouchers.findMany({
       where: {
         user_id: userId,
-        status: { in: ['COLLECTED', 'USED'] },
+        status: { in: ['COLLECTED', 'USED', 'EXPIRED'] },
       },
       include: {
         promotions: {

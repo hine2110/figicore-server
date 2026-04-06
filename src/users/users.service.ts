@@ -14,6 +14,7 @@ import { MailService } from '../mail/mail.service';
 import * as crypto from 'crypto';
 import { EncryptionService } from '../common/encryption.service';
 import { GetAuditLogDto } from './dto/get-audit-log.dto';
+import { NotificationsService } from '../notifications/notifications.service';
 
 @Injectable()
 export class UsersService {
@@ -23,6 +24,7 @@ export class UsersService {
     private jwtService: JwtService,
     private mailService: MailService,
     private encryption: EncryptionService,
+    private notifications: NotificationsService,
   ) { }
 
   /** Log a PII access event when staff views sensitive customer data */
@@ -141,12 +143,16 @@ export class UsersService {
 
 
 
-  async findOne(id: number) {
+  async findOne(id: number, sanitize = true) {
     const user = await this.prisma.users.findUnique({
       where: { user_id: id },
       include: { customers: true },
     });
-    return this.sanitizeUser(this.decryptUser(user));
+    
+    if (!user) return null;
+    
+    const decrypted = this.decryptUser(user);
+    return sanitize ? this.sanitizeUser(decrypted) : decrypted;
   }
 
   async remove(id: number) {
@@ -452,7 +458,28 @@ export class UsersService {
       });
     }
 
-    // 2. Role-based Logic
+    // 2. Check for duplicates before creating request (PII fields)
+    if (changes.email || changes.phone) {
+      const encryptedEmail = changes.email ? this.encryption.encryptDeterministic(changes.email) : undefined;
+      const encryptedPhone = changes.phone ? this.encryption.encryptDeterministic(changes.phone) : undefined;
+
+      const duplicate = await this.prisma.users.findFirst({
+        where: {
+          user_id: { not: userId },
+          OR: [
+            encryptedEmail ? { email: encryptedEmail } : undefined,
+            encryptedPhone ? { phone: encryptedPhone } : undefined
+          ].filter(Boolean) as Prisma.usersWhereInput[]
+        }
+      });
+
+      if (duplicate) {
+        const field = (encryptedEmail && duplicate.email === encryptedEmail) ? 'Email' : 'Số điện thoại';
+        throw new BadRequestException(`${field} này đã được sử dụng bởi một tài khoản khác.`);
+      }
+    }
+
+    // 3. Role-based Logic
     if (user.role_code === 'CUSTOMER') {
       // Auto-update for customers
       const updateData: any = {};
@@ -477,13 +504,34 @@ export class UsersService {
       throw new BadRequestException('You verify have a pending profile update request.');
     }
 
-    return this.prisma.profile_update_requests.create({
+    const request = await this.prisma.profile_update_requests.create({
       data: {
         user_id: userId,
         changed_data: changes,
         status_code: 'PENDING'
       }
     });
+
+    // 4. Notify Admins/Managers about the new request
+    const admins = await this.prisma.users.findMany({
+      where: {
+        role_code: { in: ['SUPER_ADMIN'] },
+        status_code: 'ACTIVE'
+      },
+      select: { user_id: true }
+    });
+
+    for (const admin of admins) {
+      await this.notifications.create(
+        admin.user_id,
+        'Yêu cầu thay đổi thông tin cá nhân',
+        `Nhân viên ${user.full_name} đã gửi yêu cầu thay đổi thông tin cá nhân. Vui lòng xem xét.`,
+        '/admin/approvals',
+        true
+      );
+    }
+
+    return request;
   }
 
   async getPendingRequests() {
@@ -545,7 +593,7 @@ export class UsersService {
     if (!request) throw new NotFoundException('Request not found');
     if (request.status_code !== 'PENDING') throw new BadRequestException('Request already resolved');
 
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       // 1. Update Request Status
       const updatedRequest = await tx.profile_update_requests.update({
         where: { request_id: requestId },
@@ -563,6 +611,24 @@ export class UsersService {
         if (changedData['dob']) updateData.dob = new Date(changedData['dob'] as string);
 
         if (Object.keys(updateData).length > 0) {
+          // Double check for duplicates before applying (to be safe)
+          if (updateData.email || updateData.phone) {
+             const duplicate = await tx.users.findFirst({
+               where: {
+                 user_id: { not: request.user_id },
+                 OR: [
+                   updateData.email ? { email: updateData.email } : undefined,
+                   updateData.phone ? { phone: updateData.phone } : undefined
+                 ].filter(Boolean) as Prisma.usersWhereInput[]
+               }
+             });
+
+             if (duplicate) {
+               const field = (updateData.email && duplicate.email === updateData.email) ? 'Email' : 'Số điện thoại';
+               throw new BadRequestException(`${field} này đã được sử dụng bởi một tài khoản khác.`);
+             }
+          }
+
           await tx.users.update({
             where: { user_id: request.user_id },
             data: updateData
@@ -570,11 +636,9 @@ export class UsersService {
         }
 
         // Handle Address Update (separate table)
-        // Check both potential keys (frontend might send 'address' or 'default_address')
         const newAddress = (changedData['address'] || changedData['default_address']) as string;
 
         if (newAddress) {
-          // Find default address to update
           const defaultAddress = await tx.addresses.findFirst({
             where: { user_id: request.user_id, is_default: true }
           });
@@ -585,7 +649,6 @@ export class UsersService {
               data: { detail_address: this.encryption.encrypt(newAddress) }
             });
           } else {
-            // Create new address with fallback values for required fields
             await tx.addresses.create({
               data: {
                 user_id: request.user_id,
@@ -604,6 +667,32 @@ export class UsersService {
 
       return updatedRequest;
     });
+
+    // 3. Notify Employee about resolution (Moved OUTSIDE transaction to avoid P2028 timeout)
+    try {
+      const statusText = status === 'APPROVED' ? 'Duyệt' : 'Từ chối';
+      const roleLinks: Record<string, string> = {
+        'SUPER_ADMIN': '/admin/profile',
+        'MANAGER': '/manager/profile',
+        'STAFF_INVENTORY': '/warehouse/profile',
+        'STAFF_POS': '/pos/profile',
+        'CUSTOMER': '/customer/profile'
+      };
+      
+      const targetUrl = roleLinks[request.users.role_code] || '/manager/profile';
+
+      await this.notifications.create(
+        request.user_id,
+        'Cập nhật yêu cầu thay đổi thông tin',
+        `Yêu cầu thay đổi thông tin cá nhân của bạn đã được ${statusText}.`,
+        targetUrl,
+        true
+      );
+    } catch (err) {
+      console.error('[Notification Error] Failed to notify user after request resolution:', err.message);
+    }
+
+    return result;
   }
 
   async getPiiAccessLogs(query: GetAuditLogDto) {
