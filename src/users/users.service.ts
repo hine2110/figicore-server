@@ -443,10 +443,10 @@ export class UsersService {
     const user = await this.prisma.users.findUnique({ where: { user_id: userId } });
     if (!user) throw new NotFoundException('User not found');
 
-    // 1. Verify OTP only if sensitive fields (PII) are being changed
+    // 1. Verify OTP only if sensitive fields (PII) are being changed (Customers only)
     const isSensitiveUpdate = changes.phone || changes.email;
     
-    if (isSensitiveUpdate) {
+    if (isSensitiveUpdate && user.role_code === 'CUSTOMER') {
       if (user.otp_code !== otp || !user.otp_expires_at || new Date() > user.otp_expires_at) {
         throw new BadRequestException('Invalid or expired OTP for sensitive information update.');
       }
