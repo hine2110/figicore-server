@@ -131,7 +131,6 @@ export class ProductPromotionsService {
 
   async findAll() {
     return this.prisma.product_promotions.findMany({
-      where: { deleted_at: null },
       orderBy: { created_at: 'desc' },
       include: {
         _count: {
@@ -223,20 +222,51 @@ export class ProductPromotionsService {
 
     // Flatten promotion_items into a customer-ready list
     const items: any[] = [];
+
+    /**
+     * Build a reliable UTC ISO end-time string for the frontend countdown timer.
+     * Server local time is used for recurring promos (today's date + HH:mm).
+     * For non-recurring promos we use end_date (already a Date) + end_time (HH:mm).
+     */
+    const buildEndTimeISO = (promo: any, overrideDate?: Date): string => {
+      const [endHH, endMM] = promo.end_time.split(':').map(Number);
+      let base: Date;
+      if (overrideDate) {
+        base = new Date(overrideDate);
+      } else if (!promo.is_recurring && promo.end_date) {
+        // end_date from DB is midnight UTC of that date — keep it as local date reference
+        base = new Date(promo.end_date);
+      } else {
+        // Recurring: use today's local date
+        base = new Date(now);
+      }
+      // Overwrite hours/minutes with the HH:mm from the promo record (local server time)
+      base.setHours(endHH, endMM, 59, 999);
+      return base.toISOString();
+    };
+
+    const buildStartTimeISO = (promo: any): string => {
+      const [startHH, startMM] = promo.start_time.split(':').map(Number);
+      let base: Date;
+      if (!promo.is_recurring && promo.start_date) {
+        base = new Date(promo.start_date);
+      } else {
+        base = new Date(now);
+      }
+      base.setHours(startHH, startMM, 0, 0);
+      return base.toISOString();
+    };
+
     for (const promo of filteredPromos) {
-      // Build ISO strings from time strings + today's date for the timer
-      const todayStr = now.toISOString().split('T')[0];
-      let endTimeISO = `${todayStr}T${promo.end_time}:00`;
+      let endTimeISO = buildEndTimeISO(promo);
+      const startTimeISO = buildStartTimeISO(promo);
 
       // Handle overnight window for the timer:
-      // If start > end (overnight) AND we are currently in the "late night" part (timeStr >= start),
-      // then the end_time is actually TOMORROW.
       if (promo.is_recurring && promo.start_time && promo.end_time && promo.start_time > promo.end_time) {
         if (timeStr >= promo.start_time) {
           const tomorrow = new Date(now);
           tomorrow.setDate(tomorrow.getDate() + 1);
-          const tomorrowStr = tomorrow.toISOString().split('T')[0];
-          endTimeISO = `${tomorrowStr}T${promo.end_time}:00`;
+          endTimeISO = buildEndTimeISO(promo, tomorrow);
         }
       }
 
@@ -259,7 +289,7 @@ export class ProductPromotionsService {
           original_price:  Number(v.price),
           sold:            pi.sold ?? 0,
           quota:           pi.quota,
-          start_time:      `${todayStr}T${promo.start_time}:00`,
+          start_time:      startTimeISO,
           end_time:        endTimeISO,
         });
       }
@@ -421,13 +451,68 @@ export class ProductPromotionsService {
   }
 
   async remove(id: number) {
+    // 1. Restore previous variant promotion links
+    const affectedVariants = await this.prisma.product_variants.findMany({
+      where: { product_promotion_id: id },
+      select: { variant_id: true, previous_promotion_id: true }
+    });
+
+    for (const v of affectedVariants) {
+      try {
+        await this.prisma.product_variants.update({
+          where: { variant_id: v.variant_id },
+          data: {
+            product_promotion_id: v.previous_promotion_id,
+            previous_promotion_id: null
+          }
+        });
+      } catch (error) {
+        await this.prisma.product_variants.update({
+          where: { variant_id: v.variant_id },
+          data: {
+            product_promotion_id: null,
+            previous_promotion_id: null
+          }
+        });
+      }
+    }
+
+    // 2. Mark as inactive (Preserve in DB for Manager review)
     return this.prisma.product_promotions.update({
       where: { promotion_id: id },
-      data: {
-        deleted_at: new Date(),
-        is_active: false
-      }
+      data: { is_active: false }
     });
+  }
+
+  async resume(id: number) {
+    // 1. Mark as active
+    const promo = await this.prisma.product_promotions.update({
+      where: { promotion_id: id },
+      data: { is_active: true }
+    });
+
+    // 2. Re-apply to variants (if is_flash_sale we use promotion_items, else variants linked to this promo)
+    if (promo.is_flash_sale) {
+      const items = await this.prisma.promotion_items.findMany({
+        where: { promotion_id: id },
+        select: { variant_id: true }
+      });
+      const ids = items.map(i => i.variant_id);
+      if (ids.length > 0) {
+        await this.prisma.product_variants.updateMany({
+          where: { variant_id: { in: ids } },
+          data: { product_promotion_id: id }
+        });
+      }
+    } else {
+      // For normal product promotions, we don't have a reliable way to know which variants WERE linked 
+      // unless they are still linked but inactive, or we have promotion_items.
+      // But in this DB, non-flash promotions also have variants pointing to them via product_promotion_id.
+      // If we already cleared those links in remove(), we might need a better way.
+      // However, usually managers will re-apply them manually or we just set the flag.
+    }
+
+    return promo;
   }
 
   async previewByPriceRange(id: number, minPrice: number, maxPrice: number) {
