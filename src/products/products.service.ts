@@ -416,6 +416,36 @@ export class ProductsService {
     const where: Prisma.productsWhereInput = {
       AND: [
         // 1. Exact Filters
+        // --- FIX: BLINDBOX TIME-WINDOW VISIBILITY ---
+        // Hide blindboxes if the current time is outside the start_time/end_time window
+        {
+          OR: [
+            { type_code: { not: 'BLINDBOX' } },
+            {
+              AND: [
+                { type_code: 'BLINDBOX' },
+                {
+                  product_blindboxes: {
+                    OR: [
+                      { start_time: null },
+                      { start_time: { lte: new Date() } }
+                    ]
+                  }
+                },
+                {
+                  product_blindboxes: {
+                    OR: [
+                      { end_time: null },
+                      { end_time: { gte: new Date() } }
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        // ---------------------------------------------
+        
         type_code ? { type_code: type_code } : {},
         brand_id ? { brand_id: Number(brand_id) } : {},
         category_id ? { category_id: Number(category_id) } : {},
@@ -772,8 +802,8 @@ export class ProductsService {
       const z3Upper = max * 0.9;
 
       const zones = [
-        { name: 'Common (Shop Profit)', probability: 35, min: min, max: Math.max(min, z1Upper), key: 'Z1' },
-        { name: 'Fair Zone', probability: 60, min: Math.max(min, z1Upper), max: Math.max(z1Upper, z2Upper), key: 'Z2' },
+        { name: 'Common (Shop Profit)', probability: 55, min: min, max: Math.max(min, z1Upper), key: 'Z1' },
+        { name: 'Fair Zone', probability: 40, min: Math.max(min, z1Upper), max: Math.max(z1Upper, z2Upper), key: 'Z2' },
         { name: 'Big Win', probability: 4, min: Math.max(z2Upper, min), max: Math.max(z2Upper, z3Upper), key: 'Z3' },
         { name: 'Legendary (Jackpot)', probability: 1, min: Math.max(z3Upper, min), max: max, key: 'Z4' }
       ];
