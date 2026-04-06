@@ -50,6 +50,11 @@ export class PromotionsController {
     return this.promotionsService.update(+id, updatePromotionDto);
   }
 
+  @Patch(':id/resume')
+  resume(@Param('id') id: string) {
+    return this.promotionsService.resume(+id);
+  }
+
   @Delete(':id')
   remove(@Param('id') id: string) {
     return this.promotionsService.remove(+id);

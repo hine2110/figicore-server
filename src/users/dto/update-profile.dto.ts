@@ -1,4 +1,4 @@
-import { IsOptional, IsString, IsUrl, MaxLength, IsDateString } from 'class-validator';
+import { IsEmail, IsNotEmpty, MinLength, Matches, IsOptional, MaxLength, IsUrl, IsDateString, IsString } from 'class-validator';
 
 export class UpdateProfileDto {
   @IsOptional()
@@ -6,9 +6,7 @@ export class UpdateProfileDto {
   @MaxLength(100)
   full_name?: string;
 
-  @IsOptional()
-  @IsString()
-  @MaxLength(15)
+  @Matches(/^0\d{9}$/, { message: 'Phone must be exactly 10 digits and start with 0' })
   phone?: string;
 
   @IsOptional()
