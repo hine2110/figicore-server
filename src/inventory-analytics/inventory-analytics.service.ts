@@ -268,7 +268,12 @@ export class InventoryAnalyticsService {
    */
   async getGlobalInventory() {
     const inventory = await this.prisma.product_variants.findMany({
-      where: { deleted_at: null },
+      where: { 
+        deleted_at: null,
+        products: {
+          type_code: 'RETAIL'
+        }
+      },
       select: {
         variant_id: true,
         sku: true,

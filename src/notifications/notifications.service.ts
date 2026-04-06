@@ -11,13 +11,14 @@ export class NotificationsService {
     private eventsGateway: EventsGateway,
   ) {}
 
-  async create(userId: number, title: string, content: string, broadcastSocket: boolean = true) {
+  async create(userId: number, title: string, content: string, targetUrl?: string, broadcastSocket: boolean = true) {
     try {
       const notification = await this.prisma.notifications.create({
         data: {
           user_id: userId,
           title,
           content,
+          target_url: targetUrl,
           is_read: false,
         },
       });
