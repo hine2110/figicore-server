@@ -13,12 +13,15 @@ import { ConfigService, ConfigModule } from '@nestjs/config';
             useFactory: async (config: ConfigService) => ({
                 transport: {
                     host: config.get('MAIL_HOST', 'smtp.gmail.com'),
-                    port: 465,
-                    secure: true,
+                    port: Number(config.get('MAIL_PORT', 587)),
+                    secure: config.get('MAIL_PORT') === '465', // Chỉ True nếu là 465
                     auth: {
                         user: config.get('MAIL_USER'),
                         pass: config.get('MAIL_PASS'),
                     },
+                    tls: {
+                        rejectUnauthorized: false // Fix common SSL handshake issues
+                    }
                 },
                 defaults: {
                     from: config.get('MAIL_FROM', '"FigiCore" <noreply@figicore.com>'),
