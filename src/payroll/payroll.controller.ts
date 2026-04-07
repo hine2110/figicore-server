@@ -1,6 +1,6 @@
 import { Controller, Post, Get, Body, UseGuards, Request, Query, Param, ParseIntPipe, Patch, Delete } from '@nestjs/common';
 import { PayrollService } from './payroll.service';
-import { UpdateBaseSalaryDto, UpdateSalaryConfigDto, RunPayrollDto, UpdatePayrollStatusDto, CreateSalaryConfigDto, AddAdjustmentDto } from './dto/update-salary.dto';
+import { UpdateBaseSalaryDto, UpdateSalaryConfigDto, RunPayrollDto, UpdatePayrollStatusDto, CreateSalaryConfigDto, AddAdjustmentDto, SetPaymentWindowDto, SignPayrollDto } from './dto/update-salary.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -33,7 +33,15 @@ export class PayrollController {
     @Roles('SUPER_ADMIN', 'MANAGER')
     async runMonthlyPayroll(@Body() dto: RunPayrollDto, @Request() req: any) {
         const reviewerId = Number(req.user.userId || req.user.id || req.user.sub || req.user.user_id);
-        return this.payrollService.runMonthlyPayroll(dto.userId, dto.month, dto.year, reviewerId);
+
+        return this.payrollService.runMonthlyPayroll(
+            dto.userId,
+            dto.month,
+            dto.year,
+            reviewerId,
+            dto.payment_start_date,
+            dto.payment_end_date
+        );
     }
 
     // ADMIN/MANAGER: Lấy danh sách toàn bộ phiếu lương của công ty
@@ -73,6 +81,16 @@ export class PayrollController {
         @Param('itemId', ParseIntPipe) itemId: number
     ) {
         return this.payrollService.deletePayrollItem(payrollId, itemId);
+    }
+
+    @Patch(':id/payment-window')
+    @UseGuards(RolesGuard)
+    @Roles('SUPER_ADMIN', 'MANAGER')
+    async setPaymentWindow(
+        @Param('id', ParseIntPipe) id: number,
+        @Body() dto: SetPaymentWindowDto
+    ) {
+        return this.payrollService.setPaymentWindow(id, dto.payment_start_date, dto.payment_end_date);
     }
 
     // --- API QUẢN LÝ LUẬT PHẠT (CHỈ MANAGER/ADMIN) ---
@@ -144,5 +162,15 @@ export class PayrollController {
     @Roles('SUPER_ADMIN', 'MANAGER')
     async addPayrollAdjustment(@Param('id', ParseIntPipe) id: number, @Body() dto: AddAdjustmentDto) {
         return this.payrollService.addPayrollAdjustment(id, dto.title, dto.amount, dto.isAddition ?? true);
+    }
+
+    @Post('my-payrolls/:id/sign')
+    async signMyPayroll(
+        @Request() req: any,
+        @Param('id', ParseIntPipe) id: number,
+        @Body() dto: SignPayrollDto
+    ) {
+        const userId = Number(req.user.userId || req.user.id || req.user.sub || req.user.user_id);
+        return this.payrollService.signMyPayroll(userId, id, dto.signature_data);
     }
 }

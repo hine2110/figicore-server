@@ -133,6 +133,12 @@ model employees {
   base_salary    Decimal @default(0) @db.Decimal(15, 2)
 
   start_date         DateTime?            @db.Date
+
+  bank_name          String?   @db.VarChar(100)
+  bank_account_no    String?   @db.VarChar(50)
+  bank_account_name  String?   @db.VarChar(100)
+  bank_qr_code_url   String?   @db.Text
+  
   created_at         DateTime?            @default(now()) @db.Timestamp(6)
   updated_at         DateTime?            @default(now()) @db.Timestamp(6)
   deleted_at         DateTime?            @db.Timestamp(6)
@@ -340,6 +346,12 @@ model payrolls {
   status_code      String?    @default("DRAFT") @db.VarChar(20)
   reviewer_id      Int?
   approver_id      Int?
+  
+  payment_start_date DateTime?  @db.Timestamp(6)
+  payment_end_date   DateTime?  @db.Timestamp(6)
+  signature_data     String?    @db.Text
+  signed_at          DateTime?  @db.Timestamp(6)
+
   created_at       DateTime?  @default(now()) @db.Timestamp(6)
   updated_at       DateTime?  @default(now()) @db.Timestamp(6)
   deleted_at       DateTime?  @db.Timestamp(6)
