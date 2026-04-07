@@ -8,6 +8,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { AllowAnyIp } from '../common/decorators/allow-any-ip.decorator';
+import { UpdateBankInfoDto } from './dto/update-profile.dto';
 
 @Controller('users')
 export class UsersController {
@@ -74,19 +75,19 @@ export class UsersController {
   @Roles('SUPER_ADMIN', 'MANAGER')
   @UseInterceptors(FileInterceptor('file'))
   async importZip(@UploadedFile() file: Express.Multer.File) {
-      if (!file) throw new BadRequestException('File is required');
-      
-      // Basic MIME check, though extensions can vary. 
-      // zip, x-zip-compressed, octet-stream are common.
-      const allowedMimes = ['application/zip', 'application/x-zip-compressed', 'application/octet-stream', 'application/x-zip'];
-      if (!allowedMimes.includes(file.mimetype)) {
-          // Fallback check on extension if mime is generic octet-stream
-          if (!file.originalname.match(/\.(zip)$/i)) {
-             throw new BadRequestException('Invalid file type. Only ZIP files are allowed.');
-          }
-      }
+    if (!file) throw new BadRequestException('File is required');
 
-      return this.usersService.importUsersFromZip(file);
+    // Basic MIME check, though extensions can vary. 
+    // zip, x-zip-compressed, octet-stream are common.
+    const allowedMimes = ['application/zip', 'application/x-zip-compressed', 'application/octet-stream', 'application/x-zip'];
+    if (!allowedMimes.includes(file.mimetype)) {
+      // Fallback check on extension if mime is generic octet-stream
+      if (!file.originalname.match(/\.(zip)$/i)) {
+        throw new BadRequestException('Invalid file type. Only ZIP files are allowed.');
+      }
+    }
+
+    return this.usersService.importUsersFromZip(file);
   }
 
   @Get('preview-email')
@@ -142,5 +143,12 @@ export class UsersController {
   @Delete(':id')
   remove(@Param('id') id: string) {
     return this.usersService.remove(+id);
+  }
+
+  @Patch('profile/bank-info')
+  @UseGuards(AuthGuard('jwt'))
+  updateBankInfo(@Req() req, @Body() data: UpdateBankInfoDto) {
+    // API này không cần qua Admin duyệt, cập nhật thẳng vào bảng employees
+    return this.usersService.updateBankInfo(req.user.user_id, data);
   }
 }
