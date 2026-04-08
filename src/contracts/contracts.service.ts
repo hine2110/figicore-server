@@ -2,12 +2,15 @@ import { Injectable, BadRequestException, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateFinalPaymentDto } from './dto/create-final-payment.dto';
 
+import { EncryptionService } from '../common/encryption.service';
+
 @Injectable()
 export class ContractsService {
     private readonly logger = new Logger(ContractsService.name);
 
     constructor(
-        private prisma: PrismaService
+        private prisma: PrismaService,
+        private encryption: EncryptionService
     ) { }
 
     async createFinalPayment(userId: number, dto: CreateFinalPaymentDto) {
@@ -142,11 +145,24 @@ export class ContractsService {
             throw new BadRequestException("Contract not found or access denied");
         }
 
+        if (contract.deposit_order) {
+            (contract.deposit_order as any).addresses = this.decryptAddress(contract.deposit_order.addresses);
+        }
+
         return contract;
     }
 
+    private decryptAddress(address: any): any {
+        if (!address) return address;
+        return {
+            ...address,
+            detail_address: address.detail_address ? this.encryption.decrypt(address.detail_address) : address.detail_address,
+            recipient_phone: address.recipient_phone ? this.encryption.decrypt(address.recipient_phone) : address.recipient_phone,
+        };
+    }
+
     async getMyContracts(userId: number) {
-        return this.prisma.preorder_contracts.findMany({
+        const contracts = await this.prisma.preorder_contracts.findMany({
             where: { user_id: userId },
             include: {
                 product_variants: {
@@ -168,5 +184,13 @@ export class ContractsService {
             },
             orderBy: { created_at: 'desc' }
         });
+
+        return contracts.map(c => ({
+            ...c,
+            deposit_order: c.deposit_order ? {
+                ...c.deposit_order,
+                addresses: this.decryptAddress(c.deposit_order.addresses)
+            } : null
+        }));
     }
 }

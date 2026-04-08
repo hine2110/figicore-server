@@ -58,6 +58,11 @@ class ProductVariantDto {
     @IsNumber()
     @IsOptional()
     @Min(0)
+    cost_price?: number;
+
+    @IsNumber()
+    @IsOptional()
+    @Min(0)
     stock_available?: number;
 
     @IsNumber()
@@ -139,6 +144,14 @@ class ProductBlindboxDto {
     @IsNumber()
     @IsOptional()
     target_margin?: number;
+
+    @IsString()
+    @IsOptional()
+    start_time?: string;
+
+    @IsString()
+    @IsOptional()
+    end_time?: string;
 }
 
 class ProductPreorderDto {

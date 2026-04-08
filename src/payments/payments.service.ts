@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { EventsGateway } from '../events/events.gateway';
 import { MailService } from '../mail/mail.service';
+import { LivestreamLiveGateway } from '../livestreams/livestream-live.gateway';
 
 @Injectable()
 export class PaymentsService {
@@ -11,6 +12,7 @@ export class PaymentsService {
         private prisma: PrismaService,
         private eventsGateway: EventsGateway,
         private mailService: MailService,
+        private livestreamLiveGateway: LivestreamLiveGateway,
     ) { }
 
     async processWebhook(data: any): Promise<{ success: boolean; message: string }> {
@@ -311,6 +313,8 @@ export class PaymentsService {
                             if (fullOrder && fullOrder.users) {
                                 this.mailService.sendOrderConfirmation(fullOrder.users, fullOrder).catch(e => this.logger.error("Mail Error", e));
                                 this.eventsGateway.notifyNewOrder(fullOrder); // Notify Warehouse/Admin
+                                // Notify Livestream admin panel — ONLY on confirmed payment
+                                await this._broadcastLivestreamOrder(fullOrder);
                             }
                         }
                     }
@@ -326,9 +330,32 @@ export class PaymentsService {
             });
         } catch (error) {
             this.logger.error(`Error processing webhook: ${error}`);
-            // Return true even on error so SePay doesn't keep retrying if it's a structural error, 
-            // but in real world, might want to return 500 for retry.
             return { success: false, message: 'Internal error' };
+        }
+    }
+
+    /**
+     * Broadcast a paid order to the livestream admin room.
+     * Only called after order status = PROCESSING.
+     */
+    private async _broadcastLivestreamOrder(order: any): Promise<void> {
+        try {
+            const items = order.order_items || [];
+            for (const item of items) {
+                if (!item.livestream_id) continue;
+                const variantInfo = item.product_variants;
+                const productName = variantInfo?.products?.name || variantInfo?.option_name || 'S\u1ea3n ph\u1ea9m';
+                const customerName = order.users?.full_name || 'Kh\u00e1ch h\u00e0ng';
+                this.livestreamLiveGateway.broadcastOrder(`LIVE-${item.livestream_id}`, {
+                    customer_name: customerName,
+                    product_name: productName,
+                    quantity: item.quantity,
+                    amount: Number(item.unit_price) * item.quantity,
+                    time: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }),
+                });
+            }
+        } catch (err) {
+            this.logger.error('Failed to broadcast livestream order:', err);
         }
     }
 }

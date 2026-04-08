@@ -2,12 +2,12 @@ import { Controller, Get, Post, Body, UseGuards, Req } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { WalletService } from './wallet.service';
 
-@Controller('wallet')
+@Controller('wallets')
 @UseGuards(AuthGuard('jwt'))
 export class WalletController {
     constructor(private readonly walletService: WalletService) { }
 
-    @Get()
+    @Get('my-wallet')
     getMyWallet(@Req() req) {
         return this.walletService.getMyWallet(req.user.user_id);
     }

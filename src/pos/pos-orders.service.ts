@@ -8,13 +8,43 @@ import { GetPosOrdersDto } from './dto/get-pos-orders.dto';
 import * as bcrypt from 'bcrypt';
 
 import { CustomersService } from '../customers/customers.service';
+import { EncryptionService } from '../common/encryption.service';
+import { maskEmail, maskPhone } from '../common/mask.util';
 
 @Injectable()
 export class PosOrdersService {
     constructor(
         private prisma: PrismaService,
-        private customersService: CustomersService
+        private customersService: CustomersService,
+        private encryption: EncryptionService,
     ) { }
+
+    private decryptPii(data: any, mask = false): any {
+        if (!data) return data;
+        if (Array.isArray(data)) return data.map(item => this.decryptPii(item, mask));
+
+        const { password_hash, otp_code, otp_expires_at, google_id, refresh_token, ...safeData } = data;
+        const result = { ...safeData };
+        // Decrypt direct fields (if User object)
+        if (result.phone) {
+            try {
+                const decrypted = this.encryption.decrypt(result.phone);
+                result.phone = mask ? maskPhone(decrypted) : decrypted;
+            } catch (e) { /* ignore */ }
+        }
+        if (result.email) {
+            try {
+                const decrypted = this.encryption.decrypt(result.email);
+                result.email = mask ? maskEmail(decrypted) : decrypted;
+            } catch (e) { /* ignore */ }
+        }
+        // Decrypt nested relations
+        if (result.users) result.users = this.decryptPii(result.users, mask);
+        if (result.employees?.users) result.employees.users = this.decryptPii(result.employees.users, mask);
+        if (result.orders) result.orders = this.decryptPii(result.orders, mask);
+
+        return result;
+    }
 
     /**
      * Tạo đơn hàng POS (Finalize)
@@ -45,31 +75,23 @@ export class PosOrdersService {
 
         // 3. Tính toán tổng tiền và thuế
         let totalAmount = 0;
-        let totalTax = 0;
         const orderItems = dto.items.map(item => {
             const variant = variants.find(v => v.variant_id === item.variant_id);
             if (!variant) throw new BadRequestException('Sản phẩm không tồn tại');
 
             const unitPrice = Number(variant.price);
             const totalPrice = unitPrice * item.quantity;
-            const taxRate = Number(variant.tax_rate || 0);
-            const taxAmount = (totalPrice * taxRate) / 100;
-
-            totalAmount += totalPrice;
-            totalTax += taxAmount;
-
+            totalAmount += totalPrice; // FIX: Update totalAmount
             return {
                 variant_id: variant.variant_id,
                 quantity: item.quantity,
                 unit_price: unitPrice,
                 total_price: totalPrice,
-                tax_rate: taxRate,
-                tax_amount: taxAmount
             };
         });
 
         const discountAmount = dto.discount_amount || 0;
-        const finalAmount = totalAmount + totalTax - discountAmount;
+        const finalAmount = totalAmount - discountAmount;
         const orderCode = this.generateOrderCode();
 
         // 4. Transaction: Tạo đơn + Finalize Sync
@@ -95,14 +117,8 @@ export class PosOrdersService {
                         user_id: dto.user_id || null,
                         payment_method_code: dto.payment_method_code,
                         total_amount: finalAmount,
-                        total_tax: totalTax, // Update tax
                         paid_amount: finalAmount,
                         discount_amount: discountAmount,
-                        is_vat_export: dto.is_vat_export || false,
-                        vat_tax_number: dto.vat_tax_number || null,
-                        vat_company_name: dto.vat_company_name || null,
-                        vat_company_address: dto.vat_company_address || null,
-                        vat_invoice_email: dto.vat_invoice_email || null,
                         cash_received: dto.cash_received || null,
                         cash_change: dto.cash_change || null,
                         status_code: 'COMPLETED',
@@ -121,17 +137,11 @@ export class PosOrdersService {
                         channel_code: 'POS',
                         payment_method_code: dto.payment_method_code,
                         total_amount: finalAmount,
-                        total_tax: totalTax, // Save tax
                         paid_amount: finalAmount,
                         discount_amount: discountAmount,
                         shipping_fee: 0,
                         status_code: 'COMPLETED',
                         note: dto.note,
-                        is_vat_export: dto.is_vat_export || false,
-                        vat_tax_number: dto.vat_tax_number || null,
-                        vat_company_name: dto.vat_company_name || null,
-                        vat_company_address: dto.vat_company_address || null,
-                        vat_invoice_email: dto.vat_invoice_email || null,
                     } as any,
                 });
 
@@ -143,8 +153,6 @@ export class PosOrdersService {
                             quantity: item.quantity,
                             unit_price: item.unit_price,
                             total_price: item.total_price,
-                            tax_rate: item.tax_rate,
-                            tax_amount: item.tax_amount
                         },
                     });
 
@@ -192,7 +200,7 @@ export class PosOrdersService {
             },
         });
 
-        return { success: true, message: 'Tạo đơn hàng thành công', data: finalOrder };
+        return { success: true, message: 'Tạo đơn hàng thành công', data: this.decryptPii(finalOrder) };
     }
 
     private generateOrderCode(): string {
@@ -257,7 +265,7 @@ export class PosOrdersService {
             throw new NotFoundException('Không tìm thấy đơn hàng');
         }
 
-        return { success: true, message: 'Lấy chi tiết đơn hàng thành công', data: order };
+        return { success: true, message: 'Lấy chi tiết đơn hàng thành công', data: this.decryptPii(order) };
     }
 
     async getOrdersByStaff(staffId: number, query: GetPosOrdersDto) {
@@ -317,7 +325,7 @@ export class PosOrdersService {
         return {
             success: true,
             count: orders.length,
-            data: orders,
+            data: orders.map(o => this.decryptPii(o, true)),
             total,
             page,
             limit,
@@ -331,12 +339,17 @@ export class PosOrdersService {
         const { phone, email, q } = query;
         const where: any = { deleted_at: null, role_code: 'CUSTOMER' };
 
-        if (phone) where.phone = { contains: phone };
-        else if (email) where.email = { contains: email, mode: 'insensitive' };
-        else if (q) {
+        if (phone) {
+            const encryptedPhone = this.encryption.encryptDeterministic(phone);
+            where.phone = encryptedPhone; // Exact match for encrypted phone
+        } else if (email) {
+            const encryptedEmail = this.encryption.encryptDeterministic(email);
+            where.email = encryptedEmail; // Exact match for encrypted email
+        } else if (q) {
+            const encryptedQ = this.encryption.encryptDeterministic(q);
             where.OR = [
-                { phone: { contains: q } },
-                { email: { contains: q, mode: 'insensitive' } },
+                { phone: encryptedQ }, // Exact match for encrypted phone
+                { email: encryptedQ }, // Exact match for encrypted email
                 { full_name: { contains: q, mode: 'insensitive' } },
             ];
         }
@@ -362,7 +375,7 @@ export class PosOrdersService {
             _count: undefined
         }));
 
-        return { success: true, count: formatted.length, data: formatted, total, page, limit };
+        return { success: true, count: formatted.length, data: formatted.map(f => this.decryptPii(f, true)), total, page, limit };
     }
 
     async getCustomerOrderHistory(customerId: number, staffId: number) {
@@ -425,8 +438,8 @@ export class PosOrdersService {
         return {
             success: true,
             data: {
-                customer: formattedCustomer,
-                orders,
+                customer: this.decryptPii(formattedCustomer),
+                orders: orders.map(o => this.decryptPii(o)),
                 statistics: {
                     total_spent: totalSpent,
                     total_orders: totalOrders,
@@ -439,8 +452,9 @@ export class PosOrdersService {
 
     async registerCustomer(dto: RegisterCustomerDto) {
         // 1. Check if user exists
+        const encryptedPhone = this.encryption.encryptDeterministic(dto.phone);
         let user = await this.prisma.users.findFirst({
-            where: { phone: dto.phone, deleted_at: null },
+            where: { phone: encryptedPhone, deleted_at: null },
             include: { customers: true }
         });
 
@@ -453,16 +467,16 @@ export class PosOrdersService {
                     include: { customers: true }
                 });
             }
-            return { success: true, message: 'Khách hàng đã tồn tại.', data: user };
+            return { success: true, message: 'Khách hàng đã tồn tại.', data: this.decryptPii(user) };
         }
 
         // 2. Create new GUEST_POS user
         const newUser = await this.prisma.users.create({
             data: {
-                email: dto.email || null,
+                email: dto.email ? this.encryption.encryptDeterministic(dto.email) : null,
                 password_hash: null,
                 full_name: dto.full_name || 'Khách POS',
-                phone: dto.phone,
+                phone: encryptedPhone,
                 role_code: 'CUSTOMER',
                 status_code: 'GUEST_POS',
                 is_verified: false
@@ -476,7 +490,7 @@ export class PosOrdersService {
         return {
             success: true,
             message: 'Đăng ký khách hàng mới thành công.',
-            data: { ...newUser, customers: profile }
+            data: { ...this.decryptPii(newUser), customers: profile }
         };
     }
 
@@ -487,10 +501,11 @@ export class PosOrdersService {
         });
         if (!activeSession) return null;
 
-        return this.prisma.orders.findFirst({
+        const order = await this.prisma.orders.findFirst({
             where: { session_id: activeSession.session_id, created_by_staff_id: staffId, status_code: 'PENDING', channel_code: 'POS', deleted_at: null },
             include: { order_items: { include: { product_variants: { include: { products: true } } } }, users: true }
         });
+        return this.decryptPii(order);
     }
 
     async syncActiveOrder(staffId: number, dto: SyncPosOrderDto) {
@@ -526,14 +541,8 @@ export class PosOrdersService {
                         user_id: dto.user_id || null,
                         channel_code: 'POS',
                         total_amount: 0,
-                        total_tax: 0,
                         status_code: 'PENDING',
                         note: dto.note,
-                        is_vat_export: dto.is_vat_export || false,
-                        vat_tax_number: dto.vat_tax_number || null,
-                        vat_company_name: dto.vat_company_name || null,
-                        vat_company_address: dto.vat_company_address || null,
-                        vat_invoice_email: dto.vat_invoice_email || null,
                     } as any,
                     include: { order_items: true }
                 });
@@ -543,11 +552,6 @@ export class PosOrdersService {
                     data: {
                         user_id: dto.user_id || null,
                         note: dto.note,
-                        is_vat_export: dto.is_vat_export || false,
-                        vat_tax_number: dto.vat_tax_number || null,
-                        vat_company_name: dto.vat_company_name || null,
-                        vat_company_address: dto.vat_company_address || null,
-                        vat_invoice_email: dto.vat_invoice_email || null,
                     } as any
                 });
             }
@@ -567,8 +571,6 @@ export class PosOrdersService {
                 if (!variant) throw new BadRequestException(`Variant ${vId} not found`);
 
                 const price = Number(variant.price);
-                const taxRate = Number(variant.tax_rate || 0);
-                const taxAmount = (price * nQty * taxRate) / 100;
 
                 if (oQty > 0) {
                     await tx.order_items.updateMany({
@@ -576,8 +578,6 @@ export class PosOrdersService {
                         data: {
                             quantity: nQty,
                             total_price: price * nQty,
-                            tax_rate: taxRate,
-                            tax_amount: taxAmount
                         }
                     });
                 } else {
@@ -588,8 +588,6 @@ export class PosOrdersService {
                             quantity: nQty,
                             unit_price: price,
                             total_price: price * nQty,
-                            tax_rate: taxRate,
-                            tax_amount: taxAmount
                         }
                     });
                 }
@@ -604,14 +602,12 @@ export class PosOrdersService {
 
             const finalItems = await tx.order_items.findMany({ where: { order_id: order.order_id } });
             const total = finalItems.reduce((sum, i) => sum + Number(i.total_price), 0);
-            const totalTax = finalItems.reduce((sum, i) => sum + Number(i.tax_amount || 0), 0);
             const discount = dto.discount_amount || 0;
 
             return tx.orders.update({
                 where: { order_id: order.order_id },
                 data: {
-                    total_amount: total + totalTax - discount,
-                    total_tax: totalTax,
+                    total_amount: total - discount,
                     discount_amount: discount
                 },
                 include: { order_items: true }
@@ -640,21 +636,17 @@ export class PosOrdersService {
         });
 
         let totalAmount = 0;
-        let totalTax = 0;
         const orderItems = dto.items.map(item => {
             const variant = variants.find(v => v.variant_id === item.variant_id);
             if (!variant) throw new BadRequestException('Sản phẩm không tồn tại');
             const unitPrice = Number(variant.price);
             const totalPrice = unitPrice * item.quantity;
-            const taxRate = Number(variant.tax_rate || 0);
-            const taxAmount = (totalPrice * taxRate) / 100;
-            totalAmount += totalPrice;
-            totalTax += taxAmount;
-            return { variant_id: variant.variant_id, quantity: item.quantity, unit_price: unitPrice, total_price: totalPrice, tax_rate: taxRate, tax_amount: taxAmount };
+            totalAmount += totalPrice; // FIX: Update totalAmount
+            return { variant_id: variant.variant_id, quantity: item.quantity, unit_price: unitPrice, total_price: totalPrice };
         });
 
         const discountAmount = dto.discount_amount || 0;
-        const finalAmount = totalAmount + totalTax - discountAmount;
+        const finalAmount = totalAmount - discountAmount;
         const paymentRefCode = this.generatePosQrRef();
         const orderCode = this.generateOrderCode();
 
@@ -700,17 +692,11 @@ export class PosOrdersService {
                         payment_method_code: 'VIETQR',
                         payment_ref_code: paymentRefCode,
                         total_amount: finalAmount,
-                        total_tax: totalTax,
                         paid_amount: 0,
                         discount_amount: discountAmount,
                         status_code: 'PENDING_PAYMENT',
                         note: dto.note,
                         updated_at: new Date(),
-                        is_vat_export: dto.is_vat_export || false,
-                        vat_tax_number: dto.vat_tax_number || null,
-                        vat_company_name: dto.vat_company_name || null,
-                        vat_company_address: dto.vat_company_address || null,
-                        vat_invoice_email: dto.vat_invoice_email || null,
                     } as any,
                 });
 
@@ -727,17 +713,11 @@ export class PosOrdersService {
                         payment_method_code: 'VIETQR',
                         payment_ref_code: paymentRefCode,
                         total_amount: finalAmount,
-                        total_tax: totalTax,
                         paid_amount: 0,
                         discount_amount: discountAmount,
                         shipping_fee: 0,
                         status_code: 'PENDING_PAYMENT',
                         note: dto.note,
-                        is_vat_export: dto.is_vat_export || false,
-                        vat_tax_number: dto.vat_tax_number || null,
-                        vat_company_name: dto.vat_company_name || null,
-                        vat_company_address: dto.vat_company_address || null,
-                        vat_invoice_email: dto.vat_invoice_email || null,
                     } as any,
                 });
 
@@ -749,8 +729,6 @@ export class PosOrdersService {
                             quantity: item.quantity,
                             unit_price: item.unit_price,
                             total_price: item.total_price,
-                            tax_rate: item.tax_rate,
-                            tax_amount: item.tax_amount,
                         },
                     });
                     await tx.product_variants.update({
@@ -774,7 +752,7 @@ export class PosOrdersService {
         return {
             success: true,
             message: 'Đơn hàng QR đã được tạo, đang chờ thanh toán.',
-            data: { ...finalOrder, payment_ref_code: paymentRefCode },
+            data: { ...this.decryptPii(finalOrder), payment_ref_code: paymentRefCode },
         };
     }
 

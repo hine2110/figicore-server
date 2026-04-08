@@ -3,23 +3,28 @@ import { MailerModule } from '@nestjs-modules/mailer';
 import { HandlebarsAdapter } from '@nestjs-modules/mailer/dist/adapters/handlebars.adapter';
 import { MailService } from './mail.service';
 import { join } from 'path';
-import { ConfigService } from '@nestjs/config';
+import { ConfigService, ConfigModule } from '@nestjs/config';
 
 @Global()
 @Module({
     imports: [
         MailerModule.forRootAsync({
+            imports: [ConfigModule],
             useFactory: async (config: ConfigService) => ({
                 transport: {
-                    host: 'smtp.gmail.com', // Placeholder/Default
-                    secure: false,
+                    host: config.get('MAIL_HOST', 'smtp.gmail.com'),
+                    port: Number(config.get('MAIL_PORT', 587)),
+                    secure: config.get('MAIL_PORT') === '465', // Chỉ True nếu là 465
                     auth: {
-                        user: process.env.MAIL_USER || 'placeholder@gmail.com',
-                        pass: process.env.MAIL_PASS || 'placeholder!password',
+                        user: config.get('MAIL_USER'),
+                        pass: config.get('MAIL_PASS'),
                     },
+                    tls: {
+                        rejectUnauthorized: false // Fix common SSL handshake issues
+                    }
                 },
                 defaults: {
-                    from: '"No Reply" <noreply@figicore.com>',
+                    from: config.get('MAIL_FROM', '"FigiCore" <noreply@figicore.com>'),
                 },
                 template: {
                     dir: join(__dirname, 'templates'),

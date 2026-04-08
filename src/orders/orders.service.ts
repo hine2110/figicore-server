@@ -10,6 +10,8 @@ import { EventsGateway } from '../events/events.gateway';
 import { WalletService } from '../wallet/wallet.service';
 import { BlindboxesService } from '../blindboxes/blindboxes.service';
 import { AuctionsService } from '../auctions/auctions.service';
+import { LivestreamLiveGateway } from '../livestreams/livestream-live.gateway';
+import { EncryptionService } from '../common/encryption.service';
 
 @Injectable()
 export class OrdersService {
@@ -22,8 +24,41 @@ export class OrdersService {
     private eventsGateway: EventsGateway,
     private walletService: WalletService,
     private blindboxesService: BlindboxesService,
-    @Inject(forwardRef(() => AuctionsService)) private auctionsService: AuctionsService
+    @Inject(forwardRef(() => AuctionsService)) private auctionsService: AuctionsService,
+    private livestreamLiveGateway: LivestreamLiveGateway,
+    private encryption: EncryptionService,
   ) { }
+
+  private decryptUser(user: any) {
+    if (!user) return null;
+    const decrypted = { ...user };
+    if (decrypted.phone) decrypted.phone = this.encryption.decrypt(decrypted.phone);
+    if (decrypted.email) decrypted.email = this.encryption.decrypt(decrypted.email);
+    return decrypted;
+  }
+
+  private decryptAddress(addresses: any): any {
+    if (!addresses) return addresses;
+    if (Array.isArray(addresses)) {
+      return addresses.map(a => this.decryptAddress(a));
+    }
+    const dec = { ...addresses };
+    if (dec.detail_address) {
+      try {
+        dec.detail_address = this.encryption.decrypt(dec.detail_address);
+      } catch (e) {
+        // Fallback for plaintext
+      }
+    }
+    if (dec.recipient_phone) {
+      try {
+        dec.recipient_phone = this.encryption.decrypt(dec.recipient_phone);
+      } catch (e) {
+        // Fallback for plaintext
+      }
+    }
+    return dec;
+  }
 
   // NEW: Anti-scalping Helper
   private async validateAntiScalping(tx: any, userId: number, variantId: number, quantity: number, limit: number) {
@@ -50,104 +85,228 @@ export class OrdersService {
     const {
       shipping_address_id,
       items,
-      shipping_fee,
       payment_method_code,
-      discountVoucherCode, // Extracted: For Product/Rank Discount
-      freeShipVoucherCode  // Extracted: For Free Shipping
+      discountVoucherCode,
+      freeShipVoucherCode
     } = createOrderDto as any;
 
-    // 1. Calculate Deadlines
     const retailDeadline = new Date();
-    retailDeadline.setMinutes(retailDeadline.getMinutes() + 15); // 15 mins for Retail
-
+    retailDeadline.setMinutes(retailDeadline.getMinutes() + 15);
     const preOrderDeadline = new Date();
-    preOrderDeadline.setMinutes(preOrderDeadline.getMinutes() + 15); // Update: 15 mins for DEPOSIT too (Prevent Hoarding)
+    preOrderDeadline.setMinutes(preOrderDeadline.getMinutes() + 15);
 
     try {
-      const address = await this.prisma.addresses.findUnique({
+      const rawAddress = await this.prisma.addresses.findUnique({
         where: { address_id: shipping_address_id }
       });
-      if (!address) throw new BadRequestException("Address not found");
+      if (!rawAddress) throw new BadRequestException("Address not found");
+      const address = this.decryptAddress(rawAddress);
 
-      // --- Calculate Initial Total Amount for Validation ---
-      let cartTotalAmount = 0;
+      // 1. Backend Authoritative Pricing & Flash Sale Evaluation
+      let cartTotalAmountDiscounted = 0;
+      const validatedItems: any[] = [];
+      const now = new Date();
+      const currentHHmm = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+
       for (const item of items) {
-        cartTotalAmount += Number(item.price) * item.quantity;
+        const variant = await this.prisma.product_variants.findUnique({
+          where: { variant_id: item.variant_id },
+          include: {
+            products: true,
+            product_preorder_configs: true,
+            product_promotions: true
+          }
+        });
+        if (!variant) throw new BadRequestException(`Variant ${item.variant_id} not found`);
+
+        let finalUnitPrice = Number(variant.price);
+
+        // Flash Sale (Product Promotion) Real-time Check
+        const promo = variant.product_promotions;
+        let appliedFlashSale = false;
+
+        if (promo && promo.is_active) {
+          let isValidPromo = true;
+
+          // --- FIX: Unified time-window check for BOTH recurring and non-recurring ---
+          // Build full DateTime objects by merging date + HH:mm time string.
+          // This prevents the bug where a non-recurring Flash Sale was accessible
+          // from 00:00 of start_date instead of the configured start_time.
+
+          // Determine the reference date: use start_date if set, else use today's date.
+          const startDateBase = promo.start_date ? new Date(promo.start_date) : now;
+          const endDateBase = promo.end_date ? new Date(promo.end_date) : now;
+
+          // Parse start_time / end_time ("HH:mm") and merge with respective dates.
+          const [startHH, startMM] = promo.start_time.split(':').map(Number);
+          const [endHH, endMM] = promo.end_time.split(':').map(Number);
+
+          const promoStart = new Date(startDateBase);
+          promoStart.setHours(startHH, startMM, 0, 0);
+
+          const promoEnd = new Date(endDateBase);
+          promoEnd.setHours(endHH, endMM, 59, 999);
+
+          // For purely recurring promos (no fixed date), use today's date as base.
+          if (promo.is_recurring && !promo.start_date && !promo.end_date) {
+            promoStart.setFullYear(now.getFullYear(), now.getMonth(), now.getDate());
+            promoEnd.setFullYear(now.getFullYear(), now.getMonth(), now.getDate());
+          }
+
+          if (now < promoStart || now > promoEnd) {
+            isValidPromo = false;
+          }
+
+          if (isValidPromo) {
+            if (promo.is_flash_sale) {
+              // Load flash sale details
+              const fsItem = await this.prisma.promotion_items.findFirst({
+                where: { promotion_id: promo.promotion_id, variant_id: item.variant_id }
+              });
+              if (fsItem) {
+                finalUnitPrice = Number(fsItem.flash_sale_price);
+                appliedFlashSale = true;
+              }
+            } else {
+              if (promo.type_code === 'PERCENTAGE') {
+                finalUnitPrice = finalUnitPrice * (1 - Number(promo.value) / 100);
+              } else if (promo.type_code === 'FIXED_AMOUNT') {
+                finalUnitPrice = Math.max(0, finalUnitPrice - Number(promo.value));
+              }
+            }
+          }
+        }
+
+        let isLivestreamFlashSale = false;
+        // ------ LIVESTREAM PRICING OVERRIDE ------
+        if (item.livestreamId) {
+          const liveProduct = await this.prisma.livestream_products.findUnique({
+            where: {
+              livestream_id_variant_id: {
+                livestream_id: Number(item.livestreamId),
+                variant_id: item.variant_id
+              }
+            },
+            include: { livestream: true }
+          });
+
+          if (liveProduct?.livestream?.status === 'LIVE') {
+            if (liveProduct.flash_sale_price && (liveProduct.flash_sale_stock || 0) > 0) {
+              finalUnitPrice = Number(liveProduct.flash_sale_price);
+              appliedFlashSale = true;
+              isLivestreamFlashSale = true;
+            } else {
+              finalUnitPrice = finalUnitPrice * 0.98; // 2% Live Discount
+            }
+          }
+        }
+        // -----------------------------------------
+
+        const quantity = Number(item.quantity);
+        cartTotalAmountDiscounted += finalUnitPrice * quantity;
+
+        validatedItems.push({
+          ...item,
+          variant,
+          _backendVerifiedPrice: finalUnitPrice, // Saved purely from DB + Valid Promos
+          _applied_flash_sale: appliedFlashSale,
+          _is_livestream_flash_sale: isLivestreamFlashSale
+        });
       }
 
-      // Check Discount Voucher Validity
-      let appliedDiscountVoucherCode: string | null = null;
+      // 2. Validate & Compute Order Vouchers
       let usedDiscountPromotionId: number | null = null;
+      let orderVoucherDiscountAmount = 0;
+
+      // ── Retail-only voucher guard ──────────────────────────────────────────
+      // Compute retail subtotal separately (excludes blindbox & preorder items)
+      const retailSubtotal = validatedItems
+        .filter(item => {
+          const tc = item.variant?.products?.type_code;
+          return tc !== 'BLINDBOX' && tc !== 'PREORDER' && !item.variant?.product_preorder_configs;
+        })
+        .reduce((sum, item) => sum + (item._backendVerifiedPrice ?? Number(item.variant.price)) * Number(item.quantity), 0);
+
+      const hasOnlyNonRetailItems = retailSubtotal === 0 && validatedItems.length > 0;
 
       if (discountVoucherCode) {
+        if (hasOnlyNonRetailItems) {
+          throw new BadRequestException('Discount vouchers can only be applied to retail products. Blind Box and Pre-Order items are not eligible.');
+        }
+
         const userDiscountVoucher = await this.prisma.user_vouchers.findFirst({
           where: {
             user_id: userId,
-            is_used: false,
+            status: 'COLLECTED',
             promotions: { code: discountVoucherCode }
           },
           include: { promotions: true }
         });
 
-        if (userDiscountVoucher && (!userDiscountVoucher.promotions.end_date || userDiscountVoucher.promotions.end_date > new Date())) {
-          // Block COMING_SOON vouchers - start_date must have arrived
-          if (userDiscountVoucher.promotions.start_date && new Date(userDiscountVoucher.promotions.start_date) > new Date()) {
+        if (userDiscountVoucher && (!userDiscountVoucher.promotions.end_date || userDiscountVoucher.promotions.end_date > now)) {
+          if (userDiscountVoucher.promotions.start_date && new Date(userDiscountVoucher.promotions.start_date) > now) {
             throw new BadRequestException("This discount voucher is not yet active.");
           }
-          if (userDiscountVoucher.promotions.min_order_value && cartTotalAmount < Number(userDiscountVoucher.promotions.min_order_value)) {
-            throw new BadRequestException("Order total does not meet the minimum required to use this discount voucher.");
+          // Validate min_order_value against RETAIL subtotal only
+          if (userDiscountVoucher.promotions.min_order_value && retailSubtotal < Number(userDiscountVoucher.promotions.min_order_value)) {
+            throw new BadRequestException("Order total (retail items only) does not meet the minimum required for this voucher.");
           }
-          appliedDiscountVoucherCode = discountVoucherCode;
           usedDiscountPromotionId = userDiscountVoucher.promotion_id;
+
+          const discountType = userDiscountVoucher.promotions.discount_type;
+          const discountValue = Number(userDiscountVoucher.promotions.discount_value);
+
+          // Calculate actual discount money based on retail subtotal
+          if (discountType === 'PERCENTAGE') {
+            orderVoucherDiscountAmount = retailSubtotal * (discountValue / 100);
+          } else if (discountType === 'FIXED_AMOUNT') {
+            orderVoucherDiscountAmount = discountValue;
+          }
         } else {
           throw new BadRequestException("Discount voucher is invalid, expired, or has not been collected.");
         }
       }
 
-      // Check Free Ship Voucher Validity
-      let appliedFreeShipVoucherCode: string | null = null;
+      // 3. Free Shipping Voucher
       let usedFreeShipPromotionId: number | null = null;
       let isVoucherFreeShip = false;
 
       if (freeShipVoucherCode) {
+        if (hasOnlyNonRetailItems) {
+          throw new BadRequestException('Free shipping vouchers can only be applied to retail products. Blind Box and Pre-Order items are not eligible.');
+        }
+
         const userFreeShipVoucher = await this.prisma.user_vouchers.findFirst({
           where: {
             user_id: userId,
-            is_used: false,
+            status: 'COLLECTED',
             promotions: { code: freeShipVoucherCode, discount_type: 'FREE_SHIP' }
           },
           include: { promotions: true }
         });
 
-        if (userFreeShipVoucher && (!userFreeShipVoucher.promotions.end_date || userFreeShipVoucher.promotions.end_date > new Date())) {
-          // Block COMING_SOON vouchers - start_date must have arrived
-          if (userFreeShipVoucher.promotions.start_date && new Date(userFreeShipVoucher.promotions.start_date) > new Date()) {
-            throw new BadRequestException("This free shipping voucher is not yet active.");
+        if (userFreeShipVoucher && (!userFreeShipVoucher.promotions.end_date || userFreeShipVoucher.promotions.end_date > now)) {
+          if (userFreeShipVoucher.promotions.min_order_value && retailSubtotal < Number(userFreeShipVoucher.promotions.min_order_value)) {
+            throw new BadRequestException("Order total (retail items only) does not meet minimum required for free shipping.");
           }
-          if (userFreeShipVoucher.promotions.min_order_value && cartTotalAmount < Number(userFreeShipVoucher.promotions.min_order_value)) {
-            throw new BadRequestException("Order total does not meet the minimum required to use this free shipping voucher.");
-          }
-          appliedFreeShipVoucherCode = freeShipVoucherCode;
           usedFreeShipPromotionId = userFreeShipVoucher.promotion_id;
           isVoucherFreeShip = true;
         } else {
-          throw new BadRequestException("Free shipping voucher is invalid, expired, or has not been collected.");
+          throw new BadRequestException("Free shipping voucher invalid or expired.");
         }
       }
 
-      // 1.5 Generate Payment Ref Code (No hyphens, as banking apps often strip them)
+
       const paymentRefCode = `PAY${Date.now()}${Math.floor(Math.random() * 1000)}`;
 
-      // 2. Start Transaction
+      // 4. BIG TRANSACTION: Separation & Creation
       const createdOrders = await this.prisma.$transaction(async (tx) => {
-
-        // A. Separation Phase
         const retailItems: any[] = [];
         const preOrderItems: any[] = [];
         const blindboxItems: any[] = []; // NEW
 
         // Pre-fetch variants to classify
-        for (const item of items) {
+        for (const item of validatedItems) {
           const variant = await tx.product_variants.findUnique({
             where: { variant_id: item.variant_id },
             include: {
@@ -158,84 +317,51 @@ export class OrdersService {
 
           if (!variant) throw new BadRequestException(`Variant ${item.variant_id} not found`);
 
-          const enrichedItem = { ...item, variant };
+          const enrichedItem = { ...item, variant, livestreamId: item.livestreamId };
 
           // Use existence of definition or explicit product type
           const isPreorder = variant.products.type_code === 'PREORDER' || !!variant.product_preorder_configs;
           const isBlindbox = variant.products.type_code === 'BLINDBOX';
 
-          if (isPreorder) {
-            preOrderItems.push(enrichedItem);
-          } else if (isBlindbox) {
-            blindboxItems.push(enrichedItem);
-          } else {
-            retailItems.push(enrichedItem);
-          }
+          if (isPreorder) preOrderItems.push(enrichedItem);
+          else if (isBlindbox) blindboxItems.push(enrichedItem);
+          else retailItems.push(enrichedItem);
         }
 
         const ordersResults: any[] = [];
 
-        // A.1 PROCESS BLINDBOX ITEMS
-        // Logic: Reveal items NOW (Instant Gacha) but keep them hidden in DB (is_opened=false)
+        // --- A. BLINDBOX PROCESSING ---
         if (blindboxItems.length > 0) {
-          // We need to inject these into "retailItems" or "preOrderItems"? 
-          // The prompt says: "create method: Separate Blindbox items, run logic, and save hidden results."
-          // And: "Merge with Normal Items & Create Order"
-          // Since Blindboxes are usually Retail-like (shipped immediately), we should treat them as RETAIL ORDERS.
-          // BUT they need the "allocated_product_id" field in `order_items`.
-
           for (const bItem of blindboxItems) {
             const bbConfig = await tx.product_blindboxes.findUnique({
               where: { product_id: bItem.variant.product_id }
             });
-
             if (!bbConfig) throw new BadRequestException("Blindbox config missing");
 
-            // CALL SERVICE: Pick N Unique Items
             const wonVariants = await this.blindboxesService.pickUniqueItems(tx, bbConfig, bItem.quantity);
-
-            // FIX: Find the "Ticket" Variant to deduct stock from (The one with huge stock)
-            // We assume the Ticket is the variant named 'Blindbox Ticket' or the one used to purchase.
-            // If the user managed to add "Blindbox Standard" (Variant 7) to cart, we should still deduct from Ticket (Variant 6).
             const ticketVariant = await tx.product_variants.findFirst({
-              where: {
-                product_id: bItem.variant.product_id,
-                option_name: 'Blindbox Ticket' // Ensure this matches ProductService creation
-              }
-            }) || bItem.variant; // Fallback to current if not found
+              where: { product_id: bItem.variant.product_id, option_name: 'Blindbox Ticket' }
+            }) || bItem.variant;
 
             for (const won of wonVariants) {
-              // We create individual order line items for opacity? 
-              // Or one line item with quantity?
-              // Valid Point: If we have 2 quantities, and 2 DIFFERENT won items, we CANNOT use one line item with quantity 2 and allocated_product_id X.
-              // We MUST split them into individual line items! 
-              // The prompt logic: "bbOrderItemsData.push({ ... allocated_product_id: won.id ... })" implies splitting.
-
               retailItems.push({
                 ...bItem,
-                variant: ticketVariant, // SWAP to Ticket Variant for Stock Deduction & Order Record
-                quantity: 1, // Split into single units
-                // We need to attach the WON result to this item object so we can use it later when creating order_items
+                variant: ticketVariant,
+                quantity: 1,
                 _allocated_product_id: won.variant_id,
                 _is_opened: false,
-                // CAPTURE SOURCE FOR METADATA
                 _metadata: { source: (won as any)._source_stock || 'AVAILABLE' }
               });
             }
           }
         }
 
-        // B. Process Pre-orders (Contracts & Deposit Orders -> ONE ORDER PER ITEM)
+        // --- B. PRE-ORDERS PROCESSING ---
         if (preOrderItems.length > 0) {
-
           for (const pItem of preOrderItems) {
-            const { variant, quantity, paymentOption } = pItem;
-            // paymentOption: 'DEPOSIT' (Default) or 'FULL_PAYMENT'
-
-            // 1. Anti-Scalping Check
+            const { variant, quantity } = pItem;
             await this.validateAntiScalping(tx, userId, variant.variant_id, quantity, variant.product_preorder_configs?.max_qty_per_user || 2);
 
-            // 2. Atomic Update (Concurrency Control)
             const result = await tx.$executeRaw`
                 UPDATE "product_preorder_configs"
                 SET "sold_slots" = "sold_slots" + ${quantity}
@@ -243,63 +369,29 @@ export class OrdersService {
                 AND ("sold_slots" + ${quantity}) <= "total_slots"
             `;
 
-            if (Number(result) === 0) {
-              throw new BadRequestException(`Pre-order sold out for item: ${variant.sku}`);
-            }
+            if (Number(result) === 0) throw new BadRequestException(`Pre-order sold out for item: ${variant.sku}`);
 
-            // 3. Determine Financials & Incentives
-            // Fix: Check payment_option from payload item, NOT just default.
-            // PItem has the raw item data. We need to check if 'payment_option' or 'paymentOption' was passed.
-            const requestedOption = (pItem as any).payment_option || (pItem as any).paymentOption;
+            const requestedOption = pItem.payment_option || pItem.paymentOption;
             let isFullPayment = requestedOption === 'FULL_PAYMENT';
 
-            // Amounts
-            // Use product_preorder_configs for full_price and deposit_amount
             const fullPrice = Number(variant.product_preorder_configs?.full_price || variant.price);
             const depositConfig = Number(variant.product_preorder_configs?.deposit_amount || 0);
-
-            // Double Check: If user requests DEPOSIT but no deposit config exists -> Force Full?
-            // Or if user requests FULL, we charge Full.
 
             let chargeAmountPerUnit = 0;
             let depositPerUnit = 0;
             let remainingPerUnit = 0;
-            let isShippingFree = false;
-            let shippingNote = '';
 
             if (isFullPayment) {
               chargeAmountPerUnit = fullPrice;
               depositPerUnit = fullPrice;
-              remainingPerUnit = 0;
-              isShippingFree = true;
-              shippingNote = 'Full Payment Promotion';
             } else {
               chargeAmountPerUnit = depositConfig > 0 ? depositConfig : fullPrice;
               depositPerUnit = chargeAmountPerUnit;
               remainingPerUnit = fullPrice - depositPerUnit;
-              isFullPayment = false;
-
-              if (isVoucherFreeShip) {
-                isShippingFree = true;
-                shippingNote = `Voucher ${appliedFreeShipVoucherCode} applied at deposit`;
-              }
             }
 
             const poTotalDepositToPay = chargeAmountPerUnit * quantity;
-
-
-
-            // 4. Create Separate Order for this Pre-order Item
             const poOrderCode = `ORD-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-            // Note: Prefix 'ORD' for Order Table to avoid confusion, contract gets 'PO' prefix as requested.
-
-            // Prepare Order Item
-            const poOrderItemsData = [{
-              variant_id: variant.variant_id,
-              quantity: quantity,
-              unit_price: chargeAmountPerUnit, // Charging the Deposit (or Full) amount now
-              total_price: chargeAmountPerUnit * quantity,
-            }];
 
             const poOrder = await tx.orders.create({
               data: {
@@ -307,22 +399,20 @@ export class OrdersService {
                 order_code: poOrderCode,
                 shipping_address_id,
                 total_amount: poTotalDepositToPay,
-                shipping_fee: 0, // Deposit phase = 0 shipping
+                shipping_fee: 0,
                 original_shipping_fee: 0,
                 payment_method_code,
-                payment_ref_code: paymentRefCode, // LINK TO GROUP
+                payment_ref_code: paymentRefCode,
                 status_code: 'WAITING_DEPOSIT',
                 payment_deadline: preOrderDeadline,
                 channel_code: 'WEB',
-                promotion_id: usedDiscountPromotionId,
-                shipping_promotion_id: usedFreeShipPromotionId,
                 order_items: {
-                  create: poOrderItemsData.map(i => ({
-                    variant_id: i.variant_id,
-                    quantity: i.quantity,
-                    unit_price: i.unit_price,
-                    total_price: i.total_price
-                  }))
+                  create: [{
+                    variant_id: variant.variant_id,
+                    quantity: quantity,
+                    unit_price: chargeAmountPerUnit,
+                    total_price: chargeAmountPerUnit * quantity
+                  }]
                 },
                 order_status_history: {
                   create: { new_status: 'WAITING_DEPOSIT', note: 'Pre-order Deposit Created' }
@@ -330,23 +420,17 @@ export class OrdersService {
               }
             });
 
-            // 5. Create Contract Linked to Order
-            // contract_code (now order_code in schema) -> "PO-{OrderId}-{VariantId}"
             const contractCode = `PO-${poOrder.order_id}-${variant.variant_id}`;
             await tx.preorder_contracts.create({
               data: {
                 order_code: contractCode,
                 user_id: userId,
-                // product_id removed from schema
                 variant_id: variant.variant_id,
                 quantity: quantity,
-
                 deposit_amount_paid: depositPerUnit * quantity,
                 remaining_amount: remainingPerUnit * quantity,
-
-                deposit_order_id: poOrder.order_id, // DIRECT LINK
-
-                status_code: 'WAITING_DEPOSIT', // Initial status
+                deposit_order_id: poOrder.order_id,
+                status_code: 'WAITING_DEPOSIT',
               }
             });
 
@@ -354,28 +438,87 @@ export class OrdersService {
           }
         }
 
-        // C. Process Retail Items (Standard Stock) - ONE BUNDLED ORDER
+        // --- C. RETAIL PROCESSING (AUTHORITATIVE CHECKOUT) ---
         if (retailItems.length > 0) {
-          let rtTotalAmount = 0;
+          let rtTotalAmountVerified = 0;
           let rtTotalWeight = 0;
+          let hasFlashSaleItem = false;
           const rtOrderItemsData: any[] = [];
 
           for (const rItem of retailItems) {
-            const { variant, quantity, price, _allocated_product_id, _is_opened, _metadata } = rItem;
+            const { variant, quantity, price, _allocated_product_id, _is_opened, _metadata, _backendVerifiedPrice } = rItem;
+            const livestreamId = rItem.livestreamId ? Number(rItem.livestreamId) : null;
 
-            // FIX: Always deduct stock for the main variant (Ticket or Retail Item)
-            // For Blindbox: Ticket stock (99999) is deducted here. Real Item stock is deducted in blindboxes.service
-            if (variant.stock_available < quantity) {
-              throw new BadRequestException(`Out of stock: ${variant.sku}`);
+            // --- 1. ATOMIC RETAIL STOCK DEDUCTION (Global Pool) ---
+            // Skip stock deduction for Blindbox tickets because the actual prize stock was already deducted in pickUniqueItems
+            if (!_allocated_product_id) {
+              const stockUpdateResult = await tx.product_variants.updateMany({
+                where: {
+                  variant_id: variant.variant_id,
+                  stock_available: { gte: quantity }
+                },
+                data: { stock_available: { decrement: quantity } }
+              });
+
+              if (stockUpdateResult.count === 0) {
+                throw new BadRequestException(`Product ${variant.sku} is out of stock or has been purchased by someone else.`);
+              }
             }
 
-            // Deduct Stock
-            await tx.product_variants.update({
-              where: { variant_id: variant.variant_id },
-              data: { stock_available: { decrement: quantity } }
-            });
+            // --- 2. AUTHORITATIVE PRICE CALCULATION (Zero-Trust) ---
+            // Fix: Fallback to _backendVerifiedPrice to respect AI Clearance & Promotions
+            let authoritativePrice = _backendVerifiedPrice !== undefined ? _backendVerifiedPrice : Number(variant.price);
+            let shouldCheckFlashStock = false;
 
-            rtTotalAmount += Number(price) * quantity;
+            if (livestreamId) {
+              const liveConfig = await tx.livestream_products.findUnique({
+                where: { livestream_id_variant_id: { livestream_id: livestreamId, variant_id: variant.variant_id } }
+              });
+
+              if (liveConfig && liveConfig.flash_sale_price && Number(liveConfig.flash_sale_price) > 0) {
+                authoritativePrice = Number(liveConfig.flash_sale_price);
+                shouldCheckFlashStock = true;
+                hasFlashSaleItem = true; // Mark order for 5-min deadline
+              } else if (liveConfig && liveConfig.live_price && Number(liveConfig.live_price) > 0) {
+                authoritativePrice = Number(liveConfig.live_price);
+              } else {
+                authoritativePrice = Number(variant.price) * 0.98; // Default live discount
+              }
+            }
+
+            // SECURITY: Reject if price deviates
+            if (Math.abs(Number(price) - authoritativePrice) > 1) {
+              this.logger.error(`[PRICE MISMATCH] SKU: ${variant.sku} | Client Sent: ${price} | Backend Expected: ${authoritativePrice} | _backendVerifiedPrice: ${_backendVerifiedPrice} | LivestreamId: ${livestreamId}`);
+              throw new BadRequestException(`Product price for ${variant.sku} has changed. Please update your cart.`);
+            }
+
+            // --- 3. ATOMIC FLASH SALE STOCK POOL ENFORCEMENT ---
+            if (shouldCheckFlashStock && livestreamId) {
+              const fsUpdateResult = await tx.livestream_products.updateMany({
+                where: {
+                  livestream_id: livestreamId,
+                  variant_id: variant.variant_id,
+                  flash_sale_stock: { gte: quantity }
+                },
+                data: { flash_sale_stock: { decrement: quantity } }
+              });
+
+              if (fsUpdateResult.count === 0) {
+                throw new BadRequestException(`Flash Sale slot for ${variant.sku} is sold out. Please update your cart.`);
+              }
+
+              // AUTO-REVERT: Clear price if stock hits zero
+              const revertResult = await tx.livestream_products.updateMany({
+                where: { livestream_id: livestreamId, variant_id: variant.variant_id, flash_sale_stock: { lte: 0 } },
+                data: { flash_sale_price: 0, flash_sale_stock: 0 }
+              });
+
+              if (revertResult.count > 0) {
+                this.livestreamLiveGateway.broadcastProductUpdate(`LIVE-${livestreamId}`, variant.variant_id);
+              }
+            }
+
+            rtTotalAmountVerified += Number(price) * quantity;
             rtTotalWeight += (variant.weight_g || 200) * quantity;
 
             rtOrderItemsData.push({
@@ -385,125 +528,95 @@ export class OrdersService {
               total_price: Number(price) * quantity,
               allocated_product_id: _allocated_product_id || null,
               is_opened: _is_opened ?? false,
-              metadata: _metadata || undefined // Save Source Metadata
+              livestream_id: livestreamId,
+              metadata: _metadata || undefined
             });
-          }
 
-          // Calc Shipping for Retail
-          let rtShippingFee = 0;
-          let rtNominalShipping = 0;
-
-          // Calculate default nominal shipping (Fallback)
-          for (const rItem of retailItems) {
-            const nominal = Number(rItem.variant.nominal_shipping_fee || 30000);
-            rtNominalShipping += nominal * rItem.quantity;
-          }
-
-          try {
-            if (address.district_id && address.ward_code) {
-              rtShippingFee = await this.ghnService.calculateRealFee({
-                to_district_id: address.district_id,
-                to_ward_code: address.ward_code,
-                weight: rtTotalWeight,
-                insurance_value: rtTotalAmount
-              });
-            } else {
-              rtShippingFee = rtNominalShipping; // Fallback only for internal accounting
+            // BROADCAST: Update stock meter in real-time
+            if (livestreamId) {
+              this.livestreamLiveGateway.broadcastProductUpdate(`LIVE-${livestreamId}`, variant.variant_id);
             }
-          } catch (e) {
-            console.warn("GHN Shipping Calc Failed, using nominal fallback:", e.message);
-            rtShippingFee = rtNominalShipping;
           }
 
-          // FIX: FLAT RATE SHIPPING POLICY + VOUCHER FREE SHIP
-          const FIXED_SHIPPING_FEE = 30000;
-          let customerShippingFee = FIXED_SHIPPING_FEE;
+          let customerShippingFee = 30000;
+          if (isVoucherFreeShip) customerShippingFee = 0;
 
-          if (isVoucherFreeShip) {
-            const discountValue = 30000; // Implicit 100% free ship
-            customerShippingFee = Math.max(0, customerShippingFee - discountValue);
-          }
+          // FAIRNESS: Shorter deadline for Flash Sales (5 mins) vs Retail (15 mins)
+          const effectiveDeadline = new Date();
+          effectiveDeadline.setMinutes(effectiveDeadline.getMinutes() + (hasFlashSaleItem ? 5 : 15));
 
-          // Total now uses the fixed user fee, not the real cost
-          const rtFinalTotal = rtTotalAmount + Number(customerShippingFee);
+          const finalTotalBeforeShipping = Math.max(0, rtTotalAmountVerified - orderVoucherDiscountAmount);
+          const rtFinalTotal = finalTotalBeforeShipping + customerShippingFee;
 
-          const rtOrderCode = `ORD-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
           const rtOrder = await tx.orders.create({
             data: {
               user_id: userId,
-              order_code: rtOrderCode,
+              order_code: `ORD-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
               shipping_address_id,
               total_amount: rtFinalTotal,
-              shipping_fee: customerShippingFee, // Charge fixed 30k to user (or 0 if free ship)
-              original_shipping_fee: rtShippingFee, // Store real cost for accounting
+              discount_amount: orderVoucherDiscountAmount,
+              shipping_fee: customerShippingFee,
+              original_shipping_fee: 30000,
               payment_method_code,
-              payment_ref_code: paymentRefCode, // LINK TO GROUP
+              payment_ref_code: paymentRefCode,
               status_code: 'PENDING_PAYMENT',
-              payment_deadline: retailDeadline,
+              payment_deadline: effectiveDeadline,
               channel_code: 'WEB',
               promotion_id: usedDiscountPromotionId,
               shipping_promotion_id: usedFreeShipPromotionId,
               order_items: { create: rtOrderItemsData },
-              order_status_history: { create: { new_status: 'PENDING_PAYMENT', note: 'Retail Order Created' } }
+              order_status_history: { create: { new_status: 'PENDING_PAYMENT', note: hasFlashSaleItem ? 'Flash Sale Order (5-min Hold)' : 'Retail Order (15-min Hold)' } }
             } as any
           });
           ordersResults.push(rtOrder);
         }
 
-        // D. Clear Cart (Common)
+        // --- D. CLEANUP: Clear Cart & Consume Vouchers ---
         const cart = await tx.carts.findFirst({ where: { user_id: userId, deleted_at: null } });
         if (cart) {
-          const allVariantIds = items.map(i => i.variant_id);
+          const allVariantIds = items.map((i: any) => i.variant_id);
           await tx.cart_items.deleteMany({
             where: { cart_id: cart.cart_id, variant_id: { in: allVariantIds } }
           });
         }
 
-        // E. Mark Vouchers as Used
         if (usedDiscountPromotionId) {
-          const uv = await tx.user_vouchers.findFirst({
-            where: { user_id: userId, promotion_id: usedDiscountPromotionId, is_used: false }
+          await tx.user_vouchers.updateMany({
+            where: { user_id: userId, promotion_id: usedDiscountPromotionId, status: 'COLLECTED' },
+            data: { status: 'USED', used_at: new Date() }
           });
-          if (uv) {
-            await tx.user_vouchers.update({
-              where: { id: uv.id },
-              data: { is_used: true }
-            });
-          }
         }
-
         if (usedFreeShipPromotionId) {
-          const uvFs = await tx.user_vouchers.findFirst({
-            where: { user_id: userId, promotion_id: usedFreeShipPromotionId, is_used: false }
+          await tx.user_vouchers.updateMany({
+            where: { user_id: userId, promotion_id: usedFreeShipPromotionId, status: 'COLLECTED' },
+            data: { status: 'USED', used_at: new Date() }
           });
-          if (uvFs) {
-            await tx.user_vouchers.update({
-              where: { id: uvFs.id },
-              data: { is_used: true }
-            });
-          }
         }
 
         return ordersResults;
       });
 
-      // Calculate Total Amount
       const totalAmount = createdOrders.reduce((sum, o) => sum + Number(o.total_amount), 0);
       const orderIds = createdOrders.map(o => o.order_id);
+
+      // NOTE: new_order broadcast to livestream admin is intentionally NOT done here.
+      // It will be emitted ONLY after SUCCESSFUL PAYMENT (see mockPayGroup / payWithWallet / webhook handler).
+      // Reason: createOrder sets status = PENDING_PAYMENT (draft). Broadcasting here causes false +1 order counts.
 
       return {
         payment_ref_code: paymentRefCode,
         total_amount: totalAmount,
         order_ids: orderIds,
-        orders: createdOrders // Optional: return objects if needed
+        orders: createdOrders
       };
 
     } catch (error) {
-      console.error("CREATE ORDER ERROR:", error);
+      this.logger.error("CREATE ORDER ERROR:", error);
       if (error instanceof BadRequestException) throw error;
-      throw new InternalServerErrorException('Failed to create order(s)');
+      throw new InternalServerErrorException(error.message || 'Failed to create order(s)');
     }
   }
+
 
   // --- NEW: FETCH ORDERS BY GROUP REF ---
   async getOrdersByRef(refCode: string, userId: number) {
@@ -525,7 +638,10 @@ export class OrdersService {
         addresses: true
       }
     });
-    return orders;
+    return orders.map(o => ({
+      ...o,
+      addresses: this.decryptAddress(o.addresses) as any
+    }));
   }
 
   // --- NEW: FETCH SINGLE ORDER BY CODE (or code prefix for auction orders) ---
@@ -554,13 +670,142 @@ export class OrdersService {
     if (!orders || orders.length === 0) {
       throw new NotFoundException(`No order found with code: ${code}`);
     }
-
     // Return array for compatibility with Checkout.tsx (legacyAuction path sets fetchedOrders = res.data)
-    return orders;
+    return orders.map(o => ({
+      ...o,
+      addresses: this.decryptAddress(o.addresses) as any
+    }));
+  }
+
+  // --- NEW: PRIVATE HELPER TO APPLY VOUCHER TO A GROUP OF ORDERS ---
+  private async _applyVoucherToGroup(tx: any, userId: number, orders: any[], voucherId: number) {
+    const voucher = await tx.user_vouchers.findFirst({
+      where: { id: voucherId, user_id: userId, status: 'COLLECTED' },
+      include: { promotions: true }
+    });
+
+    if (!voucher) throw new BadRequestException("Voucher not found, expired, or already used.");
+    const promo = voucher.promotions;
+    if (!promo) throw new BadRequestException("Invalid promotion data.");
+
+    // 1. Expiry Check
+    const now = new Date();
+    if (promo.end_date && new Date(promo.end_date) < now) {
+      await tx.user_vouchers.update({ where: { id: voucherId }, data: { status: 'EXPIRED' } });
+      throw new BadRequestException("This voucher has expired.");
+    }
+
+    // 2. Rank Check (Final Safety)
+    if (promo.apply_rank_code) {
+      const customer = await tx.customers.findUnique({ where: { user_id: userId } });
+      if (customer?.current_rank_code !== promo.apply_rank_code) {
+        throw new BadRequestException(`Voucher requires ${promo.apply_rank_code} rank.`);
+      }
+    }
+
+    // 3. Min Order Value Check
+    const groupSubtotal = orders.reduce((sum, o) => sum + (Number(o.total_amount) - Number(o.shipping_fee || 0) + Number(o.discount_amount || 0)), 0);
+    if (promo.min_order_value && groupSubtotal < Number(promo.min_order_value)) {
+      throw new BadRequestException(`Minimum order value of ${new Intl.NumberFormat('vi-VN').format(Number(promo.min_order_value))}đ not met.`);
+    }
+
+    // 4. Calculate Discount
+    let totalDiscount = 0;
+    if (promo.discount_type === 'PERCENTAGE') {
+      totalDiscount = Math.round(groupSubtotal * (Number(promo.discount_value) / 100));
+    } else if (promo.discount_type === 'FIXED_AMOUNT') {
+      totalDiscount = Number(promo.discount_value);
+    } else if (promo.discount_type === 'FREE_SHIP') {
+      // Handled separately below
+    }
+
+    // 5. Apply to orders
+    if (promo.discount_type === 'FREE_SHIP') {
+      for (const order of orders) {
+        await tx.orders.update({
+          where: { order_id: order.order_id },
+          data: {
+            shipping_fee: 0,
+            total_amount: { decrement: order.shipping_fee || 0 },
+            shipping_promotion_id: promo.promotion_id
+          }
+        });
+        // Update local ref for subsequent payment logic
+        order.total_amount = Number(order.total_amount) - Number(order.shipping_fee || 0);
+      }
+    } else if (totalDiscount > 0) {
+      // Apply discount to the first order that has enough total_amount, or divide it
+      let remainingDiscount = totalDiscount;
+      for (const order of orders) {
+        if (remainingDiscount <= 0) break;
+        const currentOrderTotal = Number(order.total_amount);
+        const applyNow = Math.min(remainingDiscount, currentOrderTotal);
+
+        await tx.orders.update({
+          where: { order_id: order.order_id },
+          data: {
+            discount_amount: { increment: applyNow },
+            total_amount: { decrement: applyNow },
+            promotion_id: promo.promotion_id
+          }
+        });
+
+        order.total_amount = Number(order.total_amount) - applyNow;
+        remainingDiscount -= applyNow;
+      }
+    }
+
+    // 6. Mark Voucher as USED
+    await tx.user_vouchers.update({
+      where: { id: voucherId },
+      data: { status: 'USED', used_at: new Date() }
+    });
+
+    return true;
+  }
+
+  // --- NEW: PRIVATE HELPER TO SEND NOTIFICATIONS FOR A GROUP ---
+  private async _sendGroupNotifications(paymentRefCode: string, userId: number) {
+    try {
+      const updatedOrders = await this.prisma.orders.findMany({
+        where: { payment_ref_code: paymentRefCode, user_id: userId },
+        include: {
+          users: true,
+          order_items: { include: { product_variants: { include: { products: true } } } }
+        }
+      });
+
+      for (const order of updatedOrders) {
+        // Sync Auction status if applicable
+        if (order.order_code && order.order_code.startsWith('AUC-')) {
+          try {
+            const auctionId = parseInt(order.order_code.split('-')[1], 10);
+            await this.prisma.auctions.update({
+              where: { auction_id: auctionId },
+              data: { status_code: 'COMPLETED' }
+            });
+            this.logger.log(`Synced Auction #${auctionId} to COMPLETED`);
+          } catch (err) {
+            this.logger.error(`Auction sync error for ${order.order_code}:`, err);
+          }
+        }
+
+        // Send Email & Socket
+        if (order.users) {
+          const decryptedUser = this.decryptUser(order.users);
+          if (decryptedUser && decryptedUser.email) {
+            this.mailService.sendOrderConfirmation(decryptedUser, order).catch(e => this.logger.error("Mail Error", e));
+          }
+        }
+        this.eventsGateway.notifyNewOrder(order);
+      }
+    } catch (error) {
+      this.logger.error("Failed to send group notifications", error);
+    }
   }
 
   // --- NEW: MOCK PAYMENT FOR GROUP ---
-  async mockPayGroup(paymentRefCode: string, userId: number) {
+  async mockPayGroup(paymentRefCode: string, userId: number, voucherId?: number) {
     if (!paymentRefCode) throw new BadRequestException("Payment Ref Code required");
 
     const orders = await this.prisma.orders.findMany({
@@ -569,36 +814,30 @@ export class OrdersService {
 
     if (orders.length === 0) throw new NotFoundException("No orders found for this payment ref");
 
-    // Verify all are pending
     const validStatuses = ['PENDING_PAYMENT', 'WAITING_DEPOSIT'];
     const invalid = orders.find(o => !validStatuses.includes(o.status_code || ''));
-    if (invalid) {
-      throw new BadRequestException("Some orders in this group are already processed or cancelled.");
-    }
+    if (invalid) throw new BadRequestException("Some orders in this group are already processed or cancelled.");
 
-    await this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
+      if (voucherId) {
+        await this._applyVoucherToGroup(tx, userId, orders, voucherId);
+      }
+
       for (const order of orders) {
         const newStatus = order.status_code === 'PENDING_PAYMENT' ? 'PROCESSING' : 'DEPOSITED';
-
-        // Update Order
         await tx.orders.update({
           where: { order_id: order.order_id },
           data: {
             status_code: newStatus,
-            paid_amount: order.total_amount, // Paid in full (or deposit full)
+            paid_amount: order.total_amount,
             payment_method_code: 'MOCK_PAY'
           }
         });
 
-        // If Pre-order, update pending contract/payment entry if needed?
-        // Status 'WAITING_DEPOSIT' -> 'DEPOSITED' is managed via Order Status for now?
-        // Ideally update Contract status too.
         if (newStatus === 'DEPOSITED') {
-          // New Schema: Direct Link
           const contract = await tx.preorder_contracts.findFirst({
             where: { deposit_order_id: order.order_id }
           });
-
           if (contract) {
             await tx.preorder_contracts.update({
               where: { contract_id: contract.contract_id },
@@ -607,9 +846,11 @@ export class OrdersService {
           }
         }
       }
+      return { success: true, count: orders.length };
     });
 
-
+    // Notify in background
+    this._sendGroupNotifications(paymentRefCode, userId).catch(() => { });
 
     // --- FIX: SEND NOTIFICATIONS AFTER TRANSACTION ---
     try {
@@ -640,11 +881,14 @@ export class OrdersService {
 
       for (const order of updatedOrders) {
         if (order.users && order.users.email) {
-          // Send Email
-          this.mailService.sendOrderConfirmation(order.users, order).catch(e => console.error("Mail Error", e));
+          // Send Email (Decrypt user first)
+          const decryptedUser = this.decryptUser(order.users);
+          this.mailService.sendOrderConfirmation(decryptedUser, order).catch(e => console.error("Mail Error", e));
         }
-        // Emit Socket
+        // Emit Socket (warehouse)
         this.eventsGateway.notifyNewOrder(order);
+        // Emit Socket (livestream room) — ONLY on successful payment
+        await this._broadcastLivestreamOrder(order);
       }
       this.logger.log(`Notifications sent for group ${paymentRefCode}`);
 
@@ -652,45 +896,36 @@ export class OrdersService {
       console.error("Failed to send notifications for group payment", error);
     }
 
-    return { success: true, message: `Payment successful for group ${paymentRefCode}` };
+    return result;
   }
 
   // --- NEW: WALLET PAYMENT FOR GROUP ---
-  async payWithWallet(paymentRefCode: string, userId: number) {
+  async payWithWallet(paymentRefCode: string, userId: number, voucherId?: number) {
     if (!paymentRefCode) throw new BadRequestException("Payment Ref Code required");
 
     try {
-      await this.prisma.$transaction(async (tx) => {
-        // 1. Fetch orders in the group that are pending payment
+      const result = await this.prisma.$transaction(async (tx) => {
         const orders = await tx.orders.findMany({
           where: { payment_ref_code: paymentRefCode, user_id: userId, status_code: 'PENDING_PAYMENT' }
         });
 
-        if (!orders.length) throw new BadRequestException("No pending orders found for this reference");
+        if (!orders.length) throw new BadRequestException("No pending orders found");
 
-        // 2. Calculate Total Required
+        if (voucherId) {
+          await this._applyVoucherToGroup(tx, userId, orders, voucherId);
+        }
+
         const totalAmount = orders.reduce((sum, o) => sum + Number(o.total_amount), 0);
+        const wallet = await tx.wallets.findUnique({ where: { user_id: userId } });
 
-        // 3. Fetch Wallet & Verify Balance
-        const wallet = await tx.wallets.findUnique({
-          where: { user_id: userId }
-        });
+        if (!wallet) throw new BadRequestException("Wallet not found.");
+        if (Number(wallet.balance_available) < totalAmount) throw new BadRequestException("Insufficient balance.");
 
-        if (!wallet) {
-          throw new BadRequestException("Wallet not found. Please activate your FigiWallet.");
-        }
-
-        if (Number(wallet.balance_available) < totalAmount) {
-          throw new BadRequestException("Insufficient wallet balance.");
-        }
-
-        // 4. Deduct Balance
         await tx.wallets.update({
           where: { wallet_id: wallet.wallet_id },
           data: { balance_available: { decrement: totalAmount } }
         });
 
-        // 5. Update Orders to PROCESSING and Create Payment Transactions
         for (const order of orders) {
           await tx.orders.update({
             where: { order_id: order.order_id },
@@ -698,29 +933,29 @@ export class OrdersService {
           });
         }
 
-        // 6. Record Wallet Deduction Transaction
         await tx.wallet_transactions.create({
           data: {
             wallet_id: wallet.wallet_id,
             type_code: 'PAYMENT',
             amount: -totalAmount,
             reference_code: paymentRefCode,
-            description: `Payment for order group ${paymentRefCode}`
+            description: `Payment for group ${paymentRefCode}`
           }
         });
+
+        return { success: true, totalPaid: totalAmount };
       });
 
-      // 7. Post-Transaction Actions (Notifications, Socket)
-      const updatedOrders = await this.prisma.orders.findMany({
-        where: { payment_ref_code: paymentRefCode, user_id: userId },
-        include: {
-          users: true,
-          order_items: { include: { product_variants: { include: { products: true } } } }
-        }
-      });
+      // Notify in background
+      this._sendGroupNotifications(paymentRefCode, userId).catch(() => { });
 
       // --- NEW: SYNC AUCTION STATUS ---
-      for (const order of updatedOrders) {
+      const updatedOrdersForAuction = await this.prisma.orders.findMany({
+        where: { payment_ref_code: paymentRefCode, user_id: userId },
+        include: { users: true }
+      });
+
+      for (const order of updatedOrdersForAuction) {
         if (order.order_code && order.order_code.startsWith('AUC-')) {
           try {
             const auctionId = parseInt(order.order_code.split('-')[1], 10);
@@ -735,21 +970,47 @@ export class OrdersService {
         }
       }
 
-      for (const order of updatedOrders) {
-        if (order.users && order.users.email) {
-          this.mailService.sendOrderConfirmation(order.users, order).catch(e => console.error("Mail Error", e));
+      for (const order of updatedOrdersForAuction) {
+        if (order.users) {
+          const decryptedUser = this.decryptUser(order.users);
+          this.mailService.sendOrderConfirmation(decryptedUser, order).catch(e => console.error("Mail Error", e));
         }
         this.eventsGateway.notifyNewOrder(order);
+        // Emit Socket (livestream room) — ONLY on successful payment
+        await this._broadcastLivestreamOrder(order);
       }
       this.logger.log(`Wallet Payment successful for group ${paymentRefCode}`);
+      return result;
 
     } catch (error) {
       this.logger.error("Wallet Payment Error:", error);
       if (error instanceof BadRequestException) throw error;
-      throw new InternalServerErrorException('Payment processing failed');
     }
+  }
 
-    return { success: true, message: `Wallet payment successful for group ${paymentRefCode}` };
+  /**
+   * Broadcast a confirmed (paid) order to the livestream admin room.
+   * Called ONLY after order status transitions to PROCESSING.
+   */
+  private async _broadcastLivestreamOrder(order: any): Promise<void> {
+    try {
+      const items = order.order_items || [];
+      for (const item of items) {
+        if (!item.livestream_id) continue;
+        const variantInfo = item.product_variants;
+        const productName = variantInfo?.products?.name || variantInfo?.option_name || 'Sản phẩm';
+        const customerName = order.users?.full_name || 'Khách hàng';
+        this.livestreamLiveGateway.broadcastOrder(`LIVE-${item.livestream_id}`, {
+          customer_name: customerName,
+          product_name: productName,
+          quantity: item.quantity,
+          amount: Number(item.unit_price) * item.quantity,
+          time: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }),
+        });
+      }
+    } catch (err) {
+      this.logger.error('Failed to broadcast livestream order:', err);
+    }
   }
 
   async confirmPayment(orderId: number, userId: number) {
@@ -785,7 +1046,8 @@ export class OrdersService {
     }
 
     // Now TypeScript knows 'fullOrder' and 'fullOrder.users' are NOT null
-    this.mailService.sendOrderConfirmation(fullOrder.users, fullOrder);
+    const decryptedUser = this.decryptUser(fullOrder.users);
+    this.mailService.sendOrderConfirmation(decryptedUser, fullOrder);
     // FIX: Trigger Realtime Notification for Warehouse HERE (Processing/Paid only)
     this.eventsGateway.notifyNewOrder(fullOrder);
 
@@ -831,12 +1093,38 @@ export class OrdersService {
           });
         }
 
-        // 2. Restore Blindbox Ticket (Virtual Stock)
-        if (item.allocated_product_id) {
-          await tx.product_variants.update({
-            where: { variant_id: item.variant_id }, // The Ticket ID
-            data: { stock_available: { increment: item.quantity } }
+        // (Blindbox ticket virtual stock is no longer restored as it's never deducted)
+        // 3. Restore Flash Sale Quota (Decimal-safe)
+        const promoItems = await tx.promotion_items.findMany({
+          where: {
+            variant_id: item.variant_id,
+            sold: { gte: item.quantity }
+          },
+          orderBy: { item_id: 'desc' }
+        });
+
+        const promoItem = promoItems.find(p => Number(p.flash_sale_price) === Number(item.unit_price)) || promoItems[0];
+
+        if (promoItem) {
+          await tx.promotion_items.update({
+            where: { item_id: promoItem.item_id },
+            data: { sold: { decrement: item.quantity } }
           });
+          this.logger.log(`[Expire] Restored ${item.quantity} quota to Flash Sale Item #${promoItem.item_id}`);
+        }
+
+        // 4. Restore Livestream Flash Sale Quota
+        if (item.livestream_id) {
+          const livePromo = await tx.livestream_products.findUnique({
+            where: { livestream_id_variant_id: { livestream_id: item.livestream_id, variant_id: item.variant_id } }
+          });
+          if (livePromo && livePromo.flash_sale_price) {
+            await tx.livestream_products.update({
+              where: { livestream_id_variant_id: { livestream_id: item.livestream_id, variant_id: item.variant_id } },
+              data: { flash_sale_stock: { increment: item.quantity } }
+            });
+            this.logger.log(`[Expire] Restored ${item.quantity} quota to Livestream Product Flash Sale!`);
+          }
         }
         // --- CRITICAL FIX END ---
       }
@@ -853,10 +1141,11 @@ export class OrdersService {
         // Add items back to cart
         if (cart) {
           await tx.cart_items.createMany({
-            data: order.order_items.map(item => ({
+            data: order.order_items.map((item: any) => ({
               cart_id: cart!.cart_id,
               variant_id: item.variant_id,
-              quantity: item.quantity
+              quantity: item.quantity,
+              livestream_id: item.livestream_id || null
             }))
           });
         }
@@ -869,12 +1158,12 @@ export class OrdersService {
       const usedPromotions = [order.promotion_id, order.shipping_promotion_id].filter(Boolean) as number[];
       if (order.user_id && usedPromotions.length > 0) {
         for (const promoId of usedPromotions) {
-          // Find the user_voucher record and set is_used back to false
+          // Find the user_voucher record and restore status to COLLECTED
           const usedVoucher = await tx.user_vouchers.findFirst({
             where: {
               user_id: order.user_id,
               promotion_id: promoId,
-              is_used: true
+              status: 'USED'
             },
             orderBy: {
               updated_at: 'desc' // Try to get the one most recently used
@@ -884,7 +1173,7 @@ export class OrdersService {
           if (usedVoucher) {
             await tx.user_vouchers.update({
               where: { id: usedVoucher.id },
-              data: { is_used: false }
+              data: { status: 'COLLECTED', used_at: null }
             });
           }
         }
@@ -936,7 +1225,7 @@ export class OrdersService {
 
   async findAll(params?: { status?: string }) {
     const { status } = params || {};
-    return this.prisma.orders.findMany({
+    const orders = await this.prisma.orders.findMany({
       where: status ? { status_code: status } : {},
       orderBy: { created_at: 'asc' }, // FIFO: Oldest First
       include: {
@@ -953,10 +1242,15 @@ export class OrdersService {
         addresses: true,
       }
     });
+
+    return orders.map(o => ({
+      ...o,
+      addresses: this.decryptAddress(o.addresses)
+    }));
   }
 
   async findAllByUser(userId: number) {
-    return this.prisma.orders.findMany({
+    const orders = await this.prisma.orders.findMany({
       where: { user_id: userId },
       orderBy: { created_at: 'desc' },
       include: {
@@ -980,6 +1274,11 @@ export class OrdersService {
         }
       }
     });
+
+    return orders.map(o => ({
+      ...o,
+      addresses: this.decryptAddress(o.addresses)
+    }));
   }
 
   // FIX: Allow Staff to see censored video if needed.
@@ -1016,6 +1315,15 @@ export class OrdersService {
     // AND User is NOT Staff/Admin
     const isStaff = user?.role === 'ADMIN' || user?.role?.startsWith('STAFF');
 
+    // Audit Logging if staff accesses someone else's order
+    if (isStaff && order.user_id !== user?.userId) {
+      const requestingUserId = Number(user.userId || user.id || user.sub || user.user_id);
+      await this.logPiiAccess(requestingUserId, order.user_id, ['order_address'], user.ip);
+    }
+
+    // Decrypt Address
+    order.addresses = this.decryptAddress(order.addresses) as any;
+
     if (hasUnopened && order.status_code !== 'COMPLETED' && !isStaff) {
       // CENSOR THE VIDEO
       order.packing_video_urls = null;
@@ -1040,7 +1348,7 @@ export class OrdersService {
 
   // --- NEW: FETCH MY CONTRACTS ---
   async findMyContracts(userId: number) {
-    return this.prisma.preorder_contracts.findMany({
+    const contracts = await this.prisma.preorder_contracts.findMany({
       where: { user_id: userId },
       orderBy: { created_at: 'desc' },
       include: {
@@ -1059,6 +1367,14 @@ export class OrdersService {
         final_order: true
       }
     });
+
+    return contracts.map(c => ({
+      ...c,
+      deposit_order: c.deposit_order ? {
+        ...c.deposit_order,
+        addresses: this.decryptAddress(c.deposit_order.addresses)
+      } : null
+    }));
   }
 
   // --- NEW: PHASE 3 - FINAL PAYMENT LOGIC (SINGLE ORDER LIFECYCLE) ---
@@ -1175,6 +1491,11 @@ export class OrdersService {
     });
 
     if (!contract) throw new NotFoundException(`Contract #${contractId} not found`);
+
+    if (contract.deposit_order) {
+      (contract.deposit_order as any).addresses = this.decryptAddress(contract.deposit_order.addresses);
+    }
+
     return contract;
   }
 
@@ -1259,6 +1580,37 @@ export class OrdersService {
               data: { stock_available: { increment: item.quantity } }
             });
           }
+
+          // FIX: Restore Flash Sale Quota
+          const promoItem = await tx.promotion_items.findFirst({
+            where: {
+              variant_id: item.variant_id,
+              flash_sale_price: item.unit_price,
+              sold: { gte: item.quantity }
+            }
+          });
+
+          if (promoItem) {
+            await tx.promotion_items.update({
+              where: { item_id: promoItem.item_id },
+              data: { sold: { decrement: item.quantity } }
+            });
+            this.logger.log(`[Cancel] Restored ${item.quantity} quota to Flash Sale Item #${promoItem.item_id}`);
+          }
+
+          // FIX: Restore Livestream Flash Sale Quota
+          if (item.livestream_id) {
+            const livePromo = await tx.livestream_products.findUnique({
+              where: { livestream_id_variant_id: { livestream_id: item.livestream_id, variant_id: item.variant_id } }
+            });
+            if (livePromo && livePromo.flash_sale_price) {
+              await tx.livestream_products.update({
+                where: { livestream_id_variant_id: { livestream_id: item.livestream_id, variant_id: item.variant_id } },
+                data: { flash_sale_stock: { increment: item.quantity } }
+              });
+              this.logger.log(`[Cancel] Restored ${item.quantity} quota to Livestream Product Flash Sale!`);
+            }
+          }
           // --- CRITICAL FIX END ---
         }
       }
@@ -1276,7 +1628,8 @@ export class OrdersService {
             data: order.order_items.map(item => ({
               cart_id: cart!.cart_id,
               variant_id: item.variant_id,
-              quantity: item.quantity
+              quantity: item.quantity,
+              livestream_id: item.livestream_id
             }))
           });
         }
@@ -1292,7 +1645,7 @@ export class OrdersService {
             where: {
               user_id: order.user_id,
               promotion_id: promoId,
-              is_used: true
+              status: 'USED'
             },
             orderBy: {
               updated_at: 'desc'
@@ -1302,7 +1655,7 @@ export class OrdersService {
           if (usedVoucher) {
             await tx.user_vouchers.update({
               where: { id: usedVoucher.id },
-              data: { is_used: false }
+              data: { status: 'COLLECTED', used_at: null }
             });
           }
         }
@@ -1389,7 +1742,8 @@ export class OrdersService {
     // Trigger Shipping Email
     if (status === 'SHIPPING' && order.users) {
       // Run async
-      this.mailService.sendShippingUpdate(order.users, order);
+      const decryptedUser = this.decryptUser(order.users);
+      this.mailService.sendShippingUpdate(decryptedUser, order);
     }
 
     // Sync RETURNED to corresponding return_requests
@@ -1477,7 +1831,8 @@ export class OrdersService {
 
     // C. Trigger Delivery Success Email
     if (order.users) {
-      this.mailService.sendDeliverySuccess(order.users, order, earnedPoints);
+      const decryptedUser = this.decryptUser(order.users);
+      this.mailService.sendDeliverySuccess(decryptedUser, order, earnedPoints);
     }
 
     // D. Sync Auction Status if it is an auction order
@@ -1495,5 +1850,21 @@ export class OrdersService {
     }
 
     return { success: true, message: `Order ${trackingCode} completed and points added.` };
+  }
+  /** Log a PII access event when staff views sensitive order data */
+  private async logPiiAccess(accessedBy: number, targetUserId: number | null, fieldsViewed: string[], ip?: string) {
+    if (!targetUserId) return;
+    try {
+      await this.prisma.pii_access_logs.create({
+        data: {
+          accessed_by: accessedBy,
+          target_user_id: targetUserId,
+          fields_viewed: fieldsViewed.join(','),
+          ip_address: ip || null,
+        }
+      });
+    } catch (e) {
+      console.error('[PII Audit] Failed to write audit log:', e.message);
+    }
   }
 }
