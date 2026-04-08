@@ -1,22 +1,36 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { async } from 'rxjs';
+import { EncryptionService } from '../common/encryption.service';
+import { maskEmail, maskPhone } from '../common/mask.util';
 
 @Injectable()
 export class CustomersService {
-  constructor(private readonly prisma: PrismaService) { }
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly encryption: EncryptionService
+  ) { }
 
-  async findAll(page: number, limit: number, search?: string) {
+  private decryptUser(user: any) {
+    if (!user) return null;
+    const { password_hash, otp_code, otp_expires_at, google_id, refresh_token, ...safeUser } = user;
+    const decrypted = { ...safeUser };
+    if (decrypted.email) decrypted.email = this.encryption.decrypt(decrypted.email);
+    if (decrypted.phone) decrypted.phone = this.encryption.decrypt(decrypted.phone);
+    return decrypted;
+  }
+
+  async findAll(page: number, limit: number, search?: string, requestingRole?: string) {
     const skip = (page - 1) * limit;
     const where: any = {
       role_code: 'CUSTOMER',
     };
 
     if (search) {
+      const encryptedSearch = this.encryption.encryptDeterministic(search);
       where.OR = [
         { full_name: { contains: search, mode: 'insensitive' } },
-        { email: { contains: search, mode: 'insensitive' } },
-        { phone: { contains: search, mode: 'insensitive' } },
+        { email: encryptedSearch },
+        { phone: encryptedSearch },
       ];
     }
 
@@ -33,18 +47,26 @@ export class CustomersService {
       this.prisma.users.count({ where }),
     ]);
 
-    const data = users.map((u) => ({
-      user_id: u.user_id,
-      full_name: u.full_name,
-      email: u.email,
-      phone: u.phone,
-      status_code: u.status_code,
-      avatar_url: u.avatar_url,
-      loyalty_points: u.customers?.loyalty_points ?? 0,
-      current_rank_code: u.customers?.current_rank_code ?? 'NEWBIE',
-      total_spent: u.customers?.total_spent ?? 0,
-      address: [] // Placeholder if needed, or omit
-    }));
+    const data = users.map((u) => {
+      const decrypted = this.decryptUser(u);
+      
+      // Masking for List View: Apply to all management/staff roles to prevent bulk copy/scrapping
+      const email = maskEmail(decrypted.email);
+      const phone = maskPhone(decrypted.phone);
+
+      return {
+        user_id: decrypted.user_id,
+        full_name: decrypted.full_name,
+        email,
+        phone,
+        status_code: decrypted.status_code,
+        avatar_url: decrypted.avatar_url,
+        loyalty_points: u.customers?.loyalty_points ?? 0,
+        current_rank_code: u.customers?.current_rank_code ?? 'NEWBIE',
+        total_spent: u.customers?.total_spent ?? 0,
+        address: [] // Placeholder if needed, or omit
+      };
+    });
 
     return {
       data,
@@ -58,7 +80,7 @@ export class CustomersService {
   }
 
 
-  async findOne(id: number) {
+  async findOne(id: number, requestingUserId?: number, requestingRole?: string, ip?: string) {
     let user = await this.prisma.users.findUnique({
       where: { user_id: id },
       include: {
@@ -86,18 +108,31 @@ export class CustomersService {
       user = { ...user, customers: newCustomer };
     }
 
+    // Decrypt User
+    const decrypted = this.decryptUser(user);
+
+    // Audit Logging
+    if (requestingUserId && requestingUserId !== id && requestingRole && requestingRole !== 'CUSTOMER') {
+      await this.logPiiAccess(requestingUserId, id, ['phone', 'email', 'addresses'], ip);
+    }
+
     // Flatten Response
     return {
-      user_id: user.user_id,
-      full_name: user.full_name,
-      email: user.email,
-      phone: user.phone,
-      status_code: user.status_code,
-      avatar_url: user.avatar_url,
+      user_id: decrypted.user_id,
+      full_name: decrypted.full_name,
+      email: decrypted.email,
+      phone: decrypted.phone,
+      status_code: decrypted.status_code,
+      avatar_url: decrypted.avatar_url,
       loyalty_points: user.customers?.loyalty_points ?? 0,
       current_rank_code: user.customers?.current_rank_code ?? 'NEWBIE',
       total_spent: user.customers?.total_spent ?? 0,
-      addresses: user.addresses ?? [],
+      addresses: user.addresses ? user.addresses.map(a => {
+        const decA = { ...a };
+        if (decA.detail_address) decA.detail_address = this.encryption.decrypt(decA.detail_address);
+        if (decA.recipient_phone) decA.recipient_phone = this.encryption.decrypt(decA.recipient_phone);
+        return decA;
+      }) : [],
     };
   }
   async getDashboardStats(userId: number) {
@@ -191,6 +226,23 @@ export class CustomersService {
       rank_upgraded: rankUpgraded, // Using consistent naming if preferred
       newRank
     };
+  }
+
+  /** Log a PII access event when staff views sensitive customer data */
+  private async logPiiAccess(accessedBy: number, targetUserId: number, fieldsViewed: string[], ip?: string) {
+    try {
+      await this.prisma.pii_access_logs.create({
+        data: {
+          accessed_by: accessedBy,
+          target_user_id: targetUserId,
+          fields_viewed: fieldsViewed.join(','),
+          ip_address: ip || null,
+        }
+      });
+    } catch (e) {
+      // Non-blocking: log failure should NOT break the main request
+      console.error('[PII Audit] Failed to write audit log:', e.message);
+    }
   }
 }
 

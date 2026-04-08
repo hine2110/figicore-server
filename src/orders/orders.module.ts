@@ -8,6 +8,8 @@ import { EventsModule } from '../events/events.module';
 import { WalletModule } from '../wallet/wallet.module';
 import { AuctionsModule } from '../auctions/auctions.module';
 import { BlindboxesModule } from '../blindboxes/blindboxes.module';
+import { LivestreamsModule } from '../livestreams/livestreams.module';
+import { EncryptionService } from '../common/encryption.service';
 
 @Module({
   imports: [
@@ -17,10 +19,11 @@ import { BlindboxesModule } from '../blindboxes/blindboxes.module';
     EventsModule,
     WalletModule,
     BlindboxesModule,
+    LivestreamsModule,
     forwardRef(() => AuctionsModule)
   ],
   controllers: [OrdersController],
-  providers: [OrdersService],
+  providers: [OrdersService, EncryptionService],
   exports: [OrdersService],
 })
 export class OrdersModule { }

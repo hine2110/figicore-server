@@ -1,9 +1,13 @@
 import { Injectable } from '@nestjs/common';
 import { MailerService } from '@nestjs-modules/mailer';
+import { ConfigService } from '@nestjs/config';
 
 @Injectable()
 export class MailService {
-  constructor(private mailerService: MailerService) { }
+  constructor(
+    private mailerService: MailerService,
+    private configService: ConfigService,
+  ) { }
 
 
   private formatCurrency(amount: number): string {
@@ -124,39 +128,35 @@ export class MailService {
     });
   }
 
-
-
-
   async sendEmployeeActivation(to: string, tempPass: string, token: string, name: string) {
-    // Use environment variable for Frontend URL, fallback to localhost if not set (though .env is required)
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
     const activationLink = `${frontendUrl}/auth/activate?token=${token}`;
 
     await this.mailerService.sendMail({
       to: to,
-      from: process.env.MAIL_FROM, // Ensure sender is set correctly
-      subject: 'Kích hoạt tài khoản nhân viên FigiCore',
+      from: process.env.MAIL_FROM, 
+      subject: 'Activate Your FigiCore Employee Account',
       html: `
                 <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #eee; border-radius: 8px;">
-                    <h2 style="color: #111;">Chào mừng ${name} gia nhập đội ngũ FigiCore!</h2>
-                    <p>Tài khoản của bạn đã được khởi tạo. Dưới đây là thông tin đăng nhập tạm thời:</p>
+                    <h2 style="color: #111;">Welcome ${name} to the FigiCore Team!</h2>
+                    <p>Your account has been initialized. Below are your temporary login details:</p>
                     
                     <div style="background-color: #f9f9f9; padding: 15px; border-radius: 6px; margin: 20px 0;">
                         <p style="margin: 5px 0;"><strong>Email:</strong> ${to}</p>
-                        <p style="margin: 5px 0;"><strong>Mật khẩu tạm:</strong> <span style="font-family: monospace; font-size: 16px; background: #eee; padding: 2px 6px; border-radius: 4px;">${tempPass}</span></p>
+                        <p style="margin: 5px 0;"><strong>Temporary Password:</strong> <span style="font-family: monospace; font-size: 16px; background: #eee; padding: 2px 6px; border-radius: 4px;">${tempPass}</span></p>
                     </div>
 
-                    <p>Vui lòng nhấp vào nút bên dưới để đổi mật khẩu và kích hoạt tài khoản:</p>
+                    <p>Please click the button below to change your password and activate your account:</p>
                     
                     <div style="text-align: center; margin: 30px 0;">
                         <a href="${activationLink}" 
                            style="background-color: #000; color: white; padding: 12px 30px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">
-                           Kích Hoạt Tài Khoản
+                           Activate Account
                         </a>
                     </div>
                     
-                    <p style="color: #666; font-size: 14px;">Liên kết này sẽ hết hạn sau 24 giờ.</p>
-                    <p style="color: #999; font-size: 12px; margin-top: 30px;">Hệ thống FigiCore</p>
+                    <p style="color: #666; font-size: 14px;">This link will expire in 24 hours.</p>
+                    <p style="color: #999; font-size: 12px; margin-top: 30px;">FigiCore System</p>
                 </div>
             `,
     });
@@ -223,6 +223,222 @@ export class MailService {
       console.log(`[MailService] Pre-order arrival email sent to ${email}`);
     } catch (error) {
       console.error(`[MailService] Failed to send pre-order arrival email to ${email}`, error);
+    }
+  }
+
+  async sendAuctionWinEmail(user: any, auctionId: number, productName: string, paymentLink: string, amount: number) {
+    try {
+      await this.mailerService.sendMail({
+        to: user.email,
+        subject: `Congratulations! You won Auction #${auctionId} - FigiCore`,
+        html: `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #eaeaea; border-radius: 8px; overflow: hidden;">
+                <div style="background-color: #f59e0b; padding: 20px; text-align: center;">
+                    <h2 style="color: white; margin: 0;">You Won the Auction!</h2>
+                </div>
+                <div style="padding: 30px;">
+                    <p>Hello <strong>${user.full_name}</strong>,</p>
+                    <p>Congratulations on winning the auction for <strong>${productName}</strong>!</p>
+                    <p>Total amount due (excluding shipping): <strong style="color: #ef4444; font-size: 18px;">${this.formatCurrency(amount)}</strong></p>
+                    <p>Please complete your payment within <strong>24 hours</strong> to secure your purchase. After this deadline, your deposit will be forfeited and the purchase right will pass to the next highest bidder.</p>
+                    
+                    <div style="text-align: center; margin: 40px 0;">
+                        <a href="${paymentLink}" 
+                           style="background-color: #000; color: white; padding: 14px 40px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 16px;">
+                           Pay Now
+                        </a>
+                    </div>
+                    
+                    <p style="color: #666; font-size: 14px;">Best regards,<br>The FigiCore Team</p>
+                </div>
+            </div>
+        `
+      });
+      console.log(`[MailService] Auction win email sent to ${user.email}`);
+    } catch (error) {
+      console.error(`[MailService] Failed to send auction win email to ${user.email}`, error);
+    }
+  }
+
+  async sendAuctionStandbyWinEmail(user: any, auctionId: number, productName: string, paymentLink: string, amount: number) {
+    try {
+      await this.mailerService.sendMail({
+        to: user.email,
+        subject: `Lucky You: Your Purchase Right for Auction #${auctionId} is Now Available! - FigiCore`,
+        html: `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #eaeaea; border-radius: 8px; overflow: hidden;">
+                <div style="background-color: #3b82f6; padding: 20px; text-align: center;">
+                    <h2 style="color: white; margin: 0;">Fortune Smiles Upon You!</h2>
+                </div>
+                <div style="padding: 30px;">
+                    <p>Hello <strong>${user.full_name}</strong>,</p>
+                    <p>In the auction for <strong>${productName}</strong> that you participated in, the initial winner has declined their purchase right or failed to pay on time.</p>
+                    <p>Per our auction rules, the purchase right has been transferred to you at your highest bid price of: <strong style="color: #ef4444; font-size: 18px;">${this.formatCurrency(amount)}</strong></p>
+                    <p>Please complete your payment within <strong>24 hours</strong> to add this exclusive item to your collection.</p>
+                    
+                    <div style="text-align: center; margin: 40px 0;">
+                        <a href="${paymentLink}" 
+                           style="background-color: #000; color: white; padding: 14px 40px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 16px;">
+                           Pay Now
+                        </a>
+                    </div>
+                    
+                    <p style="color: #666; font-size: 14px;">Best regards,<br>The FigiCore Team</p>
+                </div>
+            </div>
+        `
+      });
+      console.log(`[MailService] Auction standby win email sent to ${user.email}`);
+    } catch (error) {
+      console.error(`[MailService] Failed to send auction standby win email to ${user.email}`, error);
+    }
+  }
+
+  // ─── Targeted Promotion Email ───────────────────────────────────────────────
+
+  async sendTargetedPromotionEmail(user: { email: string; full_name: string }, promotion: any) {
+    try {
+      const frontendUrl = this.configService.get('FRONTEND_URL', 'http://localhost:5173');
+      const collectUrl = `${frontendUrl}/customer/vouchers/collect/${promotion.promotion_id}`;
+
+      const rankBadge = promotion.apply_rank_code
+        ? `<span style="display:inline-block; background:#f59e0b; color:#fff; padding: 2px 10px; border-radius:12px; font-size:12px; font-weight:bold; margin-bottom:8px;">
+             🏅 ${promotion.apply_rank_code} Exclusive
+           </span><br>`
+        : '';
+
+      const discountText = promotion.discount_type === 'PERCENTAGE'
+        ? `${promotion.discount_value}% OFF`
+        : promotion.discount_type === 'FREE_SHIP'
+          ? 'Free Shipping'
+          : `${this.formatCurrency(Number(promotion.discount_value || 0))} OFF`;
+
+      const expiryText = promotion.end_date
+        ? `Valid until: <strong>${new Date(promotion.end_date).toLocaleDateString('vi-VN')}</strong>`
+        : 'No expiry — collect anytime!';
+
+      await this.mailerService.sendMail({
+        to: user.email,
+        subject: `🎁 New Voucher Available For You — FigiCore`,
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #eaeaea; border-radius: 10px; overflow: hidden;">
+            <div style="background: linear-gradient(135deg, #111 0%, #333 100%); padding: 28px; text-align: center;">
+              <h2 style="color: #fff; margin: 0; font-size: 22px;">🎁 A New Voucher Is Waiting For You!</h2>
+            </div>
+
+            <div style="padding: 30px;">
+              <p>Hello <strong>${user.full_name}</strong>,</p>
+              <p>We have a special offer exclusively for you. Don't miss it!</p>
+
+              <!-- Voucher Card -->
+              <div style="border: 2px dashed #e5e7eb; border-radius: 10px; padding: 20px; margin: 24px 0; text-align: center; background: #fafafa;">
+                ${rankBadge}
+                <p style="font-size: 28px; font-weight: bold; color: #111; margin: 8px 0;">${discountText}</p>
+                <p style="font-size: 13px; color: #6b7280; margin: 4px 0;">
+                  Code: <span style="font-family: monospace; background: #f3f4f6; padding: 2px 8px; border-radius: 4px;">${promotion.code}</span>
+                </p>
+                ${promotion.min_order_value ? `<p style="font-size: 12px; color: #9ca3af; margin-top: 6px;">Minimum order: ${this.formatCurrency(Number(promotion.min_order_value))}</p>` : ''}
+                <p style="font-size: 12px; color: #9ca3af; margin-top: 4px;">${expiryText}</p>
+              </div>
+
+              <div style="text-align: center; margin: 28px 0;">
+                <a href="${collectUrl}"
+                   style="background-color: #111; color: white; padding: 13px 36px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 15px;">
+                   Collect Voucher Now
+                </a>
+              </div>
+
+              <p style="color: #9ca3af; font-size: 12px;">
+                This voucher was sent because your account qualifies for this promotion.
+                Log in to FigiCore and add it to your wallet before it's gone!
+              </p>
+            </div>
+
+            <div style="background: #f9fafb; padding: 16px; text-align: center;">
+              <p style="color: #d1d5db; font-size: 11px; margin: 0;">© ${new Date().getFullYear()} FigiCore. All rights reserved.</p>
+            </div>
+          </div>
+        `,
+      });
+      console.log(`[MailService] Targeted promo email sent to ${user.email}`);
+    } catch (error) {
+      console.error(`[MailService] Failed to send targeted promo email to ${user.email}`, error);
+    }
+  }
+
+  // ─── Birthday Email ─────────────────────────────────────────────────────────
+
+  async sendBirthdayEmail(email: string, fullName: string, voucherCode: string, validUntil: Date) {
+    try {
+      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+      const walletUrl = `${frontendUrl}/customer/profile?tab=vouchers`;
+
+      const formattedExpiry = new Intl.DateTimeFormat('en-US', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric'
+      }).format(validUntil);
+
+      await this.mailerService.sendMail({
+        to: email,
+        subject: `🎂 Happy Birthday Month, ${fullName}! A Gift from FigiCore`,
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border-radius: 12px; overflow: hidden; border: 1px solid #eaeaea;">
+            <!-- Header -->
+            <div style="background: linear-gradient(135deg, #7c3aed 0%, #db2777 100%); padding: 36px; text-align: center;">
+              <p style="font-size: 48px; margin: 0;">🎂</p>
+              <h1 style="color: #fff; margin: 12px 0 4px; font-size: 26px;">Happy Birthday!</h1>
+              <p style="color: rgba(255,255,255,0.85); margin: 0; font-size: 15px;">Celebrating your birthday month, ${fullName}!</p>
+            </div>
+
+            <!-- Body -->
+            <div style="padding: 32px;">
+              <p style="color: #374151; font-size: 15px;">
+                To celebrate your special month, FigiCore has <strong>automatically added a special voucher</strong> to your wallet. You can use it right away at checkout!
+              </p>
+
+              <!-- Voucher Card -->
+              <div style="border: 2px dashed #7c3aed; border-radius: 12px; padding: 24px; margin: 24px 0; text-align: center; background: #faf5ff;">
+                <p style="font-size: 13px; color: #7c3aed; margin: 0 0 8px; font-weight: bold; text-transform: uppercase; letter-spacing: 1px;">🎁 Birthday Gift</p>
+                <p style="font-size: 32px; font-weight: bold; color: #111; margin: 8px 0;">10% OFF</p>
+                <p style="font-size: 13px; color: #6b7280; margin: 4px 0;">
+                  Code: <span style="font-family: monospace; background: #ede9fe; color: #7c3aed; padding: 3px 10px; border-radius: 6px; font-weight: bold;">\${voucherCode}</span>
+                </p>
+                <p style="font-size: 12px; color: #9ca3af; margin-top: 10px;">
+                  Expires: \${formattedExpiry} &nbsp;·&nbsp; Already in your wallet
+                </p>
+              </div>
+
+              <div style="background: #fdf2f8; border-left: 4px solid #db2777; padding: 16px; margin-bottom: 24px;">
+                <p style="margin: 0; font-size: 14px; color: #9d174d;">
+                   <strong>Good news:</strong> No need to copy the code! The voucher is saved in your <strong>"Voucher Wallet"</strong> and will appear automatically during checkout.
+                </p>
+              </div>
+
+              <!-- CTA -->
+              <div style="text-align: center; margin: 28px 0 16px;">
+                <a href="\${walletUrl}"
+                   style="background: linear-gradient(135deg, #7c3aed, #db2777); color: white; padding: 14px 40px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 15px; display: inline-block;">
+                  Go to Voucher Wallet
+                </a>
+              </div>
+
+              <p style="color: #9ca3af; font-size: 12px; text-align: center; margin-top: 24px;">
+                Wishing you a wonderful birthday month filled with joy!<br>
+                Team FigiCore 💜
+              </p>
+            </div>
+
+            <!-- Footer -->
+            <div style="background: #f9fafb; padding: 16px; text-align: center;">
+              <p style="color: #d1d5db; font-size: 11px; margin: 0;">© \${new Date().getFullYear()} FigiCore — With love 💜</p>
+            </div>
+          </div>
+        `,
+      });
+      console.log(`[MailService] Birthday email sent to \${email}`);
+    } catch (error) {
+      console.error(`[MailService] Failed to send birthday email to \${email}`, error);
     }
   }
 }

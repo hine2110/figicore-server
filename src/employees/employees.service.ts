@@ -5,6 +5,7 @@ import { ImportEmployeeDto } from './dto/import-employee.dto';
 import * as bcrypt from 'bcrypt';
 import { MailService } from '../mail/mail.service';
 import { JwtService } from '@nestjs/jwt';
+import { EncryptionService } from '../common/encryption.service';
 
 @Injectable()
 export class EmployeesService {
@@ -12,21 +13,26 @@ export class EmployeesService {
     private readonly prisma: PrismaService,
     private readonly mailService: MailService,
     private readonly jwtService: JwtService,
+    private readonly encryption: EncryptionService
   ) { }
 
-  async create(createEmployeeDto: CreateEmployeeDto) {
-    // ... (Keep existing create logic if needed, but for brevity I will focus on integration or keep it simple. 
-    // The user asked to "Generate Full Code For These Files". 
-    // I should preserve existing methods if they are not the focus, or re-implement. 
-    // I'll preserve `create`, `findAll`, `findOne`, `generateEmployeeCode` and ADD `importEmployees`.
-    // Re-pasting entire file content with new method is safer for `replace_file_content` if modifying class structure.)
+  private decryptUser(user: any) {
+    if (!user) return null;
+    const decrypted = { ...user };
+    if (decrypted.email) decrypted.email = this.encryption.decrypt(decrypted.email);
+    if (decrypted.phone) decrypted.phone = this.encryption.decrypt(decrypted.phone);
+    return decrypted;
+  }
 
-    // ... (restoring existing create method logic) ...
+  async create(createEmployeeDto: CreateEmployeeDto) {
     const { email, phone, full_name, role_code, job_title_code, start_date } = createEmployeeDto;
     let { employee_code } = createEmployeeDto;
 
+    const encryptedEmail = this.encryption.encryptDeterministic(email);
+    const encryptedPhone = this.encryption.encryptDeterministic(phone);
+
     const existingUser = await this.prisma.users.findFirst({
-      where: { OR: [{ email }, { phone }] },
+      where: { OR: [{ email: encryptedEmail }, { phone: encryptedPhone }] },
     });
     if (existingUser) throw new ConflictException('User already exists');
 
@@ -37,13 +43,20 @@ export class EmployeesService {
 
     return this.prisma.$transaction(async (tx) => {
       const newUser = await tx.users.create({
-        data: { email, phone, full_name, role_code, password_hash: passwordHash, status_code: 'ACTIVE', is_verified: true },
+        data: { 
+          email: encryptedEmail, 
+          phone: encryptedPhone, 
+          full_name, 
+          role_code, 
+          password_hash: passwordHash, 
+          status_code: 'ACTIVE', 
+          is_verified: true 
+        },
       });
       const newEmployee = await tx.employees.create({
         data: { user_id: newUser.user_id, employee_code: employee_code!, job_title_code, start_date: start_date || new Date() },
       });
-      const { password_hash: _, ...userResult } = newUser;
-      return { ...userResult, employee_details: newEmployee };
+      return { ...this.decryptUser(newUser), employee_details: newEmployee };
     });
   }
 
@@ -56,14 +69,16 @@ export class EmployeesService {
 
     for (const [index, row] of data.entries()) {
       try {
-        // 1. Validation (Check duplication)
+        const encryptedEmail = this.encryption.encryptDeterministic(row.email);
+        const encryptedPhone = this.encryption.encryptDeterministic(row.phone);
+
         const existing = await this.prisma.users.findFirst({
-          where: { OR: [{ email: row.email }, { phone: row.phone }] }
+          where: { OR: [{ email: encryptedEmail }, { phone: encryptedPhone }] }
         });
 
         if (existing) {
           results.failed++;
-          results.errors.push({ row: index + 1, message: `Email (${row.email}) or Phone (${row.phone}) already exists` });
+          results.errors.push({ row: index + 1, message: `Email or Phone already exists` });
           continue;
         }
 
@@ -78,8 +93,8 @@ export class EmployeesService {
           const newUser = await tx.users.create({
             data: {
               full_name: row.full_name,
-              email: row.email,
-              phone: row.phone,
+              email: encryptedEmail,
+              phone: encryptedPhone,
               role_code: row.role_code,
               password_hash: hash,
               status_code: 'PENDING',
@@ -140,10 +155,11 @@ export class EmployeesService {
     const where: any = {};
 
     if (search) {
+      const encryptedSearch = this.encryption.encryptDeterministic(search);
       where.OR = [
         { employee_code: { contains: search, mode: 'insensitive' } },
         { users: { full_name: { contains: search, mode: 'insensitive' } } },
-        { users: { email: { contains: search, mode: 'insensitive' } } },
+        { users: { email: encryptedSearch } },
       ];
     }
 
@@ -176,8 +192,15 @@ export class EmployeesService {
       this.prisma.employees.count({ where }),
     ]);
 
+    const mappedData = data.map(emp => {
+      return {
+        ...emp,
+        users: this.decryptUser(emp.users)
+      };
+    });
+
     return {
-      data,
+      data: mappedData,
       meta: {
         total,
         page,
@@ -187,8 +210,8 @@ export class EmployeesService {
     };
   }
 
-  async findOne(id: number) {
-    return this.prisma.employees.findUnique({
+  async findOne(id: number, requestingUserId?: number, requestingRole?: string, ip?: string) {
+    const employee = await this.prisma.employees.findUnique({
       where: { user_id: id },
       include: {
         users: {
@@ -202,6 +225,30 @@ export class EmployeesService {
         },
       },
     });
+
+    if (!employee) return null;
+
+    const decryptedUser = this.decryptUser(employee.users);
+
+    // Audit Logging
+    if (requestingUserId && requestingUserId !== id && requestingRole && requestingRole !== 'CUSTOMER') {
+      await this.logPiiAccess(requestingUserId, id, ['phone', 'email', 'addresses'], ip);
+    }
+
+    const decryptedAddresses = employee.users.addresses.map(a => {
+        const decA = { ...a };
+        if (decA.detail_address) decA.detail_address = this.encryption.decrypt(decA.detail_address);
+        if (decA.recipient_phone) decA.recipient_phone = this.encryption.decrypt(decA.recipient_phone);
+        return decA;
+    });
+
+    return {
+        ...employee,
+        users: {
+            ...decryptedUser,
+            addresses: decryptedAddresses
+        }
+    };
   }
 
   private async generateEmployeeCode(): Promise<string> {
@@ -224,5 +271,21 @@ export class EmployeesService {
     }
 
     return `EMP${Date.now().toString().slice(-3)}`;
+  }
+
+  /** Log a PII access event when staff views sensitive employee data */
+  private async logPiiAccess(accessedBy: number, targetUserId: number, fieldsViewed: string[], ip?: string) {
+    try {
+      await this.prisma.pii_access_logs.create({
+        data: {
+          accessed_by: accessedBy,
+          target_user_id: targetUserId,
+          fields_viewed: fieldsViewed.join(','),
+          ip_address: ip || null,
+        }
+      });
+    } catch (e) {
+      console.error('[PII Audit] Failed to write audit log:', e.message);
+    }
   }
 }

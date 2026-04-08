@@ -2,8 +2,11 @@ import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, Req, Pars
 import { FileInterceptor } from '@nestjs/platform-express';
 import { AuthGuard } from '@nestjs/passport';
 import { UsersService } from './users.service';
+import { PromotionsService } from '../promotions/promotions.service';
+import { FaceValidationService } from '../upload/face-validation.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { UpdateProfileDto } from './dto/update-profile.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -12,7 +15,11 @@ import { UpdateBankInfoDto } from './dto/update-profile.dto';
 
 @Controller('users')
 export class UsersController {
-  constructor(private readonly usersService: UsersService) { }
+  constructor(
+    private readonly usersService: UsersService,
+    private readonly faceValidationService: FaceValidationService,
+    private readonly promotionsService: PromotionsService,
+  ) { }
 
   @Get('profile')
   @UseGuards(AuthGuard('jwt'))
@@ -21,9 +28,20 @@ export class UsersController {
     return this.usersService.getProfile(req.user.user_id);
   }
 
+  /**
+   * GET /users/me/vouchers
+   * Returns the authenticated user's voucher wallet (COLLECTED + USED),
+   * including full promotion details for frontend rendering.
+   */
+  @Get('me/vouchers')
+  @UseGuards(AuthGuard('jwt'))
+  getMyVoucherWallet(@Req() req) {
+    return this.promotionsService.getMyVouchers(req.user.user_id);
+  }
+
   @Patch('profile')
   @UseGuards(AuthGuard('jwt'))
-  updateProfile(@Req() req, @Body() data: { full_name: string; phone: string }) {
+  updateProfile(@Req() req, @Body() data: UpdateProfileDto) {
     return this.usersService.updateProfile(req.user.user_id, data);
   }
 
@@ -32,13 +50,24 @@ export class UsersController {
   @UseInterceptors(FileInterceptor('file'))
   async uploadAvatar(@Req() req, @UploadedFile() file: Express.Multer.File) {
     if (!file) throw new BadRequestException('File is required');
+
+    // 1. Strict AI Face Detection BEFORE Dispatching to Cloudinary
+    await this.faceValidationService.validateImageBuffer(file.buffer);
+
+    // 2. Dispatch to service for Cloudinary Upload & DB update
     return this.usersService.updateAvatar(req.user.user_id, file);
+  }
+
+  @Post('profile/request-update-otp')
+  @UseGuards(AuthGuard('jwt'))
+  requestUpdateOtp(@Req() req) {
+    return this.usersService.sendUpdateOtp(req.user.user_id);
   }
 
   @Post('profile/request-update')
   @UseGuards(AuthGuard('jwt'))
-  requestUpdate(@Req() req, @Body() data: any) {
-    return this.usersService.createProfileUpdateRequest(req.user.user_id, data);
+  requestUpdate(@Req() req, @Body() body: { changes: any; otp: string }) {
+    return this.usersService.createProfileUpdateRequest(req.user.user_id, body.changes, body.otp);
   }
 
   @Post('bulk')

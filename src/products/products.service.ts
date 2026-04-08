@@ -1,17 +1,207 @@
 import { Injectable, BadRequestException, ServiceUnavailableException, Logger } from '@nestjs/common';
-import { GoogleGenerativeAI } from '@google/generative-ai';
-import { PrismaService } from 'src/prisma/prisma.service';
-import { KiotVietService } from 'src/kiotviet/kiotviet.service';
+import { PrismaService } from '../prisma/prisma.service';
+import { KiotVietService } from '../kiotviet/kiotviet.service';
+import { ConfigService } from '@nestjs/config';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { Prisma } from '@prisma/client';
+import OpenAI from 'openai';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 
 @Injectable()
 export class ProductsService {
+  private logger = new Logger('ProductsService');
+  private groq: OpenAI;
+  private genAI: GoogleGenerativeAI;
+
   constructor(
     private prisma: PrismaService,
+    private configService: ConfigService,
     private kiotvietService: KiotVietService,
-  ) { }
+  ) {
+    const groqKey = this.configService.get<string>('GROQ_API_KEY');
+    if (groqKey) {
+      this.groq = new OpenAI({
+        apiKey: groqKey,
+        baseURL: 'https://api.groq.com/openai/v1',
+      });
+    }
+
+    const geminiKey = this.configService.get<string>('GEMINI_API_KEY') || this.configService.get<string>('GOOGLE_AI_API_KEY');
+    if (geminiKey) {
+      this.genAI = new GoogleGenerativeAI(geminiKey);
+    }
+  }
+
+  async visualSearch(base64Image: string) {
+    if (!this.groq) {
+      throw new ServiceUnavailableException('Dịch vụ phân tích hình ảnh (Groq) hiện chưa được cấu hình.');
+    }
+
+    try {
+      this.logger.log('--- VISUAL SEARCH START (Llama 4 Scout) ---');
+
+      const imageData = base64Image.replace(/^data:image\/\w+;base64,/, '');
+      const mimeTypeMatch = base64Image.match(/^data:(image\/\w+);base64,/);
+      const mimeType = mimeTypeMatch ? mimeTypeMatch[1] : 'image/jpeg';
+
+      const prompt = `Bạn là chuyên gia về mô hình (figures, gundam, art toys). 
+      Hãy phân tích hình ảnh này và trích xuất thông tin để tìm kiếm trong database:
+      1. Tên mô hình/sản phẩm (productName): ƯU TIÊN ĐỌC CHỮ TRÊN VỎ HỘP (ví dụ: "Megatron", "Gundam Exia"). Tìm các mã SKU/ID in trên hộp như "CC21", "71173".
+      2. Thương hiệu (brand): Ví dụ: Blokees, Bandai, Hasbro.
+      3. Dòng sản phẩm (series): Ví dụ: Classic Class, MG, HG.
+      4. Màu sắc (color): Màu chủ đạo.
+
+      QUY TẮC:
+      - Trả về JSON duy nhất với keys: productName, brand, series, color.
+      - CHỈ tập trung vào nhân vật/mẫu vật CHÍNH được xuất hiện trong ảnh. Bỏ qua các nhân vật phụ hoặc tên nhân vật khác xuất hiện trong logo phim/series (ví dụ: Logo "Transformers ONE" có thể có tên nhiều nhân vật, hãy bỏ qua và chỉ lấy tên mẫu vật chính).
+      - KHÔNG được bỏ trống productName nếu thấy bất kỳ chữ nào liên quan đến tên sản phẩm trên vỏ hộp.
+      - Nếu thấy chữ trên hộp, hãy dùng chính xác chữ đó.`;
+
+      let aiHint: any = {};
+      let results: any[] = [];
+      let isExactMatch = false;
+      let finalSearchTerm = '';
+      let attempts = 0;
+      const maxAttempts = 2; // Allow up to 2 attempts with refined prompts
+
+      while (attempts < maxAttempts && results.length === 0) {
+        attempts++;
+        this.logger.log(`Visual Search Attempt ${attempts}...`);
+
+        const dynamicPrompt = attempts === 1
+          ? prompt
+          : `${prompt}\n\nGHI CHÚ: Lần tìm kiếm trước không có kết quả. Hãy nhìn THẬT KỸ các chữ nhỏ nhất trên hộp, các mã số (như CC, SP, No.), hoặc các ký tự đặc biệt có thể định danh SKU sản phẩm.`;
+
+        // -- STEP 1: AI Analysis (Llama 4 -> Gemini Fallback) --
+        try {
+          const response = await this.groq.chat.completions.create({
+            model: 'meta-llama/llama-4-scout-17b-16e-instruct',
+            messages: [{
+              role: 'user',
+              content: [
+                { type: 'text', text: dynamicPrompt },
+                { type: 'image_url', image_url: { url: `data:${mimeType};base64,${imageData}` } }
+              ]
+            }],
+            response_format: { type: 'json_object' }
+          });
+          aiHint = JSON.parse(response.choices[0].message.content || '{}');
+          this.logger.log(`Attempt ${attempts} - Llama 4 Hint: ${JSON.stringify(aiHint)}`);
+        } catch (e) {
+          this.logger.warn(`Llama 4 failed on attempt ${attempts}: ${e.message}`);
+        }
+
+        if ((!aiHint.productName && !aiHint.brand) && this.genAI) {
+          this.logger.log(`Attempt ${attempts} - Llama failed keywords, trying Gemini Lite...`);
+          try {
+            const model = this.genAI.getGenerativeModel({ model: 'gemini-2.0-flash-lite-001' });
+            const result = await model.generateContent([
+              dynamicPrompt + " (Respond in raw JSON)",
+              { inlineData: { data: imageData, mimeType: mimeType } }
+            ]);
+            const text = (await result.response).text().replace(/```json/g, '').replace(/```/g, '').trim();
+            aiHint = JSON.parse(text);
+            this.logger.log(`Attempt ${attempts} - Gemini Hint: ${JSON.stringify(aiHint)}`);
+          } catch (e) {
+            this.logger.warn(`Gemini failed on attempt ${attempts}: ${e.message}`);
+          }
+        }
+
+        // -- STEP 2: Database Searching (4 Layers) --
+        if (aiHint.productName || aiHint.brand || aiHint.series) {
+          const searchTerms = [aiHint.series, aiHint.productName, aiHint.brand].filter(Boolean).join(' ');
+          finalSearchTerm = searchTerms;
+
+          // Layer 1: Strict (AND + Color)
+          results = await this.findAll({ search: searchTerms, color: aiHint.color });
+
+          if (results.length > 0) {
+            isExactMatch = true;
+          } else {
+            // Layer 2: Strict (AND only)
+            if (aiHint.color) {
+              results = await this.findAll({ search: searchTerms });
+            }
+
+            // Layer 3: Broad (OR Tên/Dòng)
+            if (results.length === 0 && (aiHint.productName || aiHint.series)) {
+              finalSearchTerm = [aiHint.productName, aiHint.series].filter(Boolean).join(' ');
+              results = await this.findAll({ search: finalSearchTerm, searchMode: 'OR' });
+            }
+
+            // Layer 4: Minimal (Series/Brand)
+            if (results.length === 0 && (aiHint.brand || aiHint.series)) {
+              finalSearchTerm = aiHint.series || aiHint.brand;
+              results = await this.findAll({ search: finalSearchTerm, searchMode: 'OR' });
+            }
+          }
+
+          // -- STEP 3: Relevance Sorting & Filtering (Custom Ranking) --
+          if (results.length > 1) {
+            const keywords = finalSearchTerm.toLowerCase().split(/\s+/).filter(k => k.length > 1);
+
+            // Map results to their scores for filtering
+            const scoredResults = results.map(p => {
+              const name = p.name.toLowerCase();
+              const brandName = p.brands?.name?.toLowerCase() || '';
+              const seriesName = p.series?.name?.toLowerCase() || '';
+
+              const keywordScore = keywords.reduce((acc, kw) =>
+                acc + (name.includes(kw) || brandName.includes(kw) || seriesName.includes(kw) ? 1 : 0), 0);
+
+              // Extra weight for SKU matches
+              const skuScore = p.product_variants?.some((v: any) =>
+                keywords.some(kw => v.sku.toLowerCase().includes(kw))) ? 2 : 0;
+
+              return { product: p, score: keywordScore + skuScore };
+            });
+
+            // Sort by score descending
+            scoredResults.sort((a, b) => b.score - a.score);
+
+            const maxScore = scoredResults[0].score;
+
+            // Filtering: Keep only results with high relevance relative to the top match
+            // If top matches are weak (score < 2), be very strict.
+            // If top matches are strong, allow some variation but filter out low scores.
+            results = scoredResults
+              .filter(item => {
+                if (maxScore >= 5) return item.score >= maxScore * 0.8; // Strong matches: keep very close ones
+                if (maxScore >= 3) return item.score >= maxScore * 0.6; // Mid matches
+                return item.score >= maxScore; // Weak matches: only keep the best ones
+              })
+              .map(item => item.product);
+
+            // Cap results to avoid overwhelming the user with noise
+            if (results.length > 5 && !isExactMatch) {
+              results = results.slice(0, 5);
+            }
+          }
+        }
+
+        if (results.length > 0) {
+          this.logger.log(`Success on Attempt ${attempts}! Found ${results.length} products.`);
+        } else {
+          this.logger.warn(`Attempt ${attempts} yielded no results.`);
+        }
+      }
+
+      return {
+        products: results,
+        metadata: {
+          isExactMatch,
+          searchTerm: finalSearchTerm,
+          aiHint,
+          analysisAttempts: attempts
+        }
+      };
+    } catch (error) {
+      this.logger.error(`Visual search critical error: ${error.message}`, error.stack);
+      throw error;
+    }
+  }
+
 
   async create(createProductDto: CreateProductDto) {
     let {
@@ -51,6 +241,10 @@ export class ProductsService {
         for (const variantDto of variants) {
           const isPreorder = productData.type_code === 'PREORDER';
 
+          if (!isPreorder && variantDto.cost_price !== undefined && variantDto.cost_price >= variantDto.price && variantDto.price > 0) {
+            throw new BadRequestException('Cost price must be less than retail price');
+          }
+
           const variantData: any = {
             product_id: parentProduct.product_id,
             option_name: variantDto.option_name,
@@ -66,9 +260,9 @@ export class ProductsService {
             material: variantDto.material,
             included_items: variantDto.included_items ? (variantDto.included_items as any) : undefined,
             price: isPreorder ? 0 : variantDto.price,
+            cost_price: variantDto.cost_price ?? 0,
             stock_available: isPreorder ? 0 : (variantDto.stock_available ?? 0),
             stock_defect: variantDto.stock_defect ?? 0,
-            tax_rate: (productData.type_code === 'RETAIL' || productData.type_code === 'AUCTION') ? 1 : 0,
           };
 
           const createdVariant = await tx.product_variants.create({ data: variantData });
@@ -100,7 +294,7 @@ export class ProductsService {
             option_name: 'Blindbox Ticket',
             price: price,
             media_assets: JSON.stringify([]),
-            stock_available: 999999,
+            stock_available: 0,
             stock_defect: 0,
             weight_g: 200, length_cm: 10, width_cm: 10, height_cm: 10
           }
@@ -120,7 +314,9 @@ export class ProductsService {
             price: blindbox.price,
             min_value: blindbox.min_value_allow,
             max_value: blindbox.max_value_allow,
-            tier_config: JSON.stringify(tiers) as any
+            tier_config: JSON.stringify(tiers) as any,
+            start_time: blindbox.start_time ? new Date(blindbox.start_time) : null,
+            end_time: blindbox.end_time ? new Date(blindbox.end_time) : null
           }
         });
       }
@@ -214,24 +410,58 @@ export class ProductsService {
     });
   }
 
-  async findAll(params: { search?: string, brand_id?: number, category_id?: number, series_id?: number, type_code?: any, min_price?: number, max_price?: number, sort?: string }) {
-    const { search, brand_id, category_id, series_id, type_code, min_price, max_price, sort } = params;
+  async findAll(params: { search?: string, color?: string, brand_id?: number, category_id?: number, series_id?: number, type_code?: any, min_price?: number, max_price?: number, sort?: string, searchMode?: 'AND' | 'OR' }) {
+    const { search, color, brand_id, category_id, series_id, type_code, min_price, max_price, sort, searchMode = 'AND' } = params;
 
     const where: Prisma.productsWhereInput = {
       AND: [
         // 1. Exact Filters
+        // --- FIX: BLINDBOX TIME-WINDOW VISIBILITY ---
+        // Hide blindboxes if the current time is outside the start_time/end_time window
+        {
+          OR: [
+            { type_code: { not: 'BLINDBOX' } },
+            {
+              AND: [
+                { type_code: 'BLINDBOX' },
+                {
+                  product_blindboxes: {
+                    OR: [
+                      { start_time: null },
+                      { start_time: { lte: new Date() } }
+                    ]
+                  }
+                },
+                {
+                  product_blindboxes: {
+                    OR: [
+                      { end_time: null },
+                      { end_time: { gte: new Date() } }
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        // ---------------------------------------------
+        
         type_code ? { type_code: type_code } : {},
         brand_id ? { brand_id: Number(brand_id) } : {},
         category_id ? { category_id: Number(category_id) } : {},
         series_id ? { series_id: Number(series_id) } : {},
 
-        // 2. Search Logic (Name OR SKU)
-        search ? {
-          OR: [
-            { name: { contains: search, mode: 'insensitive' } },
-            { product_variants: { some: { sku: { contains: search, mode: 'insensitive' } } } },
-            { product_variants: { some: { option_name: { contains: search, mode: 'insensitive' } } } }
-          ]
+        // 2. Search Logic (Split words into multiple AND/OR contains for flexibility)
+        (search && search.trim().length > 0) ? {
+          [searchMode]: search.trim().split(/\s+/).map(word => ({
+            OR: [
+              { name: { contains: word, mode: 'insensitive' } },
+              { product_variants: { some: { sku: { contains: word, mode: 'insensitive' } } } },
+              { product_variants: { some: { option_name: { contains: word, mode: 'insensitive' } } } },
+              { brands: { name: { contains: word, mode: 'insensitive' } } },
+              { series: { name: { contains: word, mode: 'insensitive' } } }
+            ]
+          }))
         } : {},
 
         // 3. Price Filter (Check if ANY variant matches the price range)
@@ -244,6 +474,16 @@ export class ProductsService {
               }
             }
           }
+        } : {},
+
+        // 4. Color Filter (Multiple colors fallback)
+        color ? {
+          OR: color.split(/[\s,]+/).filter(c => c.length > 1).map(c => ({
+            OR: [
+              { name: { contains: c, mode: 'insensitive' } },
+              { product_variants: { some: { option_name: { contains: c, mode: 'insensitive' } } } }
+            ]
+          }))
         } : {}
       ]
     };
@@ -267,7 +507,11 @@ export class ProductsService {
         product_variants: {
           include: {
             product_preorder_configs: true,
-            product_promotions: true
+            product_promotions: {
+              include: {
+                promotion_items: true
+              }
+            }
           }
         },
         product_blindboxes: true,
@@ -275,8 +519,19 @@ export class ProductsService {
       orderBy
     });
 
-    // [NEW] Apply Dynamic Pricing Logic
-    return products.map(product => this.calculatePromotionalPrice(product));
+    // [NEW] Apply Dynamic Pricing & Dynamic Blindbox Stock
+    const enrichedProducts = await Promise.all(products.map(product => this.enrichProductData(product)));
+
+    // [NEW] Hoist products with active promotions to the top
+    const results = enrichedProducts.sort((a, b) => {
+      const aSale = a.product_variants?.some((v: any) => v.is_on_sale);
+      const bSale = b.product_variants?.some((v: any) => v.is_on_sale);
+      if (aSale && !bSale) return -1;
+      if (!aSale && bSale) return 1;
+      return 0; // maintain original order
+    });
+
+    return results;
   }
 
   /**
@@ -295,7 +550,8 @@ export class ProductsService {
         q ? {
           OR: [
             { name: { contains: q, mode: 'insensitive' } },
-            { product_variants: { some: { sku: { contains: q, mode: 'insensitive' } } } }
+            { product_variants: { some: { sku: { contains: q, mode: 'insensitive' } } } },
+            { product_variants: { some: { barcode: { contains: q, mode: 'insensitive' } } } }
           ]
         } : {},
         // Filter by category
@@ -339,7 +595,9 @@ export class ProductsService {
             deleted_at: null,
           },
           include: {
-            product_promotions: true
+            product_promotions: {
+              include: { promotion_items: true }
+            }
           }
         },
         categories: true,
@@ -387,7 +645,7 @@ export class ProductsService {
             price: Number(variant.final_price ?? variant.price),
             current_stock: variant.stock_available || 0,
             thumbnail: thumbnail,
-            tax_rate: Number(variant.tax_rate || 0), // Include tax_rate for POS
+            barcode: variant.barcode,
           };
         });
 
@@ -494,7 +752,7 @@ export class ProductsService {
           brands: true,
           categories: true,
           series: true,
-          product_variants: { include: { product_promotions: true } },
+          product_variants: { include: { product_promotions: { include: { promotion_items: true } } } },
           product_blindboxes: true,
         }
       });
@@ -512,7 +770,7 @@ export class ProductsService {
         product_variants: {
           where: { deleted_at: null },
           orderBy: { created_at: 'asc' },
-          include: { product_preorder_configs: true, product_promotions: true }
+          include: { product_preorder_configs: true, product_promotions: { include: { promotion_items: true } } }
         },
         product_blindboxes: true,
         brands: true,
@@ -522,48 +780,185 @@ export class ProductsService {
     });
     if (!product) throw new BadRequestException('Product not found');
 
-    // [NEW] Apply Dynamic Pricing Logic
-    return this.calculatePromotionalPrice(product);
+    // [NEW] Apply Dynamic Pricing & Dynamic Blindbox Stock
+    return this.enrichProductData(product);
+  }
+
+  // [NEW] Helper: Enrichment for Pricing & Blindbox Stock
+  private async enrichProductData(product: any) {
+    // 1. Calculate Promotional Price
+    product = this.calculatePromotionalPrice(product);
+
+    // 2. Calculate Dynamic Blindbox Stock if applicable
+    if (product.type_code === 'BLINDBOX' && product.product_blindboxes) {
+      const bbConfig = product.product_blindboxes;
+      const min = Number(bbConfig.min_value);
+      const max = Number(bbConfig.max_value);
+      const ticket = Number(bbConfig.price);
+
+      // 1. Generate Dynamic 4-Zone Config (Sync with BlindboxesService)
+      const z1Upper = ticket * 0.9;
+      const z2Upper = ticket * 1.3;
+      const z3Upper = max * 0.9;
+
+      const zones = [
+        { name: 'Common (Shop Profit)', probability: 55, min: min, max: Math.max(min, z1Upper), key: 'Z1' },
+        { name: 'Fair Zone', probability: 40, min: Math.max(min, z1Upper), max: Math.max(z1Upper, z2Upper), key: 'Z2' },
+        { name: 'Big Win', probability: 4, min: Math.max(z2Upper, min), max: Math.max(z2Upper, z3Upper), key: 'Z3' },
+        { name: 'Legendary (Jackpot)', probability: 1, min: Math.max(z3Upper, min), max: max, key: 'Z4' }
+      ];
+
+      // 2. Calculate Stock per Zone from REAL warehouse items
+      const enhancedTiers = await Promise.all(zones.map(async (zone) => {
+        const agg = await this.prisma.product_variants.aggregate({
+          _sum: { stock_available: true, stock_defect: true },
+          where: {
+            products: {
+              type_code: 'RETAIL',
+              status_code: 'ACTIVE',
+              product_id: { not: product.product_id } // EXCLUDE the blindbox itself
+            },
+            price: { gte: zone.min, lte: zone.max },
+            deleted_at: null
+          }
+        });
+
+        return {
+          ...zone,
+          stock_count: (agg._sum.stock_available || 0) + (agg._sum.stock_defect || 0)
+        };
+      }));
+
+      product.product_blindboxes.tier_config = enhancedTiers;
+
+      // 3. Overall Dynamic Stock (for summary)
+      const aggregation = await this.prisma.product_variants.aggregate({
+        _sum: { stock_available: true, stock_defect: true },
+        where: {
+          products: {
+            type_code: 'RETAIL',
+            status_code: 'ACTIVE',
+            product_id: { not: product.product_id }
+          },
+          price: { gte: min, lte: max },
+          deleted_at: null
+        }
+      });
+
+      const dynamicStock = (aggregation._sum.stock_available || 0) + (aggregation._sum.stock_defect || 0);
+
+      // Override the Ticket Variant's stock display
+      if (product.product_variants && product.product_variants.length > 0) {
+        product.product_variants[0].stock_available = dynamicStock;
+      }
+    }
+
+    return product;
+  }
+
+  // Shared helper to safely check Promo active state and timestamps
+  private isActivePromo(promo: any, now: Date = new Date()): boolean {
+    if (!promo || !promo.is_active) return false;
+
+    // 1. Master Date Range Guard (Check if today is within the allowed month/range)
+    if (promo.start_date) {
+        const start = new Date(promo.start_date);
+        start.setHours(0, 0, 0, 0); // Include the full start day
+        if (now < start) return false;
+    }
+    if (promo.end_date) {
+        const end = new Date(promo.end_date);
+        end.setHours(23, 59, 59, 999); // Include the full end day
+        if (now > end) return false;
+    }
+
+    const startStr = promo.start_time || "00:00";
+    const endStr = promo.end_time || "23:59";
+
+    if (promo.is_recurring) {
+      // 2. Daily Time Window Check (e.g., 13:00 - 15:00 EVERY DAY)
+      const h = now.getHours();
+      const m = now.getMinutes();
+      const currentTimeStr = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+
+      if (startStr === endStr) return true; // 24h behavior
+      
+      if (startStr < endStr) {
+        // Normal Window (e.g., 10:00 - 12:00)
+        return currentTimeStr >= startStr && currentTimeStr < endStr;
+      } else {
+        // Overnight Window (e.g., 22:00 - 02:00)
+        return currentTimeStr >= startStr || currentTimeStr < endStr;
+      }
+    } else {
+      // 3. Non-recurring: Strict absolute LocalDateTime comparison
+      const [startHH, startMM] = startStr.split(':').map(Number);
+      const [endHH, endMM] = endStr.split(':').map(Number);
+
+      const promoStart = promo.start_date ? new Date(promo.start_date) : new Date(now);
+      promoStart.setHours(startHH, startMM, 0, 0);
+
+      const promoEnd = promo.end_date ? new Date(promo.end_date) : new Date(now);
+      promoEnd.setHours(endHH, endMM, 59, 999);
+
+      return now >= promoStart && now <= promoEnd;
+    }
   }
 
   // [NEW] Helper: Dynamic Pricing Logic (Flash Sale Time-based)
   private calculatePromotionalPrice(product: any) {
-    const now = new Date();
-    const h = String(now.getHours()).padStart(2, '0');
-    const m = String(now.getMinutes()).padStart(2, '0');
-    const currentTime = `${h}:${m}`; // e.g. "09:30"
-
-    // Apply to Variants
     if (product.product_variants) {
+      const now = new Date();
       product.product_variants = product.product_variants.map((variant: any) => {
         let final_price = Number(variant.price);
         let discount_amount = 0;
+        let is_on_sale = false;
+        let discount_percentage = 0;
 
         const promo = variant.product_promotions;
 
-        // Check if promotion is active AND current time is within the daily flash sale window
-        const isValidPromo = promo &&
-          promo.is_active &&
-          currentTime >= promo.start_time &&
-          currentTime <= promo.end_time;
+        // Check if promotion is active AND current time is within window
+        const isValidPromo = this.isActivePromo(promo, now);
 
         if (isValidPromo) {
-          if (promo.type_code === 'PERCENTAGE') {
-            discount_amount = final_price * (Number(promo.value) / 100);
-            final_price = final_price - discount_amount;
-          } else if (promo.type_code === 'FIXED_AMOUNT') {
-            discount_amount = Number(promo.value);
-            final_price = Math.max(0, final_price - discount_amount);
+          if (promo.is_flash_sale) {
+            const fsItem = promo.promotion_items?.find((i: any) => i.variant_id === variant.variant_id);
+            if (fsItem) {
+              final_price = Number(fsItem.flash_sale_price);
+              is_on_sale = true;
+              discount_percentage = Math.round(((Number(variant.price) - final_price) / Number(variant.price)) * 100);
+            }
+          } else {
+            is_on_sale = true;
+            if (promo.type_code === 'PERCENTAGE') {
+              discount_percentage = Number(promo.value);
+              discount_amount = final_price * (discount_percentage / 100);
+              final_price = final_price - discount_amount;
+            } else if (promo.type_code === 'FIXED_AMOUNT') {
+              discount_amount = Number(promo.value);
+              final_price = Math.max(0, final_price - discount_amount);
+              discount_percentage = Math.round((discount_amount / Number(variant.price)) * 100);
+            }
           }
         }
 
         return {
           ...variant,
           final_price,
-          is_on_sale: isValidPromo,
-          discount_percentage: isValidPromo && promo.type_code === 'PERCENTAGE' ? Number(promo.value) : 0,
+          is_on_sale,
+          discount_percentage,
         };
       });
+
+      // [NEW] Sort variants so on-sale variants are first
+      product.product_variants.sort((a: any, b: any) => {
+        if (a.is_on_sale && !b.is_on_sale) return -1;
+        if (!a.is_on_sale && b.is_on_sale) return 1;
+        return 0;
+      });
+
+      // [NEW] Expose promotion natively to product root for frontend compatibility
+      product.product_promotions = product.product_variants[0]?.product_promotions || product.product_promotions;
     }
 
     return product;
@@ -606,6 +1001,10 @@ export class ProductsService {
 
       if ((type === 'RETAIL' || type === 'AUCTION') && variants && variants.length > 0) {
         for (const v of variants) {
+          if (v.cost_price !== undefined && v.cost_price >= v.price && v.price > 0) {
+            throw new BadRequestException('Cost price must be less than retail price');
+          }
+
           const existingVariant = await tx.product_variants.findUnique({
             where: { sku: v.sku },
           });
@@ -620,6 +1019,7 @@ export class ProductsService {
               data: {
                 option_name: v.option_name,
                 price: v.price,
+                cost_price: v.cost_price !== undefined ? v.cost_price : undefined,
                 barcode: v.barcode,
                 description: v.description,
                 media_assets: v.media_assets ? (v.media_assets as any) : undefined, // Update media_assets
@@ -641,6 +1041,7 @@ export class ProductsService {
                 sku: v.sku,
                 option_name: v.option_name,
                 price: v.price,
+                cost_price: v.cost_price ?? 0,
                 barcode: v.barcode,
                 description: v.description,
                 media_assets: v.media_assets ? (v.media_assets as any) : JSON.stringify([]),
@@ -827,6 +1228,45 @@ export class ProductsService {
 
     return results.map(item => (item as any)[key]).filter(val => val !== null && val !== "");
   }
+  async getDraftBlindboxes() {
+    return this.prisma.products.findMany({
+      where: {
+        type_code: 'BLINDBOX',
+        status_code: 'DRAFT',
+      },
+      include: {
+        product_blindboxes: true,
+        product_variants: true,
+      },
+      orderBy: { created_at: 'desc' },
+    });
+  }
+
+  async approveBlindbox(id: number) {
+    const product = await this.prisma.products.findUnique({ where: { product_id: id } });
+    if (!product || product.type_code !== 'BLINDBOX') {
+      throw new BadRequestException('Bản nháp Hộp mù không tồn tại.');
+    }
+
+    if (product.status_code !== 'DRAFT') {
+      throw new BadRequestException('Hộp mù này không ở trạng thái chờ duyệt.');
+    }
+
+    // 1. Chuyển đổi trạng thái sang ACTIVE
+    const updated = await this.prisma.products.update({
+      where: { product_id: id },
+      data: { status_code: 'ACTIVE' },
+    });
+
+    // 2. Mock hệ thống Notification (Do database chưa cấu hình bảng notifications)
+    this.logger.log(`[Notification to Manager]: Hộp mù "${product.name}" đã được kho duyệt thành công và hiện đang ACTIVE.`);
+
+    return {
+      success: true,
+      message: 'Đã duyệt Hộp mù thành công.',
+      data: updated,
+    };
+  }
 
   async generateAiDescription(dto: {
     productName: string;
@@ -835,11 +1275,9 @@ export class ProductsService {
     imageUrl?: string;
     richContext?: any;
   }) {
-    if (!process.env.GEMINI_API_KEY) {
+    if (!this.genAI) {
       throw new ServiceUnavailableException("AI service is not configured (Missing API Key).");
     }
-
-    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
     const context = dto.userContext ? `User Notes/Context: "${dto.userContext}"` : "User Notes: N/A";
     const variantContext = dto.variantName ? `Target Specific Variant: "${dto.variantName}"` : "Target: Main Product Overview";
@@ -852,15 +1290,13 @@ export class ProductsService {
       if (category) richContextString += `Category: ${category}\n`;
       if (series) richContextString += `Series: ${series}\n`;
 
-      // Variant Specifics (if available for the target)
-      if (dto.variantName && variants) {
-        // Try to find the specific variant data or use the generic structure passed
-        // Assuming variants is an object with details
-        const v = variants; // If we pass the specific variant object directly
+      // Use variant data if available (either specific or from first variant for general overview)
+      const v = (dto.variantName && variants) ? variants : (Array.isArray(variants) ? variants[0] : variants);
+      if (v) {
         if (v.scale) richContextString += `Scale: ${v.scale}\n`;
         if (v.material) richContextString += `Material: ${v.material}\n`;
         if (v.included_items) richContextString += `Included Items: ${v.included_items}\n`;
-        if (v.price) richContextString += `Price: ${v.price} VND\n`;
+        if (v.price) richContextString += `Reference Price: ${v.price} VND\n`;
       }
     }
 
@@ -874,58 +1310,45 @@ export class ProductsService {
             
             Technical Specs & Classification:
             ${richContextString}
-            
+
             Guidelines:
             1. **Tone**: Enthusiastic, professional, "Dan choi" friendly (Otaku culture aware).
             2. **Content**: Use the Technical Specs (Scale, Material, Brand, etc.) to enhance the description. If an image is provided, describe visual details.
-            3. **Format**: Plain text, clear paragraph breaks, 2-3 paragraphs max. Use relevant emojis 🤖✨.
-            4. **Hallucination Check**: Only describe features visible in the image or explicitly stated.
+            3. **Format**: 
+               - Start with an engaging marketing text (2-3 paragraphs).
+               - AT THE END, add a section titled "**Thông số kỹ thuật:**" using the following bullet point format:
+                 * **Thương hiệu:** [Brand Name]
+                 * **Tỉ lệ:** [Scale]
+                 * **Chất liệu:** [Material]
+                 * **Phụ kiện:** [Included Items (list them)]
+                 * **Giá tham khảo:** [Reference Price]
+            4. **Hallucination Check**: Only describe features visible in the image or explicitly stated in Technical Specs.
             5. **Language**: Vietnamese.
         `;
 
     const parts: any[] = [prompt];
 
-    // MULTIMODAL: Fetch Image if provided
-    if (dto.imageUrl) {
-      try {
-        const imgResp = await fetch(dto.imageUrl);
-        if (imgResp.ok) {
-          const arrayBuffer = await imgResp.arrayBuffer();
-          const buffer = Buffer.from(arrayBuffer);
-          parts.push({
-            inlineData: {
-              data: buffer.toString("base64"),
-              mimeType: imgResp.headers.get("content-type") || "image/jpeg"
-            }
-          });
-        } else {
-          Logger.warn(`Failed to fetch AI Image: ${dto.imageUrl}`);
-        }
-      } catch (imgErr) {
-        Logger.error("AI Image Fetch Error", imgErr);
-      }
+    // --- GRQO (Llama 3) LOGIC ---
+    if (!this.groq) {
+      this.logger.error("Groq key missing.");
+      throw new ServiceUnavailableException("Hệ thống chưa cấu hình GROQ_API_KEY. Vui lòng thêm vào file .env.");
     }
 
-    // GENERATION LOGIC WITH FALLBACK
     try {
-      try {
-        // Attempt 1: Gemini Flash Latest
-        const model = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
-        const result = await model.generateContent(parts);
-        const response = await result.response;
-        return { text: response.text() };
-      } catch (primaryError) {
-        Logger.warn(`Primary Model (gemini-flash-latest) failed: ${primaryError.message}. Retrying with Fallback...`);
+      this.logger.log("Generating with Groq (Llama 3.3 70B)...");
+      const groqPrompt = parts[0] as string;
+      const groqRes = await this.groq.chat.completions.create({
+        model: 'llama-3.3-70b-versatile',
+        messages: [{ role: 'user', content: groqPrompt }],
+        max_tokens: 800,
+      });
 
-        // Attempt 2: Fallback to Stable 1.5 Flash
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-        const result = await model.generateContent(parts);
-        const response = await result.response;
-        return { text: response.text() };
-      }
+      const text = groqRes.choices?.[0]?.message?.content || '';
+      return { text, source: 'groq' };
+
     } catch (finalError) {
-      Logger.error("AI Gen Failed (All Models)", finalError);
-      throw new ServiceUnavailableException("AI service is currently unavailable. Please try again later.");
+      this.logger.error("AI Gen Failed (Groq)", finalError);
+      throw new ServiceUnavailableException("Dịch vụ AI Groq hiện không khả dụng. Vui lòng thử lại sau.");
     }
   }
 

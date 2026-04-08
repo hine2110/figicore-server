@@ -14,6 +14,11 @@ export class ProductsController {
     return this.productsService.create(createProductDto);
   }
 
+  @Post('visual-search')
+  visualSearch(@Body() body: { image: string }) {
+    return this.productsService.visualSearch(body.image);
+  }
+
   // ⚠️ IMPORTANT: Place this BEFORE any ':id' routes
   @Post('quick-create')
   quickCreate(@Body() body: QuickCreateProductDto) {
@@ -56,6 +61,16 @@ export class ProductsController {
       max_price: query.max_price ? Number(query.max_price) : undefined,
       sort: query.sort
     });
+  }
+
+  @Get('blindboxes/draft')
+  getDraftBlindboxes() {
+    return this.productsService.getDraftBlindboxes();
+  }
+
+  @Patch('blindboxes/:id/approve')
+  approveBlindbox(@Param('id') id: string) {
+    return this.productsService.approveBlindbox(+id);
   }
 
   @Get(':id')

@@ -27,43 +27,48 @@ export class BlindboxesService {
         // DYNAMIC CONFIG GENERATION
         let rawConfig: any;
 
-        // If min/max exist, generating dynamic tiers based on user Strategy
-        // Strategy: 75% Low | 20% Mid | 5% High
-        if (config.min_value && config.max_value) {
+        // If min/max/price exist, generating dynamic tiers based on optimized 4-Zone Strategy
+        // Zone 1 (35%): [min, ticket*0.9] - Shop Profits
+        // Zone 2 (60%): [ticket*0.9, ticket*1.3] - Fair Zone (Around Ticket Price)
+        // Zone 3 (4%): [ticket*1.3, max*0.9] - Big Win
+        // Zone 4 (1%): [max*0.9, max] - Jackpot
+        if (config.min_value && config.max_value && config.price) {
             const min = Number(config.min_value);
             const max = Number(config.max_value);
-            const range = max - min;
+            const ticket = Number(config.price);
 
-            if (range > 0) {
-                // Define Thresholds
-                const lowEnd = min + (range * 0.3); // Top of Low Tier
-                const highStart = min + (range * 0.7); // Start of High Tier
+            // Calculate dynamic thresholds with safety guards
+            const zone1Upper = ticket * 0.9;
+            const zone2Upper = ticket * 1.3;
+            const zone3Upper = max * 0.9;
 
-                rawConfig = [
-                    {
-                        name: 'TIER_COMMON',
-                        probability: 75,
-                        min: min,
-                        max: lowEnd // 0% - 30% range
-                    },
-                    {
-                        name: 'TIER_RARE',
-                        probability: 20,
-                        min: lowEnd,
-                        max: highStart // 30% - 70% range
-                    },
-                    {
-                        name: 'TIER_SECRET',
-                        probability: 5,
-                        min: highStart,
-                        max: max // 70% - 100% range
-                    }
-                ];
-                // console.log("Dynamic Blindbox Config Generated:", rawConfig);
-            } else {
-                // Fallback if price is flat
-                rawConfig = typeof config.tier_config === 'string' ? JSON.parse(config.tier_config) : config.tier_config;
-            }
+            rawConfig = [
+                {
+                    name: 'ZONE_1_SHOP_PROFIT',
+                    probability: 55,
+                    min: min,
+                    max: Math.max(min, zone1Upper)
+                },
+                {
+                    name: 'ZONE_2_FAIR',
+                    probability: 40,
+                    min: Math.max(min, zone1Upper),
+                    max: Math.max(zone1Upper, zone2Upper)
+                },
+                {
+                    name: 'ZONE_3_BIG_WIN',
+                    probability: 4,
+                    min: Math.max(zone2Upper, min),
+                    max: Math.max(zone2Upper, zone3Upper)
+                },
+                {
+                    name: 'ZONE_4_JACKPOT',
+                    probability: 1,
+                    min: Math.max(zone3Upper, min),
+                    max: max
+                }
+            ];
+            // this.logger.log(`Dynamic 4-Zone Blindbox Config Generated for Product ${config.product_id}`);
         } else {
             rawConfig = typeof config.tier_config === 'string' ? JSON.parse(config.tier_config) : config.tier_config;
         }
@@ -94,7 +99,7 @@ export class BlindboxesService {
                             { stock_defect: { gt: 0 } }
                         ],
                         variant_id: { notIn: Array.from(excludeIds) },
-                        products: { type_code: 'RETAIL' } // Strict Retail Filter
+                        products: { type_code: 'RETAIL', status_code: 'ACTIVE' } // Strict Retail + Active Filter
                     },
                     // FIX: Prioritize Defect items in the random pool check
                     orderBy: { stock_defect: 'desc' },

@@ -6,7 +6,10 @@ export class RegisterDto {
     @IsNotEmpty({ message: 'Email is required' })
     email: string;
 
-    @MinLength(6, { message: 'Password must be at least 6 characters long' })
+    @IsNotEmpty({ message: 'Password is required' })
+    @Matches(/^(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$/, {
+        message: 'Password must be at least 8 characters long and include an uppercase letter, a number, and a special character.',
+    })
     password: string;
 
     @IsNotEmpty({ message: 'Full Name is required' })

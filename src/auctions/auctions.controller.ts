@@ -63,6 +63,13 @@ export class AuctionsController {
     return this.auctionsService.forceEnd(+id);
   }
 
+  @Patch(':id/extend-time')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles('SUPER_ADMIN', 'ADMIN', 'MANAGER')
+  extendTime(@Param('id') id: string, @Body() body: { seconds: number }) {
+    return this.auctionsService.extendTime(+id, body.seconds);
+  }
+
   @Post(':id/checkout')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles('CUSTOMER')
