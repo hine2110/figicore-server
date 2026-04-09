@@ -97,7 +97,7 @@ export class PayrollService {
         });
     }
 
-    async runMonthlyPayroll(userId: number, month: number, year: number, reviewerId: number) {
+    async runMonthlyPayroll(userId: number, month: number, year: number, reviewerId: number, paymentStartDate?: Date, paymentEndDate?: Date) {
         // 1. Calculate Date Range (dayjs months are 0-indexed)
         const targetMonth = dayjs().year(year).month(month - 1);
         const startDate = targetMonth.startOf('month').toDate();
@@ -290,21 +290,36 @@ export class PayrollService {
             const isAddition = config.type_code !== 'DEDUCTION';
             const amount = config.amount.toNumber();
 
-            // LOGIC CẤN TRỪ CHUYÊN CẦN:
-            // Nếu khoản phụ cấp này là "Chuyên cần" (dựa vào mã hoặc tên do bạn quy ước, ở đây ví dụ tên có chứa chữ "chuyên cần")
+            // LOGIC CẤN TRỪ CHUYÊN CẦN (CHỈ TRỪ VÀO PHỤ CẤP NÀY, KHÔNG ĐỤNG VÀO LƯƠNG CƠ BẢN)
             if (isAddition && config.name.toLowerCase().includes('chuyên cần')) {
-                // Trừ tiền phạt vào cục chuyên cần này (tối đa trừ về 0đ)
-                const finalAttendanceBonus = Math.max(0, amount - totalPenalty);
-                sumAllowances += finalAttendanceBonus;
 
+                // Tiền phạt tối đa chỉ được trừ bằng tiền chuyên cần
+                const appliedPenalty = Math.min(amount, totalPenalty);
+
+                sumAllowances += amount;         // Vẫn cộng đủ 100% tiền chuyên cần ban đầu
+                sumDeductions += appliedPenalty; // Khấu trừ tiền phạt (tối đa bằng tiền chuyên cần)
+
+                // Hiển thị dòng Phụ cấp gốc
                 payrollItemsData.push({
-                    title: `${config.name} (Gốc: ${amount}đ)`,
-                    amount: finalAttendanceBonus,
+                    title: config.name,
+                    amount: amount,
                     is_addition: true,
                 });
 
-                // Sau đó thêm các dòng chi tiết phạt vào để in ra phiếu lương cho nhân viên biết lý do bị trừ
-                payrollItemsData.push(...penaltyItems);
+                // Hiển thị các dòng Phạt (nếu có)
+                if (appliedPenalty > 0) {
+                    if (totalPenalty > amount) {
+                        // Nếu tổng phạt lố tiền chuyên cần, gộp lại thành 1 dòng để tránh sai số toán học hiển thị
+                        payrollItemsData.push({
+                            title: `Tổng phạt vi phạm (Đã giảm trừ để không lẹm vào lương cơ bản)`,
+                            amount: appliedPenalty,
+                            is_addition: false,
+                        });
+                    } else {
+                        // Nếu phạt ít hơn chuyên cần, in chi tiết từng lỗi ra bình thường
+                        payrollItemsData.push(...penaltyItems);
+                    }
+                }
             } else {
                 // Các loại phụ cấp / khấu trừ khác thì cộng trừ bình thường
                 if (isAddition) sumAllowances += amount;
@@ -317,7 +332,6 @@ export class PayrollService {
                 });
             }
         }
-
 
         const finalSalary = proratedBase + sumAllowances - sumDeductions;
 
@@ -354,6 +368,8 @@ export class PayrollService {
                         total_work_hours: parseFloat(totalWorkHours.toFixed(2)),
                         final_salary: parseFloat(finalSalary.toFixed(2)),
                         status_code: 'DRAFT', reviewer_id: reviewerId,
+                        payment_start_date: paymentStartDate,
+                        payment_end_date: paymentEndDate,
                         payroll_items: { create: payrollItemsData },
                     },
                     include: { payroll_items: true },
@@ -499,7 +515,7 @@ export class PayrollService {
     }
 
     async getMyPayrolls(userId: number) {
-        return this.prisma.payrolls.findMany({
+        const payrolls = await this.prisma.payrolls.findMany({
             where: { user_id: userId, status_code: { not: 'DRAFT' } },
             orderBy: [
                 { year: 'desc' },
@@ -509,6 +525,28 @@ export class PayrollService {
                 payroll_items: true,
                 payroll_disputes: true,
             }
+        });
+
+        const now = dayjs();
+
+        // Map thêm cờ can_sign để Frontend hiển thị nút
+        return payrolls.map(pr => {
+            let canSign = false;
+
+            // Điều kiện để được ký: Trạng thái là APPROVED và thời gian hiện tại nằm trong khoảng payment_window
+            if (pr.status_code === 'APPROVED' && pr.payment_start_date && pr.payment_end_date) {
+                const isAfterStart = now.isAfter(dayjs(pr.payment_start_date)) || now.isSame(dayjs(pr.payment_start_date), 'day');
+                const isBeforeEnd = now.isBefore(dayjs(pr.payment_end_date)) || now.isSame(dayjs(pr.payment_end_date), 'day');
+
+                if (isAfterStart && isBeforeEnd) {
+                    canSign = true;
+                }
+            }
+
+            return {
+                ...pr,
+                can_sign: canSign
+            };
         });
     }
 
@@ -627,5 +665,59 @@ export class PayrollService {
                 }
             });
         }
+    }
+
+    // MANAGER: Setup khoảng thời gian dự kiến trả lương
+    async setPaymentWindow(payrollId: number, startDate: Date, endDate: Date) {
+        const payroll = await this.prisma.payrolls.findUnique({ where: { payroll_id: payrollId } });
+        if (!payroll) throw new NotFoundException('Không tìm thấy phiếu lương');
+
+        if (payroll.status_code === 'PAID') {
+            throw new BadRequestException('Phiếu lương này đã hoàn tất, không thể đổi ngày.');
+        }
+
+        return this.prisma.payrolls.update({
+            where: { payroll_id: payrollId },
+            data: {
+                payment_start_date: startDate,
+                payment_end_date: endDate,
+                updated_at: new Date()
+            }
+        });
+    }
+
+    // STAFF: Ký xác nhận đã nhận lương
+    async signMyPayroll(userId: number, payrollId: number, signatureData: string) {
+        const payroll = await this.prisma.payrolls.findUnique({ where: { payroll_id: payrollId } });
+
+        if (!payroll || payroll.user_id !== userId) {
+            throw new ForbiddenException('Bạn không có quyền thao tác trên phiếu lương này.');
+        }
+
+        if (payroll.status_code !== 'APPROVED') {
+            throw new BadRequestException('Phiếu lương này chưa sẵn sàng để ký.');
+        }
+
+        const now = dayjs();
+        if (!payroll.payment_start_date || !payroll.payment_end_date) {
+            throw new BadRequestException('Manager chưa thiết lập thời gian trả lương.');
+        }
+
+        const isAfterStart = now.isAfter(dayjs(payroll.payment_start_date)) || now.isSame(dayjs(payroll.payment_start_date), 'day');
+        const isBeforeEnd = now.isBefore(dayjs(payroll.payment_end_date)) || now.isSame(dayjs(payroll.payment_end_date), 'day');
+
+        if (!isAfterStart || !isBeforeEnd) {
+            throw new BadRequestException('Chưa tới hoặc đã quá hạn thời gian ký nhận lương.');
+        }
+
+        return this.prisma.payrolls.update({
+            where: { payroll_id: payrollId },
+            data: {
+                signature_data: signatureData,
+                signed_at: new Date(),
+                status_code: 'PAID',
+                updated_at: new Date()
+            }
+        });
     }
 }

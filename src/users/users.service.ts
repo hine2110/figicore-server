@@ -85,6 +85,29 @@ export class UsersService {
     });
   }
 
+  async updateBankInfo(userId: number, data: any) {
+    // 1. Kiểm tra xem user này có hồ sơ nhân viên (Employee) không
+    const employee = await this.prisma.employees.findUnique({
+      where: { user_id: userId }
+    });
+
+    if (!employee) {
+      throw new ForbiddenException('Chỉ nhân viên (Employee) mới có thể cập nhật thông tin ngân hàng.');
+    }
+
+    // 2. Cập nhật thẳng vào bảng employees (Không cần thông qua bảng requests)
+    return this.prisma.employees.update({
+      where: { user_id: userId },
+      data: {
+        bank_name: data.bank_name,
+        bank_account_no: data.bank_account_no,
+        bank_account_name: data.bank_account_name,
+        bank_qr_code_url: data.bank_qr_code_url,
+        updated_at: new Date()
+      }
+    });
+  }
+
 
   async create(data: any) {
     // Encrypt PII fields before storing
@@ -177,6 +200,7 @@ export class UsersService {
         employees: true,
         customers: true,
         addresses: true,
+
       },
     });
 
@@ -206,6 +230,12 @@ export class UsersService {
       job_title_code: user.employees?.job_title_code || null,
       base_salary: user.employees?.base_salary || null,
       start_date: user.employees?.start_date || null,
+
+      bank_name: user.employees?.bank_name || null,
+      bank_account_no: user.employees?.bank_account_no || null,
+      bank_account_name: user.employees?.bank_account_name || null,
+      bank_qr_code_url: user.employees?.bank_qr_code_url || null,
+
       // Customer Fields (Optional, but good for consistency)
       loyalty_points: user.customers?.loyalty_points || 0,
       current_rank_code: user.customers?.current_rank_code || 'UNRANKED',
