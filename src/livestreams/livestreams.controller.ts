@@ -5,10 +5,14 @@ import { UpdateLivestreamDto } from './dto/update-livestream.dto';
 import { AuthGuard } from '@nestjs/passport';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
+import { GiveawaysService } from './giveaways.service';
 
 @Controller('livestreams')
 export class LivestreamsController {
-  constructor(private readonly livestreamsService: LivestreamsService) {}
+  constructor(
+    private readonly livestreamsService: LivestreamsService,
+    private readonly giveawaysService: GiveawaysService,
+  ) {}
 
   @Get()
   findAll(@Query('status') status?: string) {
@@ -21,7 +25,6 @@ export class LivestreamsController {
   create(@Body() createLivestreamDto: CreateLivestreamDto) {
     return this.livestreamsService.create(createLivestreamDto);
   }
-
 
   @Get(':id')
   findOne(@Param('id') id: string) {
@@ -102,4 +105,22 @@ export class LivestreamsController {
     return this.livestreamsService.getOrders(+id);
   }
 
+  // --- GIVEAWAY MANAGEMENT ---
+
+  @Post(':id/giveaways')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles('SUPER_ADMIN', 'ADMIN')
+  createGiveaway(
+    @Param('id') id: string,
+    @Body() data: { variantId: number; keyword: string; slotsLimit: number }
+  ) {
+    return this.giveawaysService.createGiveaway(+id, data);
+  }
+
+  @Get(':id/giveaways')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles('SUPER_ADMIN', 'ADMIN')
+  getGiveaways(@Param('id') id: string) {
+    return this.giveawaysService.getGiveawaysByLive(+id);
+  }
 }
