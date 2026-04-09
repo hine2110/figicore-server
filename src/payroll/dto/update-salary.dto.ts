@@ -1,4 +1,5 @@
-import { IsInt, IsNotEmpty, IsNumber, IsOptional, IsString, IsIn, IsBoolean } from 'class-validator';
+import { Type } from 'class-transformer';
+import { IsInt, IsNotEmpty, IsNumber, IsOptional, IsString, IsIn, IsBoolean, IsDate } from 'class-validator';
 
 export class CreateSalaryConfigDto {
     @IsInt() @IsNotEmpty() userId: number;
@@ -48,6 +49,16 @@ export class RunPayrollDto {
     @IsInt()
     @IsNotEmpty()
     year: number;
+
+    @IsOptional()
+    @Type(() => Date)
+    @IsDate()
+    payment_start_date?: Date;
+
+    @IsOptional()
+    @Type(() => Date)
+    @IsDate()
+    payment_end_date?: Date;
 }
 
 export class UpdatePayrollStatusDto {
@@ -68,4 +79,22 @@ export class AddAdjustmentDto {
 
     @IsOptional()
     isAddition?: boolean;
+}
+
+export class SetPaymentWindowDto {
+    @IsNotEmpty()
+    @Type(() => Date)
+    @IsDate()
+    payment_start_date: Date;
+
+    @IsNotEmpty()
+    @Type(() => Date)
+    @IsDate()
+    payment_end_date: Date;
+}
+
+export class SignPayrollDto {
+    @IsString()
+    @IsNotEmpty()
+    signature_data: string; // Mã Base64 của hình vẽ chữ ký
 }
