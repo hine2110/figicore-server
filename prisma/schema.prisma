@@ -569,6 +569,7 @@ model promotions {
   code               String          @unique @db.VarChar(50)
   discount_value     Decimal?        @db.Decimal(15, 2)
   discount_type      String?         @db.VarChar(20)
+  max_discount_amount Decimal?       @db.Decimal(15, 2)
   min_order_value    Decimal?        @default(0) @db.Decimal(15, 2)
   apply_rank_code    String?         @db.VarChar(50)
   max_quantity       Int?

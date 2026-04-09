@@ -138,8 +138,8 @@ export class OrdersService {
           const endDateBase = promo.end_date ? new Date(promo.end_date) : now;
 
           // Parse start_time / end_time ("HH:mm") and merge with respective dates.
-          const [startHH, startMM] = promo.start_time.split(':').map(Number);
-          const [endHH, endMM] = promo.end_time.split(':').map(Number);
+          const [startHH, startMM] = (promo.start_time || "00:00").split(':').map(Number);
+          const [endHH, endMM] = (promo.end_time || "23:59").split(':').map(Number);
 
           const promoStart = new Date(startDateBase);
           promoStart.setHours(startHH, startMM, 0, 0);
@@ -153,6 +153,7 @@ export class OrdersService {
             promoEnd.setFullYear(now.getFullYear(), now.getMonth(), now.getDate());
           }
 
+          // EXPLICIT DATE BOUNDARY: Even if recurring, it must be within [start_date, end_date] if they exist.
           if (now < promoStart || now > promoEnd) {
             isValidPromo = false;
           }
@@ -166,6 +167,7 @@ export class OrdersService {
               if (fsItem) {
                 finalUnitPrice = Number(fsItem.flash_sale_price);
                 appliedFlashSale = true;
+                (item as any)._flash_sale_item_id = fsItem.item_id;
               }
             } else {
               if (promo.type_code === 'PERCENTAGE') {
@@ -210,7 +212,8 @@ export class OrdersService {
           variant,
           _backendVerifiedPrice: finalUnitPrice, // Saved purely from DB + Valid Promos
           _applied_flash_sale: appliedFlashSale,
-          _is_livestream_flash_sale: isLivestreamFlashSale
+          _is_livestream_flash_sale: isLivestreamFlashSale,
+          _flash_sale_item_id: (item as any)._flash_sale_item_id || null
         });
       }
 
@@ -258,7 +261,12 @@ export class OrdersService {
 
           // Calculate actual discount money based on retail subtotal
           if (discountType === 'PERCENTAGE') {
-            orderVoucherDiscountAmount = retailSubtotal * (discountValue / 100);
+            let calculated = retailSubtotal * (discountValue / 100);
+            const maxCap = Number(userDiscountVoucher.promotions.max_discount_amount);
+            if (maxCap > 0) {
+              calculated = Math.min(calculated, maxCap);
+            }
+            orderVoucherDiscountAmount = calculated;
           } else if (discountType === 'FIXED_AMOUNT') {
             orderVoucherDiscountAmount = discountValue;
           }
@@ -488,7 +496,8 @@ export class OrdersService {
 
             // SECURITY: Reject if price deviates
             if (Math.abs(Number(price) - authoritativePrice) > 1) {
-              this.logger.error(`[PRICE MISMATCH] SKU: ${variant.sku} | Client Sent: ${price} | Backend Expected: ${authoritativePrice} | _backendVerifiedPrice: ${_backendVerifiedPrice} | LivestreamId: ${livestreamId}`);
+              const appliedPromoId = variant.product_promotion_id;
+              this.logger.error(`[PRICE MISMATCH] SKU: ${variant.sku} | Client Sent: ${price} | Backend Expected: ${authoritativePrice} | _backendVerifiedPrice: ${_backendVerifiedPrice} | Applied Promo ID: ${appliedPromoId} | LivestreamId: ${livestreamId}`);
               throw new BadRequestException(`Product price for ${variant.sku} has changed. Please update your cart.`);
             }
 
@@ -516,6 +525,21 @@ export class OrdersService {
               if (revertResult.count > 0) {
                 this.livestreamLiveGateway.broadcastProductUpdate(`LIVE-${livestreamId}`, variant.variant_id);
               }
+            }
+
+            // --- 3.1. ATOMIC GENERAL FLASH SALE QUOTA ENFORCEMENT ---
+            if (rItem._applied_flash_sale && !rItem._is_livestream_flash_sale && rItem._flash_sale_item_id) {
+              const fsUpdateResult = await tx.$executeRaw`
+                UPDATE "promotion_items"
+                SET "sold" = "sold" + ${quantity}
+                WHERE "item_id" = ${rItem._flash_sale_item_id}
+                AND ("sold" + ${quantity}) <= "quota"
+              `;
+
+              if (Number(fsUpdateResult) === 0) {
+                throw new BadRequestException(`Flash Sale quota exceeded for ${variant.sku}. Please update your cart.`);
+              }
+              this.logger.log(`[FlashSale] Incremented sold count for Item #${rItem._flash_sale_item_id} (Qty: ${quantity})`);
             }
 
             rtTotalAmountVerified += Number(price) * quantity;
@@ -712,7 +736,12 @@ export class OrdersService {
     // 4. Calculate Discount
     let totalDiscount = 0;
     if (promo.discount_type === 'PERCENTAGE') {
-      totalDiscount = Math.round(groupSubtotal * (Number(promo.discount_value) / 100));
+      let calculated = groupSubtotal * (Number(promo.discount_value) / 100);
+      const maxCap = Number(promo.max_discount_amount);
+      if (maxCap > 0) {
+        calculated = Math.min(calculated, maxCap);
+      }
+      totalDiscount = Math.round(calculated);
     } else if (promo.discount_type === 'FIXED_AMOUNT') {
       totalDiscount = Number(promo.discount_value);
     } else if (promo.discount_type === 'FREE_SHIP') {
