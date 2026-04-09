@@ -62,7 +62,7 @@ export class CustomersService {
         status_code: decrypted.status_code,
         avatar_url: decrypted.avatar_url,
         loyalty_points: u.customers?.loyalty_points ?? 0,
-        current_rank_code: u.customers?.current_rank_code ?? 'NEWBIE',
+        current_rank_code: u.customers?.current_rank_code ?? 'BRONZE',
         total_spent: u.customers?.total_spent ?? 0,
         address: [] // Placeholder if needed, or omit
       };
@@ -100,7 +100,7 @@ export class CustomersService {
         data: {
           user_id: user.user_id,
           loyalty_points: 0,
-          current_rank_code: 'NEWBIE',
+          current_rank_code: 'BRONZE',
           total_spent: 0,
         },
       });
@@ -125,7 +125,7 @@ export class CustomersService {
       status_code: decrypted.status_code,
       avatar_url: decrypted.avatar_url,
       loyalty_points: user.customers?.loyalty_points ?? 0,
-      current_rank_code: user.customers?.current_rank_code ?? 'NEWBIE',
+      current_rank_code: user.customers?.current_rank_code ?? 'BRONZE',
       total_spent: user.customers?.total_spent ?? 0,
       addresses: user.addresses ? user.addresses.map(a => {
         const decA = { ...a };
@@ -162,7 +162,7 @@ export class CustomersService {
       walletBalance: wallet?.balance_available || 0,
       loyaltyPoints: customer?.loyalty_points || 0,
       activeOrders: activeOrders,
-      rankCode: customer?.current_rank_code || 'NEWBIE'
+      rankCode: customer?.current_rank_code || 'BRONZE'
     };
 
 
@@ -194,18 +194,18 @@ export class CustomersService {
         user_id: userId,
         loyalty_points: newTotalPoints,
         total_spent: newSpent,
-        current_rank_code: 'NEWBIE'
+        current_rank_code: 'BRONZE'
       }
     });
 
-    // Sync Backend Ranks with Frontend UI requirements (Based on points):
-    // Active: 100 pts (1M VNĐ)
-    // Elite: 500 pts (5M VNĐ)
-    // Legendary: 2000 pts (20M VNĐ)
-    let newRank = 'NEWBIE';
-    if (newTotalPoints >= 2000) newRank = 'LEGENDARY';
-    else if (newTotalPoints >= 500) newRank = 'ELITE';
-    else if (newTotalPoints >= 100) newRank = 'ACTIVE';
+    // Backend Ranks (Based on points, 10k VND = 1pt):
+    // SILVER: 200 pts (2M VND)
+    // GOLD: 1,000 pts (10M VND)
+    // DIAMOND: 5,000 pts (50M VND)
+    let newRank = 'BRONZE';
+    if (newTotalPoints >= 5000) newRank = 'DIAMOND';
+    else if (newTotalPoints >= 1000) newRank = 'GOLD';
+    else if (newTotalPoints >= 200) newRank = 'SILVER';
 
     let rankUpgraded = false;
     if (newRank !== customer.current_rank_code) {

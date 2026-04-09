@@ -387,7 +387,7 @@ export class PosOrdersService {
         if (!customer) throw new NotFoundException('Khách hàng không tồn tại');
 
         const orders = await this.prisma.orders.findMany({
-            where: { user_id: customerId, deleted_at: null, channel_code: 'POS', status_code: { not: 'PENDING' } },
+            where: { user_id: customerId, deleted_at: null, status_code: { not: 'PENDING' } },
             include: {
                 order_items: { include: { product_variants: { include: { products: true } } } },
                 users: true,
