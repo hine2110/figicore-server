@@ -230,25 +230,27 @@ export class LivestreamsService {
 
   async getReport(id: number) {
     const livestream = await this.prisma.livestreams.findUnique({
-        where: { id },
-        select: { start_time: true, end_time: true }
+      where: { id },
+      select: { start_time: true, end_time: true }
     });
 
+    // 1. Fetch all orders that have at least one item from this livestream
     const orders = await (this.prisma as any).orders.findMany({
       where: {
         order_items: {
           some: { livestream_id: id }
         },
-        status_code: { in: ['PROCESSING', 'COMPLETED', 'SHIPPING', 'DELIVERED'] } // Only PAID orders
+        // Only PAID orders
+        status_code: { in: ['PROCESSING', 'COMPLETED', 'SHIPPING', 'DELIVERED'] }
       },
       include: {
         order_items: {
           where: { livestream_id: id },
           include: {
             product_variants: {
-                include: {
-                    products: true
-                }
+              include: {
+                products: true
+              }
             }
           }
         }
@@ -257,19 +259,35 @@ export class LivestreamsService {
 
     let totalRevenue = 0;
     let totalCost = 0;
-    let totalOrders = orders.length;
+    let commercialOrderCount = 0;
+
     const variantSales: Record<number, { name: string; qty: number }> = {};
 
     orders.forEach(order => {
+      let orderHasCommercialItem = false;
+
       order.order_items.forEach(item => {
-        totalRevenue += Number(item.total_price);
-        totalCost += Number(item.product_variants?.cost_price || 0) * item.quantity;
+        const isGiveaway = !!item.giveaway_claim_id;
+
+        if (!isGiveaway) {
+          totalRevenue += Number(item.total_price);
+          totalCost += Number(item.product_variants?.cost_price || 0) * item.quantity;
+          orderHasCommercialItem = true;
+        }
+
         const vid = item.variant_id;
         if (!variantSales[vid]) {
-          variantSales[vid] = { name: item.product_variants?.products?.name || item.product_variants?.option_name || 'Item', qty: 0 };
+          variantSales[vid] = {
+            name: item.product_variants?.products?.name || item.product_variants?.option_name || 'Item',
+            qty: 0
+          };
         }
         variantSales[vid].qty += item.quantity;
       });
+
+      if (orderHasCommercialItem) {
+        commercialOrderCount++;
+      }
     });
 
     const topProduct = Object.values(variantSales).sort((a, b) => b.qty - a.qty)[0] || null;
@@ -277,7 +295,7 @@ export class LivestreamsService {
     return {
       revenue: totalRevenue,
       profit: totalRevenue - totalCost,
-      orderCount: totalOrders,
+      orderCount: commercialOrderCount, // Only counting unique commercial orders
       topProduct: topProduct ? `${topProduct.name} (${topProduct.qty} sold)` : 'N/A',
       startTime: livestream?.start_time,
       endTime: livestream?.end_time
@@ -290,7 +308,7 @@ export class LivestreamsService {
         order_items: {
           some: { livestream_id: id }
         },
-        // ✅ Only count PAID orders — PENDING = draft (stock reserved but not yet paid)
+        // Only count PAID orders
         status_code: { in: ['PROCESSING', 'COMPLETED', 'SHIPPING', 'DELIVERED'] }
       },
       include: {
@@ -315,23 +333,63 @@ export class LivestreamsService {
       take: 200
     });
 
-    // Transform to match the dashboard's expected flat structure for the live feed
-    const flattenedOrders: any[] = [];
+    const processedOrders: any[] = [];
     orders.forEach(order => {
+        const commercialItems: any[] = [];
+        const giveawayItems: any[] = [];
+        let commercialAmount = 0;
+
         order.order_items.forEach(item => {
-            flattenedOrders.push({
+            const isGiveaway = !!item.giveaway_claim_id;
+            if (isGiveaway) {
+                giveawayItems.push({
+                    product_name: item.product_variants?.products?.name || item.product_variants?.option_name || 'Prize',
+                    quantity: item.quantity
+                });
+            } else {
+                commercialItems.push({
+                    product_name: item.product_variants?.products?.name || item.product_variants?.option_name || 'Product',
+                    quantity: item.quantity,
+                    price: Number(item.total_price)
+                });
+                commercialAmount += Number(item.total_price);
+            }
+        });
+
+        // 1. If has commercial items, add as a commercial log entry
+        if (commercialItems.length > 0) {
+            const mainProduct = commercialItems[0].product_name;
+            const extraCount = commercialItems.length - 1;
+            processedOrders.push({
                 order_id: order.order_id,
                 customer_name: order.users?.full_name || 'Khách hàng',
-                product_name: item.product_variants?.products?.name || item.product_variants?.option_name || 'Vật phẩm',
-                quantity: item.quantity,
-                amount: Number(item.total_price),
+                product_name: extraCount > 0 ? `${mainProduct} + ${extraCount} items` : mainProduct,
+                quantity: commercialItems.reduce((sum, i) => sum + i.quantity, 0),
+                amount: commercialAmount,
                 time: new Date(order.created_at).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }),
                 status: order.status_code,
+                type: 'COMMERCIAL'
             });
-        });
+        }
+
+        // 2. If has giveaway items, add as a giveaway win entry (for interaction)
+        if (giveawayItems.length > 0) {
+            giveawayItems.forEach(g => {
+                processedOrders.push({
+                    order_id: `G-${order.order_id}`, // Masked ID for display logic
+                    customer_name: order.users?.full_name || 'Khách hàng',
+                    product_name: g.product_name,
+                    quantity: g.quantity,
+                    amount: 0,
+                    time: new Date(order.created_at).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }),
+                    status: order.status_code,
+                    type: 'GIVEAWAY'
+                });
+            });
+        }
     });
 
-    return flattenedOrders;
+    return processedOrders;
   }
 
 

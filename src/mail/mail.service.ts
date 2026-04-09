@@ -1,12 +1,16 @@
 import { Injectable } from '@nestjs/common';
 import { MailerService } from '@nestjs-modules/mailer';
 import { ConfigService } from '@nestjs/config';
+import { NotificationsService } from '../notifications/notifications.service';
+import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
 export class MailService {
   constructor(
     private mailerService: MailerService,
     private configService: ConfigService,
+    private notificationsService: NotificationsService,
+    private prisma: PrismaService,
   ) { }
 
 
@@ -38,6 +42,14 @@ export class MailService {
         },
       });
       console.log(`[MailService] Order confirmation sent to ${user.email}`);
+
+      // Sync Notification
+      await this.notificationsService.create(
+        user.user_id,
+        'Order Confirmed! 🎉',
+        `Your order #${order.order_code} has been confirmed successfully.`,
+        '/customer/profile?tab=orders'
+      );
     } catch (error) {
       console.error(`[MailService] Failed to send order confirmation to ${user.email}`, error);
     }
@@ -56,6 +68,14 @@ export class MailService {
         },
       });
       console.log(`[MailService] Shipping update sent to ${user.email}`);
+
+      // Sync Notification
+      await this.notificationsService.create(
+        user.user_id,
+        'Order Shipped! 🚚',
+        `Great news! Your order #${order.order_code} is on its way.`,
+        '/customer/profile?tab=orders'
+      );
     } catch (error) {
       console.error(`[MailService] Failed to send shipping update to ${user.email}`, error);
     }
@@ -75,6 +95,14 @@ export class MailService {
         },
       });
       console.log(`[MailService] Delivery success email sent to ${user.email}`);
+
+      // Sync Notification
+      await this.notificationsService.create(
+        user.user_id,
+        'Order Delivered! ✅',
+        `Order #${order.order_code} has been delivered. You earned ${earnedPoints} points!`,
+        '/customer/profile?tab=orders'
+      );
     } catch (error) {
       console.error(`[MailService] Failed to send delivery success email to ${user.email}`, error);
     }
@@ -221,6 +249,17 @@ export class MailService {
         `
       });
       console.log(`[MailService] Pre-order arrival email sent to ${email}`);
+
+      // Sync Notification
+      const targetUser = await this.prisma.users.findUnique({ where: { email } });
+      if (targetUser) {
+        await this.notificationsService.create(
+          targetUser.user_id,
+          'Your Pre-order is here! 📦',
+          `The item '${data.productName}' has arrived. Please complete the remaining payment.`,
+          '/customer/profile?tab=preorders'
+        );
+      }
     } catch (error) {
       console.error(`[MailService] Failed to send pre-order arrival email to ${email}`, error);
     }
@@ -255,6 +294,14 @@ export class MailService {
         `
       });
       console.log(`[MailService] Auction win email sent to ${user.email}`);
+
+      // Sync Notification
+      await this.notificationsService.create(
+        user.user_id,
+        'Auction Victory! 🏆',
+        `Congratulations! You won the auction for '${productName}'. Please pay within 24h.`,
+        '/customer/profile?tab=auctions'
+      );
     } catch (error) {
       console.error(`[MailService] Failed to send auction win email to ${user.email}`, error);
     }
