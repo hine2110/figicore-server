@@ -19,6 +19,11 @@ export class CreatePromotionDto {
   min_order_value?: number;
 
   @IsOptional()
+  @IsNumber()
+  @Min(0)
+  max_discount_amount?: number;
+
+  @IsOptional()
   @IsString()
   apply_rank_code?: string;
 
