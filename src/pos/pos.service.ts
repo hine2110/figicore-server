@@ -210,7 +210,7 @@ export class PosService {
   }
 
   /**
-   * Lấy ca làm việc hiện tại của nhân viên
+   * Lấy ca làm việc hiện tại của nhân viên (hoặc gợi ý cho ca mới)
    */
   async getCurrentSession(userId: number) {
     const session = await this.prisma.pos_sessions.findFirst({
@@ -225,10 +225,37 @@ export class PosService {
     });
 
     if (!session) {
+      // Find the last closed session in the entire store
+      const lastSession = await this.prisma.pos_sessions.findFirst({
+        where: {
+          status_code: 'CLOSED',
+          deleted_at: null,
+        },
+        orderBy: {
+          closed_at: 'desc',
+        },
+      });
+
+      let suggestedCash = 2000000;
+
+      if (lastSession && lastSession.closed_at) {
+        // Only use last session's cash if it was closed today (same day shift continuation)
+        const lastClosedDate = new Date(lastSession.closed_at);
+        const today = new Date();
+        const isToday = lastClosedDate.getDate() === today.getDate() &&
+                        lastClosedDate.getMonth() === today.getMonth() &&
+                        lastClosedDate.getFullYear() === today.getFullYear();
+
+        if (isToday && lastSession.closing_cash !== null) {
+          suggestedCash = Number(lastSession.closing_cash);
+        }
+      }
+
       return {
         success: true,
         message: 'Không có ca làm việc đang mở',
         data: null,
+        suggested_opening_cash: suggestedCash,
       };
     }
 
@@ -246,6 +273,7 @@ export class PosService {
         ...session,
         order_count: orderCount,
       },
+      suggested_opening_cash: 0,
     };
   }
 
