@@ -138,8 +138,8 @@ export class OrdersService {
           const endDateBase = promo.end_date ? new Date(promo.end_date) : now;
 
           // Parse start_time / end_time ("HH:mm") and merge with respective dates.
-          const [startHH, startMM] = promo.start_time.split(':').map(Number);
-          const [endHH, endMM] = promo.end_time.split(':').map(Number);
+          const [startHH, startMM] = (promo.start_time || "00:00").split(':').map(Number);
+          const [endHH, endMM] = (promo.end_time || "23:59").split(':').map(Number);
 
           const promoStart = new Date(startDateBase);
           promoStart.setHours(startHH, startMM, 0, 0);
@@ -153,6 +153,7 @@ export class OrdersService {
             promoEnd.setFullYear(now.getFullYear(), now.getMonth(), now.getDate());
           }
 
+          // EXPLICIT DATE BOUNDARY: Even if recurring, it must be within [start_date, end_date] if they exist.
           if (now < promoStart || now > promoEnd) {
             isValidPromo = false;
           }
@@ -166,6 +167,7 @@ export class OrdersService {
               if (fsItem) {
                 finalUnitPrice = Number(fsItem.flash_sale_price);
                 appliedFlashSale = true;
+                (item as any)._flash_sale_item_id = fsItem.item_id;
               }
             } else {
               if (promo.type_code === 'PERCENTAGE') {
@@ -210,7 +212,8 @@ export class OrdersService {
           variant,
           _backendVerifiedPrice: finalUnitPrice, // Saved purely from DB + Valid Promos
           _applied_flash_sale: appliedFlashSale,
-          _is_livestream_flash_sale: isLivestreamFlashSale
+          _is_livestream_flash_sale: isLivestreamFlashSale,
+          _flash_sale_item_id: (item as any)._flash_sale_item_id || null
         });
       }
 
@@ -218,7 +221,22 @@ export class OrdersService {
       let usedDiscountPromotionId: number | null = null;
       let orderVoucherDiscountAmount = 0;
 
+      // ── Retail-only voucher guard ──────────────────────────────────────────
+      // Compute retail subtotal separately (excludes blindbox & preorder items)
+      const retailSubtotal = validatedItems
+        .filter(item => {
+          const tc = item.variant?.products?.type_code;
+          return tc !== 'BLINDBOX' && tc !== 'PREORDER' && !item.variant?.product_preorder_configs;
+        })
+        .reduce((sum, item) => sum + (item._backendVerifiedPrice ?? Number(item.variant.price)) * Number(item.quantity), 0);
+
+      const hasOnlyNonRetailItems = retailSubtotal === 0 && validatedItems.length > 0;
+
       if (discountVoucherCode) {
+        if (hasOnlyNonRetailItems) {
+          throw new BadRequestException('Discount vouchers can only be applied to retail products. Blind Box and Pre-Order items are not eligible.');
+        }
+
         const userDiscountVoucher = await this.prisma.user_vouchers.findFirst({
           where: {
             user_id: userId,
@@ -232,17 +250,23 @@ export class OrdersService {
           if (userDiscountVoucher.promotions.start_date && new Date(userDiscountVoucher.promotions.start_date) > now) {
             throw new BadRequestException("This discount voucher is not yet active.");
           }
-          if (userDiscountVoucher.promotions.min_order_value && cartTotalAmountDiscounted < Number(userDiscountVoucher.promotions.min_order_value)) {
-            throw new BadRequestException("Order total does not meet the minimum required for this voucher.");
+          // Validate min_order_value against RETAIL subtotal only
+          if (userDiscountVoucher.promotions.min_order_value && retailSubtotal < Number(userDiscountVoucher.promotions.min_order_value)) {
+            throw new BadRequestException("Order total (retail items only) does not meet the minimum required for this voucher.");
           }
           usedDiscountPromotionId = userDiscountVoucher.promotion_id;
 
           const discountType = userDiscountVoucher.promotions.discount_type;
           const discountValue = Number(userDiscountVoucher.promotions.discount_value);
 
-          // Calculate actual discount money
+          // Calculate actual discount money based on retail subtotal
           if (discountType === 'PERCENTAGE') {
-            orderVoucherDiscountAmount = cartTotalAmountDiscounted * (discountValue / 100);
+            let calculated = retailSubtotal * (discountValue / 100);
+            const maxCap = Number(userDiscountVoucher.promotions.max_discount_amount);
+            if (maxCap > 0) {
+              calculated = Math.min(calculated, maxCap);
+            }
+            orderVoucherDiscountAmount = calculated;
           } else if (discountType === 'FIXED_AMOUNT') {
             orderVoucherDiscountAmount = discountValue;
           }
@@ -256,6 +280,10 @@ export class OrdersService {
       let isVoucherFreeShip = false;
 
       if (freeShipVoucherCode) {
+        if (hasOnlyNonRetailItems) {
+          throw new BadRequestException('Free shipping vouchers can only be applied to retail products. Blind Box and Pre-Order items are not eligible.');
+        }
+
         const userFreeShipVoucher = await this.prisma.user_vouchers.findFirst({
           where: {
             user_id: userId,
@@ -266,8 +294,8 @@ export class OrdersService {
         });
 
         if (userFreeShipVoucher && (!userFreeShipVoucher.promotions.end_date || userFreeShipVoucher.promotions.end_date > now)) {
-          if (userFreeShipVoucher.promotions.min_order_value && cartTotalAmountDiscounted < Number(userFreeShipVoucher.promotions.min_order_value)) {
-            throw new BadRequestException("Order total does not meet minimum required for free shipping.");
+          if (userFreeShipVoucher.promotions.min_order_value && retailSubtotal < Number(userFreeShipVoucher.promotions.min_order_value)) {
+            throw new BadRequestException("Order total (retail items only) does not meet minimum required for free shipping.");
           }
           usedFreeShipPromotionId = userFreeShipVoucher.promotion_id;
           isVoucherFreeShip = true;
@@ -275,6 +303,7 @@ export class OrdersService {
           throw new BadRequestException("Free shipping voucher invalid or expired.");
         }
       }
+
 
       const paymentRefCode = `PAY${Date.now()}${Math.floor(Math.random() * 1000)}`;
 
@@ -285,7 +314,7 @@ export class OrdersService {
         const blindboxItems: any[] = []; // NEW
 
         // Pre-fetch variants to classify
-        for (const item of items) {
+        for (const item of validatedItems) {
           const variant = await tx.product_variants.findUnique({
             where: { variant_id: item.variant_id },
             include: {
@@ -425,24 +454,28 @@ export class OrdersService {
           const rtOrderItemsData: any[] = [];
 
           for (const rItem of retailItems) {
-            const { variant, quantity, price, _allocated_product_id, _is_opened, _metadata } = rItem;
+            const { variant, quantity, price, _allocated_product_id, _is_opened, _metadata, _backendVerifiedPrice } = rItem;
             const livestreamId = rItem.livestreamId ? Number(rItem.livestreamId) : null;
 
             // --- 1. ATOMIC RETAIL STOCK DEDUCTION (Global Pool) ---
-            const stockUpdateResult = await tx.product_variants.updateMany({
-              where: {
-                variant_id: variant.variant_id,
-                stock_available: { gte: quantity }
-              },
-              data: { stock_available: { decrement: quantity } }
-            });
+            // Skip stock deduction for Blindbox tickets because the actual prize stock was already deducted in pickUniqueItems
+            if (!_allocated_product_id) {
+              const stockUpdateResult = await tx.product_variants.updateMany({
+                where: {
+                  variant_id: variant.variant_id,
+                  stock_available: { gte: quantity }
+                },
+                data: { stock_available: { decrement: quantity } }
+              });
 
-            if (stockUpdateResult.count === 0) {
-              throw new BadRequestException(`Product ${variant.sku} is out of stock or has been purchased by someone else.`);
+              if (stockUpdateResult.count === 0) {
+                throw new BadRequestException(`Product ${variant.sku} is out of stock or has been purchased by someone else.`);
+              }
             }
 
             // --- 2. AUTHORITATIVE PRICE CALCULATION (Zero-Trust) ---
-            let authoritativePrice = Number(variant.price); // Base Retail
+            // Fix: Fallback to _backendVerifiedPrice to respect AI Clearance & Promotions
+            let authoritativePrice = _backendVerifiedPrice !== undefined ? _backendVerifiedPrice : Number(variant.price);
             let shouldCheckFlashStock = false;
 
             if (livestreamId) {
@@ -463,6 +496,8 @@ export class OrdersService {
 
             // SECURITY: Reject if price deviates
             if (Math.abs(Number(price) - authoritativePrice) > 1) {
+              const appliedPromoId = variant.product_promotion_id;
+              this.logger.error(`[PRICE MISMATCH] SKU: ${variant.sku} | Client Sent: ${price} | Backend Expected: ${authoritativePrice} | _backendVerifiedPrice: ${_backendVerifiedPrice} | Applied Promo ID: ${appliedPromoId} | LivestreamId: ${livestreamId}`);
               throw new BadRequestException(`Product price for ${variant.sku} has changed. Please update your cart.`);
             }
 
@@ -490,6 +525,21 @@ export class OrdersService {
               if (revertResult.count > 0) {
                 this.livestreamLiveGateway.broadcastProductUpdate(`LIVE-${livestreamId}`, variant.variant_id);
               }
+            }
+
+            // --- 3.1. ATOMIC GENERAL FLASH SALE QUOTA ENFORCEMENT ---
+            if (rItem._applied_flash_sale && !rItem._is_livestream_flash_sale && rItem._flash_sale_item_id) {
+              const fsUpdateResult = await tx.$executeRaw`
+                UPDATE "promotion_items"
+                SET "sold" = "sold" + ${quantity}
+                WHERE "item_id" = ${rItem._flash_sale_item_id}
+                AND ("sold" + ${quantity}) <= "quota"
+              `;
+
+              if (Number(fsUpdateResult) === 0) {
+                throw new BadRequestException(`Flash Sale quota exceeded for ${variant.sku}. Please update your cart.`);
+              }
+              this.logger.log(`[FlashSale] Incremented sold count for Item #${rItem._flash_sale_item_id} (Qty: ${quantity})`);
             }
 
             rtTotalAmountVerified += Number(price) * quantity;
@@ -686,7 +736,12 @@ export class OrdersService {
     // 4. Calculate Discount
     let totalDiscount = 0;
     if (promo.discount_type === 'PERCENTAGE') {
-      totalDiscount = Math.round(groupSubtotal * (Number(promo.discount_value) / 100));
+      let calculated = groupSubtotal * (Number(promo.discount_value) / 100);
+      const maxCap = Number(promo.max_discount_amount);
+      if (maxCap > 0) {
+        calculated = Math.min(calculated, maxCap);
+      }
+      totalDiscount = Math.round(calculated);
     } else if (promo.discount_type === 'FIXED_AMOUNT') {
       totalDiscount = Number(promo.discount_value);
     } else if (promo.discount_type === 'FREE_SHIP') {
@@ -1067,14 +1122,7 @@ export class OrdersService {
           });
         }
 
-        // 2. Restore Blindbox Ticket (Virtual Stock)
-        if (item.allocated_product_id) {
-          await tx.product_variants.update({
-            where: { variant_id: item.variant_id }, // The Ticket ID
-            data: { stock_available: { increment: item.quantity } }
-          });
-        }
-
+        // (Blindbox ticket virtual stock is no longer restored as it's never deducted)
         // 3. Restore Flash Sale Quota (Decimal-safe)
         const promoItems = await tx.promotion_items.findMany({
           where: {

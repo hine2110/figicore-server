@@ -19,4 +19,8 @@ export class ActivateAccountDto {
   @IsString()
   @IsOptional()
   avatarUrl?: string;
+
+  @IsString()
+  @IsOptional()
+  faceDescriptor?: string;
 }

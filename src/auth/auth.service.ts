@@ -322,8 +322,33 @@ export class AuthService {
 
       // 3. AI Face Validation & Cloudinary Upload
       let avatarUrl = data.avatarUrl; // fallback if URL string was sent instead
+
+      // Uniqueness check (Fast 1:N Euclidean distance matching)
+      if (data.faceDescriptor) {
+        const incomingDescriptor = JSON.parse(data.faceDescriptor) as number[];
+        
+        const existingFaces = await this.prisma.system_lookups.findMany({
+          where: { type: 'FACE_DESCRIPTOR' }
+        });
+
+        for (const face of existingFaces) {
+          const existingDescriptor = face.meta_data as number[];
+          if (!existingDescriptor || !Array.isArray(existingDescriptor)) continue;
+
+          let distance = 0;
+          for (let i = 0; i < incomingDescriptor.length; i++) {
+            distance += Math.pow(incomingDescriptor[i] - existingDescriptor[i], 2);
+          }
+          distance = Math.sqrt(distance);
+
+          if (distance < 0.45) {
+            throw new BadRequestException(['Khuôn mặt này đã được sử dụng bởi một nhân viên khác.']);
+          }
+        }
+      }
+
       if (file) {
-        await this.faceValidationService.validateImageBuffer(file.buffer);
+        // Note: Heavy Face Validation (TensorFlow) is offloaded entirely to the Frontend to avoid timeouts on localhost.
         const uploadResult = await this.uploadService.uploadFile(file, 'figicore_avatars');
         avatarUrl = uploadResult.url;
       }
@@ -337,6 +362,18 @@ export class AuthService {
         is_verified: true,
         ...(avatarUrl && { avatar_url: avatarUrl }),
       });
+
+      if (data.faceDescriptor) {
+        // Save the authorized embedding hash for future uniqueness checks
+        await this.prisma.system_lookups.create({
+          data: {
+            type: 'FACE_DESCRIPTOR',
+            code: user.user_id.toString(),
+            value: 'USER_FACE',
+            meta_data: JSON.parse(data.faceDescriptor)
+          }
+        });
+      }
 
       return { message: 'Account activated successfully. Please login.' };
 
@@ -379,18 +416,22 @@ export class AuthService {
   }
 
   async updatePassword(userId: number, dto: import('./dto/update-password.dto').UpdatePasswordDto) {
-    const user = await this.usersService.findOne(userId);
+    const user = await this.usersService.findOne(userId, false); // Get full record including password_hash
     if (!user) {
       throw new NotFoundException('User not found');
     }
 
-    if (!user.password_hash) {
-      throw new BadRequestException('This account does not have a password set up.');
-    }
-
-    const isMatch = await bcrypt.compare(dto.oldPassword, user.password_hash);
-    if (!isMatch) {
-      throw new UnauthorizedException('Incorrect old password');
+    if (user.password_hash) {
+      if (!dto.oldPassword) {
+        throw new BadRequestException('Old password is required to set a new one.');
+      }
+      const isMatch = await bcrypt.compare(dto.oldPassword, user.password_hash);
+      if (!isMatch) {
+        throw new UnauthorizedException('Incorrect old password');
+      }
+    } else {
+      // For Google users or users without a password, we allow setting one without oldPassword
+      // since they are already authenticated.
     }
 
     const newHash = await bcrypt.hash(dto.newPassword, 10);

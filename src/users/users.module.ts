@@ -8,6 +8,7 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { UploadModule } from '../upload/upload.module';
 import { EncryptionService } from '../common/encryption.service';
 import { PromotionsModule } from '../promotions/promotions.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
   imports: [
@@ -15,6 +16,7 @@ import { PromotionsModule } from '../promotions/promotions.module';
     UploadModule,
     MailModule,
     PromotionsModule,
+    NotificationsModule,
     JwtModule.register({
       secret: process.env.JWT_SECRET || 'secretKey',
       signOptions: { expiresIn: '12h' },
