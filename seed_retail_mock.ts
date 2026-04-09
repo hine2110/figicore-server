@@ -628,7 +628,7 @@ async function seed() {
       };
     };
 
-    let variantsToCreate = [];
+    let variantsToCreate: any[] = [];
 
     // Tạo đa dạng biến thể cho từng dòng sản phẩm
     if (item.cat === "Dụng Cụ") {
