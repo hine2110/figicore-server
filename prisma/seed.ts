@@ -249,7 +249,7 @@ async function main() {
     await upsertLookup('PAYROLL_STATUS', 'DISPUTED', 'Đang Khiếu Nại', 3);
     await upsertLookup('PAYROLL_STATUS', 'PENDING_APPROVAL', 'Chờ Duyệt (Admin)', 4);
     await upsertLookup('PAYROLL_STATUS', 'APPROVED', 'Đã Duyệt', 5);
-    await upsertLookup('PAYROLL_STATUS', 'PAID', 'Đã Thanh Toán', 6);
+    await upsertLookup('PAYROLL_STATUS', 'PAID', 'Đã Nhận Lương & Ký Nhận', 6);
 
     await upsertLookup('SALARY_ITEM_TYPE', 'ALLOWANCE', 'Phụ Cấp', 1);
     await upsertLookup('SALARY_ITEM_TYPE', 'DEDUCTION', 'Khấu Trừ', 2);
