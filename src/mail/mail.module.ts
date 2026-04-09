@@ -4,10 +4,14 @@ import { HandlebarsAdapter } from '@nestjs-modules/mailer/dist/adapters/handleba
 import { MailService } from './mail.service';
 import { join } from 'path';
 import { ConfigService, ConfigModule } from '@nestjs/config';
+import { NotificationsModule } from '../notifications/notifications.module';
+import { PrismaModule } from '../prisma/prisma.module';
 
 @Global()
 @Module({
     imports: [
+        NotificationsModule,
+        PrismaModule,
         MailerModule.forRootAsync({
             imports: [ConfigModule],
             useFactory: async (config: ConfigService) => ({

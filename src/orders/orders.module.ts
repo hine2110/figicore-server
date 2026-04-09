@@ -19,7 +19,7 @@ import { EncryptionService } from '../common/encryption.service';
     EventsModule,
     WalletModule,
     BlindboxesModule,
-    LivestreamsModule,
+    forwardRef(() => LivestreamsModule),
     forwardRef(() => AuctionsModule)
   ],
   controllers: [OrdersController],

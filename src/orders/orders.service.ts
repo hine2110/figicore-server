@@ -210,9 +210,10 @@ export class OrdersService {
         validatedItems.push({
           ...item,
           variant,
-          _backendVerifiedPrice: finalUnitPrice, // Saved purely from DB + Valid Promos
+          _backendVerifiedPrice: item.giveaway_claim_id ? 0 : finalUnitPrice, // 0 for prizes
           _applied_flash_sale: appliedFlashSale,
           _is_livestream_flash_sale: isLivestreamFlashSale,
+          giveaway_claim_id: item.giveaway_claim_id,
           _flash_sale_item_id: (item as any)._flash_sale_item_id || null
         });
       }
@@ -325,7 +326,7 @@ export class OrdersService {
 
           if (!variant) throw new BadRequestException(`Variant ${item.variant_id} not found`);
 
-          const enrichedItem = { ...item, variant, livestreamId: item.livestreamId };
+          const enrichedItem = { ...item, variant, livestreamId: item.livestreamId, giveaway_claim_id: item.giveaway_claim_id };
 
           // Use existence of definition or explicit product type
           const isPreorder = variant.products.type_code === 'PREORDER' || !!variant.product_preorder_configs;
@@ -458,8 +459,15 @@ export class OrdersService {
             const livestreamId = rItem.livestreamId ? Number(rItem.livestreamId) : null;
 
             // --- 1. ATOMIC RETAIL STOCK DEDUCTION (Global Pool) ---
-            // Skip stock deduction for Blindbox tickets because the actual prize stock was already deducted in pickUniqueItems
-            if (!_allocated_product_id) {
+            // TRỰC TIẾP TRỪ KHO (Atomic): 
+            // - Bỏ qua cho Blindbox đã được allocate ruột (vì đã trừ ruột rồi).
+            // - Bỏ qua cho Giveaway Prize (vì đã trừ lúc recordWinner).
+            // - TẤT CẢ các trường hợp khác (Retail, Livestream, Flash Sale) PHẢI TRỪ KHO để tránh bán quá số lượng.
+
+            const isGiveaway = !!rItem.giveaway_claim_id;
+            const isAllocatedBlindbox = !!_allocated_product_id;
+
+            if (!isGiveaway && !isAllocatedBlindbox) {
               const stockUpdateResult = await tx.product_variants.updateMany({
                 where: {
                   variant_id: variant.variant_id,
@@ -469,13 +477,17 @@ export class OrdersService {
               });
 
               if (stockUpdateResult.count === 0) {
-                throw new BadRequestException(`Product ${variant.sku} is out of stock or has been purchased by someone else.`);
+                this.logger.error(`[OUT OF STOCK] Variant: ${variant.variant_id} | SKU: ${variant.sku} | Quantity Requested: ${quantity}`);
+                throw new BadRequestException(`Sản phẩm ${variant.sku} đã hết hàng hoặc vừa được người khác mua mất. Vui lòng cập nhật giỏ hàng.`);
               }
             }
 
             // --- 2. AUTHORITATIVE PRICE CALCULATION (Zero-Trust) ---
-            // Fix: Fallback to _backendVerifiedPrice to respect AI Clearance & Promotions
             let authoritativePrice = _backendVerifiedPrice !== undefined ? _backendVerifiedPrice : Number(variant.price);
+
+            // PRIZE OVERRIDE: If it's a claim, it MUST be 0
+            if (rItem.giveaway_claim_id) authoritativePrice = 0;
+
             let shouldCheckFlashStock = false;
 
             if (livestreamId) {
@@ -494,6 +506,10 @@ export class OrdersService {
               }
             }
 
+            // SECURITY: Reject if price deviates (Allow price mismatch for prizes since it's forced to 0 anyway)
+            if (!rItem.giveaway_claim_id && Math.abs(Number(price) - authoritativePrice) > 1) {
+              this.logger.error(`[PRICE MISMATCH] SKU: ${variant.sku} | Client Sent: ${price} | Backend Expected: ${authoritativePrice} | _backendVerifiedPrice: ${_backendVerifiedPrice} | LivestreamId: ${livestreamId}`);
+            }
             // SECURITY: Reject if price deviates
             if (Math.abs(Number(price) - authoritativePrice) > 1) {
               const appliedPromoId = variant.product_promotion_id;
@@ -553,6 +569,7 @@ export class OrdersService {
               allocated_product_id: _allocated_product_id || null,
               is_opened: _is_opened ?? false,
               livestream_id: livestreamId,
+              giveaway_claim_id: rItem.giveaway_claim_id || null,
               metadata: _metadata || undefined
             });
 
@@ -601,6 +618,15 @@ export class OrdersService {
           const allVariantIds = items.map((i: any) => i.variant_id);
           await tx.cart_items.deleteMany({
             where: { cart_id: cart.cart_id, variant_id: { in: allVariantIds } }
+          });
+        }
+
+        // --- E. UPDATE GIVEAWAY CLAIMS ---
+        const claimIds = validatedItems.map(i => i.giveaway_claim_id).filter(id => !!id);
+        if (claimIds.length > 0) {
+          await tx.giveaway_claims.updateMany({
+            where: { claim_id: { in: claimIds } },
+            data: { status_code: 'CLAIMED', updated_at: new Date() }
           });
         }
 
@@ -1023,19 +1049,58 @@ export class OrdersService {
    */
   private async _broadcastLivestreamOrder(order: any): Promise<void> {
     try {
+      const itemsByLivestream: Record<number, any[]> = {};
+
+      // 1. Group items by livestream_id
       const items = order.order_items || [];
       for (const item of items) {
         if (!item.livestream_id) continue;
-        const variantInfo = item.product_variants;
-        const productName = variantInfo?.products?.name || variantInfo?.option_name || 'Sản phẩm';
-        const customerName = order.users?.full_name || 'Khách hàng';
-        this.livestreamLiveGateway.broadcastOrder(`LIVE-${item.livestream_id}`, {
-          customer_name: customerName,
-          product_name: productName,
-          quantity: item.quantity,
-          amount: Number(item.unit_price) * item.quantity,
-          time: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }),
-        });
+        if (!itemsByLivestream[item.livestream_id]) {
+          itemsByLivestream[item.livestream_id] = [];
+        }
+        itemsByLivestream[item.livestream_id].push(item);
+      }
+
+      // 2. For each livestream, calculate and broadcast
+      const customerName = order.users?.full_name || 'Khách hàng';
+      const timeStr = new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+
+      for (const [lsId, lsItems] of Object.entries(itemsByLivestream)) {
+        const commercialItems = lsItems.filter(i => !i.giveaway_claim_id);
+        const giveawayItems = lsItems.filter(i => !!i.giveaway_claim_id);
+
+        // --- A. COMMERCIAL BROADCAST ---
+        if (commercialItems.length > 0) {
+          const mainItem = commercialItems[0];
+          const mainName = mainItem.product_variants?.products?.name || mainItem.product_variants?.option_name || 'Sản phẩm';
+          const extraCount = commercialItems.length - 1;
+          const commercialTotal = commercialItems.reduce((sum, i) => sum + Number(i.total_price), 0);
+
+          this.livestreamLiveGateway.broadcastOrder(`LIVE-${lsId}`, {
+            customer_name: customerName,
+            product_name: extraCount > 0 ? `${mainName} + ${extraCount} items` : mainName,
+            quantity: commercialItems.reduce((sum, i) => sum + i.quantity, 0),
+            amount: commercialTotal,
+            time: timeStr,
+            type: 'COMMERCIAL'
+          });
+        }
+
+        // --- B. GIVEAWAY BROADCAST (Increased Interaction) ---
+        if (giveawayItems.length > 0) {
+          for (const gItem of giveawayItems) {
+            const pName = gItem.product_variants?.products?.name || gItem.product_variants?.option_name || 'Giải thưởng';
+            // We use a different event or flag it as Giveaway
+            this.livestreamLiveGateway.broadcastOrder(`LIVE-${lsId}`, {
+              customer_name: customerName,
+              product_name: pName,
+              quantity: gItem.quantity,
+              amount: 0,
+              time: timeStr,
+              type: 'GIVEAWAY'
+            });
+          }
+        }
       }
     } catch (err) {
       this.logger.error('Failed to broadcast livestream order:', err);
@@ -1596,10 +1661,15 @@ export class OrdersService {
             });
           } else {
             // Default / Available / Safe Fallback
-            await tx.product_variants.update({
-              where: { variant_id: targetVariantId },
-              data: { stock_available: { increment: item.quantity } }
-            });
+            // --- CRITICAL GIVEAWAY FIX: DON'T REVERT STOCK ---
+            // Giveaway stock was deducted during winner pick and belongs to the user.
+            // Cancelling the order means it stays in the user's cart (reserved).
+            if (!item.giveaway_claim_id) {
+              await tx.product_variants.update({
+                where: { variant_id: targetVariantId },
+                data: { stock_available: { increment: item.quantity } }
+              });
+            }
           }
 
           // FIX: Restore Blindbox Ticket as well
@@ -1658,7 +1728,8 @@ export class OrdersService {
               cart_id: cart!.cart_id,
               variant_id: item.variant_id,
               quantity: item.quantity,
-              livestream_id: item.livestream_id
+              livestream_id: item.livestream_id,
+              giveaway_claim_id: item.giveaway_claim_id // Restore prize status
             }))
           });
         }
@@ -1895,5 +1966,105 @@ export class OrdersService {
     } catch (e) {
       console.error('[PII Audit] Failed to write audit log:', e.message);
     }
+  }
+
+  // --- GIVEAWAY LOGIC ---
+
+
+
+  async createGiveawayClaim(userId: number, variantId: number, livestreamId: number, giveawayId?: number) {
+    return await this.prisma.$transaction(async (tx) => {
+      // Deduct stock immediately to reserve it
+      const variant = await tx.product_variants.findUnique({ where: { variant_id: variantId } });
+      if (!variant || variant.stock_available <= 0) throw new BadRequestException("Item out of stock!");
+
+      await tx.product_variants.update({
+        where: { variant_id: variantId },
+        data: { stock_available: { decrement: 1 } }
+      });
+
+      const claim = await tx.giveaway_claims.create({
+        data: {
+          user_id: userId,
+          variant_id: variantId,
+          livestream_id: livestreamId,
+          giveaway_id: giveawayId,
+          status_code: 'PENDING'
+        }
+      });
+      return { type: 'CLAIM', claim };
+    });
+  }
+
+  async claimGiveawayPrize(userId: number, claimId: number) {
+    const claim = await this.prisma.giveaway_claims.findUnique({
+      where: { claim_id: claimId, user_id: userId, status_code: 'PENDING' }
+    });
+
+    if (!claim) throw new BadRequestException("Claim not found or already processed");
+
+    const address = await this.prisma.addresses.findFirst({
+      where: { user_id: userId, deleted_at: null },
+      orderBy: { is_default: 'desc' }
+    });
+
+    if (!address) throw new BadRequestException("Please add a shipping address to your profile first.");
+
+    return await this.prisma.$transaction(async (tx) => {
+      // Stock was already deducted when the claim was created (reservation)
+
+      // Create Order
+      const order = await tx.orders.create({
+        data: {
+          user_id: userId,
+          order_code: `GIVE-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+          shipping_address_id: address.address_id,
+          total_amount: 0,
+          shipping_fee: 0,
+          original_shipping_fee: 0,
+          payment_method_code: 'GIVEAWAY',
+          status_code: 'PROCESSING',
+          channel_code: 'LIVESTREAM',
+          note: `[LIVESTREAM GIVEAWAY] Claimed from Prize #${claimId}`,
+          order_items: {
+            create: [{
+              variant_id: claim.variant_id,
+              quantity: 1,
+              unit_price: 0,
+              total_price: 0,
+              livestream_id: claim.livestream_id
+            }]
+          },
+          order_status_history: {
+            create: { new_status: 'PROCESSING', note: 'Giveaway Prize Claimed' }
+          }
+        }
+      });
+
+      // Mark claim as CLAIMED
+      await tx.giveaway_claims.update({
+        where: { claim_id: claimId },
+        data: { status_code: 'CLAIMED' }
+      });
+
+      return order;
+    });
+  }
+  async findPendingClaims(userId: number, livestreamId?: number) {
+    return this.prisma.giveaway_claims.findMany({
+      where: {
+        user_id: userId,
+        livestream_id: livestreamId,
+        status_code: 'PENDING'
+      },
+      include: {
+        product_variants: {
+          include: {
+            products: true
+          }
+        }
+      },
+      orderBy: { created_at: 'desc' }
+    });
   }
 }

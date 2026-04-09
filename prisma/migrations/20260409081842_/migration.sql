@@ -64,6 +64,7 @@ CREATE TABLE "cart_items" (
     "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "deleted_at" TIMESTAMP(6),
+    "giveaway_claim_id" INTEGER,
 
     CONSTRAINT "cart_items_pkey" PRIMARY KEY ("item_id")
 );
@@ -144,6 +145,10 @@ CREATE TABLE "employees" (
     "job_title_code" VARCHAR(50) NOT NULL,
     "base_salary" DECIMAL(15,2) NOT NULL DEFAULT 0,
     "start_date" DATE,
+    "bank_name" VARCHAR(100),
+    "bank_account_no" VARCHAR(50),
+    "bank_account_name" VARCHAR(100),
+    "bank_qr_code_url" TEXT,
     "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "deleted_at" TIMESTAMP(6),
@@ -221,6 +226,7 @@ CREATE TABLE "notifications" (
     "user_id" INTEGER NOT NULL,
     "title" VARCHAR(255),
     "content" TEXT,
+    "target_url" TEXT,
     "is_read" BOOLEAN DEFAULT false,
     "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
@@ -246,6 +252,7 @@ CREATE TABLE "order_items" (
     "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "deleted_at" TIMESTAMP(6),
+    "giveaway_claim_id" INTEGER,
 
     CONSTRAINT "order_items_pkey" PRIMARY KEY ("item_id")
 );
@@ -322,6 +329,10 @@ CREATE TABLE "payrolls" (
     "status_code" VARCHAR(20) DEFAULT 'DRAFT',
     "reviewer_id" INTEGER,
     "approver_id" INTEGER,
+    "payment_start_date" TIMESTAMP(6),
+    "payment_end_date" TIMESTAMP(6),
+    "signature_data" TEXT,
+    "signed_at" TIMESTAMP(6),
     "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "deleted_at" TIMESTAMP(6),
@@ -504,6 +515,7 @@ CREATE TABLE "promotions" (
     "code" VARCHAR(50) NOT NULL,
     "discount_value" DECIMAL(15,2),
     "discount_type" VARCHAR(20),
+    "max_discount_amount" DECIMAL(15,2),
     "min_order_value" DECIMAL(15,2) DEFAULT 0,
     "apply_rank_code" VARCHAR(50),
     "max_quantity" INTEGER,
@@ -931,6 +943,36 @@ CREATE TABLE "livestream_products" (
 );
 
 -- CreateTable
+CREATE TABLE "giveaway_claims" (
+    "claim_id" SERIAL NOT NULL,
+    "user_id" INTEGER NOT NULL,
+    "variant_id" INTEGER NOT NULL,
+    "livestream_id" INTEGER NOT NULL,
+    "giveaway_id" INTEGER,
+    "status_code" VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+    "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
+    "deleted_at" TIMESTAMP(6),
+
+    CONSTRAINT "giveaway_claims_pkey" PRIMARY KEY ("claim_id")
+);
+
+-- CreateTable
+CREATE TABLE "livestream_giveaways" (
+    "id" SERIAL NOT NULL,
+    "livestream_id" INTEGER NOT NULL,
+    "variant_id" INTEGER NOT NULL,
+    "keyword" VARCHAR(100) NOT NULL,
+    "slots_limit" INTEGER NOT NULL DEFAULT 100,
+    "status_code" VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+    "winner_user_id" INTEGER,
+    "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "livestream_giveaways_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
 CREATE TABLE "livestream_interactions" (
     "interaction_id" SERIAL NOT NULL,
     "livestream_id" INTEGER NOT NULL,
@@ -1355,6 +1397,27 @@ ALTER TABLE "livestream_products" ADD CONSTRAINT "livestream_products_livestream
 
 -- AddForeignKey
 ALTER TABLE "livestream_products" ADD CONSTRAINT "livestream_products_variant_id_fkey" FOREIGN KEY ("variant_id") REFERENCES "product_variants"("variant_id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "giveaway_claims" ADD CONSTRAINT "giveaway_claims_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("user_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
+
+-- AddForeignKey
+ALTER TABLE "giveaway_claims" ADD CONSTRAINT "giveaway_claims_variant_id_fkey" FOREIGN KEY ("variant_id") REFERENCES "product_variants"("variant_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
+
+-- AddForeignKey
+ALTER TABLE "giveaway_claims" ADD CONSTRAINT "giveaway_claims_livestream_id_fkey" FOREIGN KEY ("livestream_id") REFERENCES "livestreams"("id") ON DELETE NO ACTION ON UPDATE NO ACTION;
+
+-- AddForeignKey
+ALTER TABLE "giveaway_claims" ADD CONSTRAINT "giveaway_claims_giveaway_id_fkey" FOREIGN KEY ("giveaway_id") REFERENCES "livestream_giveaways"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "livestream_giveaways" ADD CONSTRAINT "livestream_giveaways_livestream_id_fkey" FOREIGN KEY ("livestream_id") REFERENCES "livestreams"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "livestream_giveaways" ADD CONSTRAINT "livestream_giveaways_variant_id_fkey" FOREIGN KEY ("variant_id") REFERENCES "product_variants"("variant_id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "livestream_giveaways" ADD CONSTRAINT "livestream_giveaways_winner_user_id_fkey" FOREIGN KEY ("winner_user_id") REFERENCES "users"("user_id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "livestream_interactions" ADD CONSTRAINT "livestream_interactions_livestream_id_fkey" FOREIGN KEY ("livestream_id") REFERENCES "livestreams"("id") ON DELETE CASCADE ON UPDATE CASCADE;

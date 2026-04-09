@@ -316,6 +316,67 @@ export class CartService {
     return this.getCart(userId);
   }
 
+  async addGiveawayToCart(userId: number, claimId: number) {
+    console.log(`[CartService] Entering addGiveawayToCart for User ${userId}, Claim ${claimId}`);
+    
+    try {
+      // 1. Validate claim - Use findUnique for PK search
+      const claim = await this.prisma.giveaway_claims.findUnique({
+        where: { claim_id: claimId }
+      });
+
+      console.log(`[CartService] Claim Found:`, claim ? 'YES' : 'NO');
+
+      if (!claim || claim.user_id !== userId || claim.status_code !== 'PENDING') {
+        console.log(`[CartService] Validation failed. Claim: ${JSON.stringify(claim)}`);
+        throw new BadRequestException("Phần thưởng không hợp lệ hoặc đã được thu thập.");
+      }
+
+      // 2. Add to cart
+      console.log(`[CartService] Getting cart for User ${userId}`);
+      const cart = await this.getOrCreateCart(userId);
+
+      // Check if already in cart
+      console.log(`[CartService] Checking existing cart_items for Claim ${claimId}`);
+      const existing = await (this.prisma.cart_items as any).findFirst({
+        where: { cart_id: cart.cart_id, giveaway_claim_id: claimId, deleted_at: null }
+      });
+
+      if (existing) {
+        console.log(`[CartService] Prize already in cart`);
+        throw new BadRequestException("Phần thưởng này đã có trong giỏ hàng của bạn.");
+      }
+
+      console.log(`[CartService] Creating new cart item for Claim ${claimId}`);
+      await this.prisma.$transaction(async (tx) => {
+        await (tx.cart_items as any).create({
+          data: {
+            cart_id: cart.cart_id,
+            variant_id: claim.variant_id,
+            quantity: 1,
+            giveaway_claim_id: claimId,
+            payment_option: 'FULL_PAYMENT',
+            livestream_id: claim.livestream_id
+          }
+        });
+
+        // 3. Mark claim as CLAIMED so it disappears from UI
+        await tx.giveaway_claims.update({
+          where: { claim_id: claimId },
+          data: { status_code: 'CLAIMED' }
+        });
+      });
+
+      console.log(`[CartService] Claim ${claimId} successfully added to cart`);
+      return cart;
+    } catch (error) {
+      console.error(`[CartService] Error in addGiveawayToCart:`, error);
+      throw error;
+    } finally {
+      console.log(`[CartService] Exiting addGiveawayToCart`);
+    }
+  }
+
   async getCart(userId: number) {
     const cart = await this.prisma.carts.findFirst({
       where: { user_id: userId, deleted_at: null },
@@ -422,6 +483,11 @@ export class CartService {
             }
           }
         }
+
+        // --- FINAL OVERRIDE: GIVEAWAY IS ALWAYS 0 ---
+        if ((item as any).giveaway_claim_id) {
+          effectivePrice = 0;
+        }
       }
 
       return {
@@ -441,7 +507,8 @@ export class CartService {
         maxStock: variant.stock_available,
         promotion: variant.product_promotions,
         livestream_id: item.livestream_id,
-        is_live: (item as any).livestreams?.status === 'LIVE'
+        is_live: (item as any).livestreams?.status === 'LIVE',
+        giveaway_claim_id: (item as any).giveaway_claim_id
       };
     }));
 
@@ -463,6 +530,15 @@ export class CartService {
     // Verify ownership
     const cart = await this.getCartByUserId(userId);
     if (!cart) return;
+
+    // --- CRITICAL GIVEAWAY PROTECTION ---
+    const item = await this.prisma.cart_items.findUnique({
+      where: { item_id: itemId }
+    });
+    
+    if (item && (item as any).giveaway_claim_id) {
+       throw new BadRequestException("Không thể xóa sản phẩm quà tặng trúng thưởng khỏi giỏ hàng. Bạn hãy tiến hành thanh toán để nhận quà!");
+    }
 
     await this.prisma.cart_items.deleteMany({
       where: {
@@ -498,6 +574,11 @@ export class CartService {
     });
 
     if (!item || item.cart_id !== cart.cart_id) throw new NotFoundException('Item not found');
+
+    // --- CRITICAL GIVEAWAY PROTECTION ---
+    if ((item as any).giveaway_claim_id) {
+      throw new BadRequestException("Số lượng sản phẩm quà tặng là cố định (1). Bạn không thể thay đổi số lượng này.");
+    }
 
     const isBlindbox = item.product_variants.products.type_code === 'BLINDBOX';
 
