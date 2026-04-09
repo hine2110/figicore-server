@@ -458,16 +458,19 @@ export class OrdersService {
             const livestreamId = rItem.livestreamId ? Number(rItem.livestreamId) : null;
 
             // --- 1. ATOMIC RETAIL STOCK DEDUCTION (Global Pool) ---
-            const stockUpdateResult = await tx.product_variants.updateMany({
-              where: {
-                variant_id: variant.variant_id,
-                stock_available: { gte: quantity }
-              },
-              data: { stock_available: { decrement: quantity } }
-            });
+            // Skip stock deduction for Blindbox tickets because the actual prize stock was already deducted in pickUniqueItems
+            if (!_allocated_product_id) {
+              const stockUpdateResult = await tx.product_variants.updateMany({
+                where: {
+                  variant_id: variant.variant_id,
+                  stock_available: { gte: quantity }
+                },
+                data: { stock_available: { decrement: quantity } }
+              });
 
-            if (stockUpdateResult.count === 0) {
-              throw new BadRequestException(`Product ${variant.sku} is out of stock or has been purchased by someone else.`);
+              if (stockUpdateResult.count === 0) {
+                throw new BadRequestException(`Product ${variant.sku} is out of stock or has been purchased by someone else.`);
+              }
             }
 
             // --- 2. AUTHORITATIVE PRICE CALCULATION (Zero-Trust) ---
@@ -1119,14 +1122,7 @@ export class OrdersService {
           });
         }
 
-        // 2. Restore Blindbox Ticket (Virtual Stock)
-        if (item.allocated_product_id) {
-          await tx.product_variants.update({
-            where: { variant_id: item.variant_id }, // The Ticket ID
-            data: { stock_available: { increment: item.quantity } }
-          });
-        }
-
+        // (Blindbox ticket virtual stock is no longer restored as it's never deducted)
         // 3. Restore Flash Sale Quota (Decimal-safe)
         const promoItems = await tx.promotion_items.findMany({
           where: {

@@ -45,13 +45,13 @@ export class BlindboxesService {
             rawConfig = [
                 {
                     name: 'ZONE_1_SHOP_PROFIT',
-                    probability: 35,
+                    probability: 55,
                     min: min,
                     max: Math.max(min, zone1Upper)
                 },
                 {
                     name: 'ZONE_2_FAIR',
-                    probability: 60,
+                    probability: 40,
                     min: Math.max(min, zone1Upper),
                     max: Math.max(zone1Upper, zone2Upper)
                 },
