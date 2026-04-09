@@ -291,6 +291,7 @@ export class PromotionsService {
             discount_value: true,
             discount_type: true,
             min_order_value: true,
+            max_discount_amount: true,
             apply_rank_code: true,
             start_date: true,
             end_date: true,

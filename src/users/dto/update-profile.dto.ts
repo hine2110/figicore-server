@@ -25,3 +25,26 @@ export class UpdateProfileDto {
   @IsDateString()
   dob?: string;
 }
+
+
+export class UpdateBankInfoDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  bank_name?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  bank_account_no?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  bank_account_name?: string;
+
+  @IsOptional()
+  @IsString()
+  bank_qr_code_url?: string;
+}
+

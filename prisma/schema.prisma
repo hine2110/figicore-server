@@ -132,8 +132,12 @@ model employees {
   user_id                 Int                       @id
   employee_code           String                    @unique @db.VarChar(20)
   job_title_code          String                    @db.VarChar(50)
-  base_salary             Decimal                   @default(0) @db.Decimal(15, 2)
+  base_salary            Decimal                   @default(0) @db.Decimal(15, 2)
   start_date              DateTime?                 @db.Date
+  bank_name               String?                   @db.VarChar(100)
+  bank_account_no         String?                   @db.VarChar(50)
+  bank_account_name       String?                   @db.VarChar(100)
+  bank_qr_code_url        String?                   @db.Text
   created_at              DateTime?                 @default(now()) @db.Timestamp(6)
   updated_at              DateTime?                 @default(now()) @db.Timestamp(6)
   deleted_at              DateTime?                 @db.Timestamp(6)
@@ -327,23 +331,27 @@ model payment_transactions {
 }
 
 model payrolls {
-  payroll_id       Int                @id @default(autoincrement())
-  user_id          Int
-  month            Int
-  year             Int
-  total_work_hours Float?             @default(0)
-  final_salary     Decimal?           @default(0) @db.Decimal(15, 2)
-  status_code      String?            @default("DRAFT") @db.VarChar(20)
-  reviewer_id      Int?
-  approver_id      Int?
-  created_at       DateTime?          @default(now()) @db.Timestamp(6)
-  updated_at       DateTime?          @default(now()) @db.Timestamp(6)
-  deleted_at       DateTime?          @db.Timestamp(6)
-  payroll_disputes payroll_disputes[]
-  payroll_items    payroll_items[]
-  approver         employees?         @relation("PayrollApprover", fields: [approver_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
-  reviewer         employees?         @relation("PayrollReviewer", fields: [reviewer_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
-  employees        employees          @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  payroll_id         Int                @id @default(autoincrement())
+  user_id            Int
+  month              Int
+  year               Int
+  total_work_hours   Float?             @default(0)
+  final_salary       Decimal?           @default(0) @db.Decimal(15, 2)
+  status_code        String?            @default("DRAFT") @db.VarChar(20)
+  reviewer_id        Int?
+  approver_id        Int?
+  payment_start_date DateTime?          @db.Timestamp(6)
+  payment_end_date   DateTime?          @db.Timestamp(6)
+  signature_data     String?            @db.Text
+  signed_at          DateTime?          @db.Timestamp(6)
+  created_at         DateTime?          @default(now()) @db.Timestamp(6)
+  updated_at         DateTime?          @default(now()) @db.Timestamp(6)
+  deleted_at         DateTime?          @db.Timestamp(6)
+  payroll_disputes   payroll_disputes[]
+  payroll_items      payroll_items[]
+  approver           employees?         @relation("PayrollApprover", fields: [approver_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  reviewer           employees?         @relation("PayrollReviewer", fields: [reviewer_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  employees          employees          @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model pos_sessions {
@@ -530,6 +538,7 @@ model promotions {
   code               String          @unique @db.VarChar(50)
   discount_value     Decimal?        @db.Decimal(15, 2)
   discount_type      String?         @db.VarChar(20)
+  max_discount_amount Decimal?       @db.Decimal(15, 2)
   min_order_value    Decimal?        @default(0) @db.Decimal(15, 2)
   apply_rank_code    String?         @db.VarChar(50)
   max_quantity       Int?
