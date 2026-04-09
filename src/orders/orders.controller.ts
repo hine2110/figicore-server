@@ -103,6 +103,12 @@ export class OrdersController {
     return this.ordersService.findAllByUser(req.user.user_id);
   }
 
+  @Get('my-claims')
+  @UseGuards(AuthGuard('jwt'))
+  findMyClaims(@Req() req, @Query('livestreamId') livestreamId?: string) {
+    return this.ordersService.findPendingClaims(req.user.user_id, livestreamId ? +livestreamId : undefined);
+  }
+
   // NOTE: Named routes MUST be declared BEFORE the generic @Get(':id') route
   // to prevent NestJS from swallowing them as wildcard :id matches.
   @Get('by-ref/:ref')
