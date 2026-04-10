@@ -361,7 +361,7 @@ export class MailService {
           : `${this.formatCurrency(Number(promotion.discount_value || 0))} OFF`;
 
       const expiryText = promotion.end_date
-        ? `Valid until: <strong>${new Date(promotion.end_date).toLocaleDateString('vi-VN')}</strong>`
+        ? `Valid until: <strong>${new Date(promotion.end_date).toLocaleDateString('en-GB')}</strong>`
         : 'No expiry — collect anytime!';
 
       await this.mailerService.sendMail({
@@ -441,30 +441,31 @@ export class MailService {
             <!-- Body -->
             <div style="padding: 32px;">
               <p style="color: #374151; font-size: 15px;">
-                To celebrate your special month, FigiCore has <strong>automatically added a special voucher</strong> to your wallet. You can use it right away at checkout!
+                To celebrate your special month, FigiCore has <strong>automatically added a special voucher</strong> to your wallet. You can use it right away at checkout for <strong>Retail products</strong>!
               </p>
 
               <!-- Voucher Card -->
               <div style="border: 2px dashed #7c3aed; border-radius: 12px; padding: 24px; margin: 24px 0; text-align: center; background: #faf5ff;">
                 <p style="font-size: 13px; color: #7c3aed; margin: 0 0 8px; font-weight: bold; text-transform: uppercase; letter-spacing: 1px;">🎁 Birthday Gift</p>
-                <p style="font-size: 32px; font-weight: bold; color: #111; margin: 8px 0;">10% OFF</p>
+                <p style="font-size: 28px; font-weight: bold; color: #111; margin: 8px 0;">10% OFF</p>
+                <p style="font-size: 14px; color: #db2777; font-weight: bold; margin-bottom: 12px;">(Max 100.000₫ Discount)</p>
                 <p style="font-size: 13px; color: #6b7280; margin: 4px 0;">
-                  Code: <span style="font-family: monospace; background: #ede9fe; color: #7c3aed; padding: 3px 10px; border-radius: 6px; font-weight: bold;">\${voucherCode}</span>
+                  Code: <span style="font-family: monospace; background: #ede9fe; color: #7c3aed; padding: 3px 10px; border-radius: 6px; font-weight: bold;">${voucherCode}</span>
                 </p>
                 <p style="font-size: 12px; color: #9ca3af; margin-top: 10px;">
-                  Expires: \${formattedExpiry} &nbsp;·&nbsp; Already in your wallet
+                  Expires: ${formattedExpiry} &nbsp;·&nbsp; Already in your wallet
                 </p>
               </div>
 
               <div style="background: #fdf2f8; border-left: 4px solid #db2777; padding: 16px; margin-bottom: 24px;">
                 <p style="margin: 0; font-size: 14px; color: #9d174d;">
-                   <strong>Good news:</strong> No need to copy the code! The voucher is saved in your <strong>"Voucher Wallet"</strong> and will appear automatically during checkout.
+                   <strong>Note:</strong> Applicable for Retail items only (Excludes Blind Box & Pre-order). The voucher is already in your <strong>"Voucher Wallet"</strong>.
                 </p>
               </div>
 
               <!-- CTA -->
               <div style="text-align: center; margin: 28px 0 16px;">
-                <a href="\${walletUrl}"
+                <a href="${walletUrl}"
                    style="background: linear-gradient(135deg, #7c3aed, #db2777); color: white; padding: 14px 40px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 15px; display: inline-block;">
                   Go to Voucher Wallet
                 </a>
@@ -478,7 +479,7 @@ export class MailService {
 
             <!-- Footer -->
             <div style="background: #f9fafb; padding: 16px; text-align: center;">
-              <p style="color: #d1d5db; font-size: 11px; margin: 0;">© \${new Date().getFullYear()} FigiCore — With love 💜</p>
+              <p style="color: #d1d5db; font-size: 11px; margin: 0;">© ${new Date().getFullYear()} FigiCore — With love 💜</p>
             </div>
           </div>
         `,

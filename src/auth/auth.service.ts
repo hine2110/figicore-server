@@ -342,7 +342,7 @@ export class AuthService {
           distance = Math.sqrt(distance);
 
           if (distance < 0.45) {
-            throw new BadRequestException(['Khuôn mặt này đã được sử dụng bởi một nhân viên khác.']);
+            throw new BadRequestException(['This face is already used by another employee.']);
           }
         }
       }
