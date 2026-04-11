@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { EventsGateway } from '../events/events.gateway';
 import { MailService } from '../mail/mail.service';
 import { LivestreamLiveGateway } from '../livestreams/livestream-live.gateway';
+import { EncryptionService } from '../common/encryption.service';
 
 @Injectable()
 export class PaymentsService {
@@ -13,7 +14,16 @@ export class PaymentsService {
         private eventsGateway: EventsGateway,
         private mailService: MailService,
         private livestreamLiveGateway: LivestreamLiveGateway,
+        private encryption: EncryptionService,
     ) { }
+
+    private decryptUser(user: any) {
+        if (!user) return null;
+        const decrypted = { ...user };
+        if (decrypted.phone) decrypted.phone = this.encryption.decrypt(decrypted.phone);
+        if (decrypted.email) decrypted.email = this.encryption.decrypt(decrypted.email);
+        return decrypted;
+    }
 
     async processWebhook(data: any): Promise<{ success: boolean; message: string }> {
         this.logger.log(`Received Webhook from SePay: ${JSON.stringify(data)}`);
@@ -311,7 +321,8 @@ export class PaymentsService {
                             });
 
                             if (fullOrder && fullOrder.users) {
-                                this.mailService.sendOrderConfirmation(fullOrder.users, fullOrder).catch(e => this.logger.error("Mail Error", e));
+                                const decUser = this.decryptUser(fullOrder.users);
+                                this.mailService.sendOrderConfirmation(decUser, fullOrder).catch(e => this.logger.error("Mail Error", e));
                                 this.eventsGateway.notifyNewOrder(fullOrder); // Notify Warehouse/Admin
                                 // Notify Livestream admin panel — ONLY on confirmed payment
                                 await this._broadcastLivestreamOrder(fullOrder);

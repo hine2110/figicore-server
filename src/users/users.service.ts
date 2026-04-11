@@ -114,7 +114,32 @@ export class UsersService {
     const safeData = { ...data };
     if (safeData.email) safeData.email = this.encryption.encryptDeterministic(safeData.email);
     if (safeData.phone) safeData.phone = this.encryption.encryptDeterministic(safeData.phone);
-    return this.prisma.users.create({ data: safeData });
+
+    // Auto-create Customer profile and Wallet if role is CUSTOMER
+    const isCustomer = safeData.role_code === 'CUSTOMER';
+
+    return this.prisma.users.create({
+      data: {
+        ...safeData,
+        customers: isCustomer ? {
+          create: {
+            current_rank_code: 'BRONZE',
+            loyalty_points: 0,
+            total_spent: 0
+          }
+        } : undefined,
+        wallets: isCustomer ? {
+          create: {
+            balance_available: 0,
+            balance_locked: 0
+          }
+        } : undefined
+      },
+      include: {
+        customers: true,
+        wallets: true
+      }
+    });
   }
 
   async findAll() {
