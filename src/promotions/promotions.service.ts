@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { MailService } from '../mail/mail.service';
 import { CreatePromotionDto } from './dto/create-promotion.dto';
 import { UpdatePromotionDto } from './dto/update-promotion.dto';
+import { EncryptionService } from '../common/encryption.service';
 
 @Injectable()
 export class PromotionsService {
@@ -12,6 +13,7 @@ export class PromotionsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly mailService: MailService,
+    private readonly encryption: EncryptionService,
   ) {}
 
   // ─── Manager APIs ──────────────────────────────────────────────────────────
@@ -73,9 +75,11 @@ export class PromotionsService {
     // Send emails sequentially to avoid overwhelming SMTP
     for (const user of usersWithEmails) {
       try {
-        await this.mailService.sendTargetedPromotionEmail(user as any, promotion);
+        const decEmail = this.encryption.decrypt(user!.email!);
+        const decName = this.encryption.decrypt(user!.full_name!);
+        await this.mailService.sendTargetedPromotionEmail({ email: decEmail, full_name: decName }, promotion);
       } catch (err) {
-        this.logger.error(`[EmailDispatch] Failed to send to ${user.email}`, err);
+        this.logger.error(`[EmailDispatch] Failed to send to ${user!.email}`, err);
       }
     }
 

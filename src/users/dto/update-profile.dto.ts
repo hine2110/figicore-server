@@ -6,6 +6,7 @@ export class UpdateProfileDto {
   @MaxLength(100)
   full_name?: string;
 
+  @IsOptional()
   @Matches(/^0\d{9}$/, { message: 'Phone must be exactly 10 digits and start with 0' })
   phone?: string;
 
