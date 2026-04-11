@@ -88,14 +88,15 @@ export class BirthdayCronService {
       const promotion = await tx.promotions.create({
         data: {
           code:               voucherCode,
-          discount_value:     10,             // 10% discount
-          discount_type:      'PERCENTAGE',
-          min_order_value:    0,              // No min order for birthday gift
-          max_quantity:       1,              // Single-use
-          collected_quantity: 1,
-          is_public:          false,          // Private (not shown in collectible list)
-          start_date:         startDate,
-          end_date:           endDate,
+          discount_value:      10,              // 10% discount
+          discount_type:       'PERCENTAGE',
+          max_discount_amount: 100000,          // Cap at 100,000 VND
+          min_order_value:     0,               // No min order for birthday gift
+          max_quantity:        1,               // Single-use
+          collected_quantity:  1,
+          is_public:           false,           // Private (not shown in collectible list)
+          start_date:          startDate,
+          end_date:            endDate,
         },
       });
 

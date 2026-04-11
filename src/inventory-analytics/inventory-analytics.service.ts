@@ -116,15 +116,15 @@ export class InventoryAnalyticsService {
           {
             role: 'system',
             content: `
-              Bạn là chuyên gia thu thập dữ liệu thị trường trong ngành Đồ Chơi Sưu Tầm & Blindbox.
-              Nhiệm vụ: Mô phỏng dữ liệu tìm kiếm (search volume change %) và tâm lý người tiêu dùng (market sentiment) cho danh sách từ khóa được cung cấp.
+              You are a market data collection expert in the Collectible Toys & Blindbox industry.
+              Task: Simulate search volume change % and market sentiment for the provided list of keywords.
               
-              QUY TẮC:
-              - SearchVolumeChange: Phải là một con số % thực tế (ví dụ: +12%, -5%, +85%).
-              - MarketSentiment: Chỉ chọn 1 trong các giá trị: "HOT", "STABLE", "VIRAL", "TRENDING", "NEUTRAL", "BEARISH".
-              - SuggestedAction: Tự suy luận hành động phù hợp (ví dụ: 'Nên nhập thêm', 'Duy trì hàng ngách', 'Cần xả nhanh').
+              RULES:
+              - SearchVolumeChange: Must be a realistic % (e.g., +12%, -5%, +85%).
+              - MarketSentiment: Choose only 1 from: "HOT", "STABLE", "VIRAL", "TRENDING", "NEUTRAL", "BEARISH".
+              - SuggestedAction: Infer appropriate action (e.g., 'Restock more', 'Maintain niche items', 'Liquidate fast').
               
-              ĐỊNH DẠNG JSON trả về:
+              RETURN FORMAT (JSON):
               {
                 "trends": [
                   { "keyword": string, "searchVolumeChange": string, "marketSentiment": string, "suggestedAction": string }
@@ -134,7 +134,7 @@ export class InventoryAnalyticsService {
           },
           {
             role: 'user',
-            content: `Danh sách từ khóa: [${keywords.join(', ')}]`
+            content: `List of keywords: [${keywords.join(', ')}]`
           }
         ],
         response_format: { type: 'json_object' },
@@ -153,7 +153,7 @@ export class InventoryAnalyticsService {
         keyword: kw,
         searchVolumeChange: '0%',
         marketSentiment: 'NEUTRAL',
-        suggestedAction: 'Duy trì theo dõi'
+        suggestedAction: 'Maintain monitoring'
       }));
     }
   }
@@ -169,24 +169,24 @@ export class InventoryAnalyticsService {
           {
             role: 'system',
             content: `
-              Bạn là một chuyên gia phân tích chuỗi cung ứng hàng đầu trong ngành đồ chơi sưu tầm và Blindbox.
-              Nhiệm vụ: Dựa trên dữ liệu tồn kho (internal) và xu hướng thị trường (external), hãy đưa ra đề xuất nhập hàng và xả kho.
+              You are a leading supply chain analyst in the collectible toy and Blindbox industry.
+              Task: Based on internal inventory data and external market trends, provide recommendations for restocking and clearance.
               
-              QUY TẮC PHÂN TÍCH VÀ RÀO CẢN TÀI CHÍNH:
-              1. Clearance (Xả kho): 
-                 - Điều kiện: Tồn kho cao (>50), doanh số 30 ngày thấp và thị trường NEUTRAL/BEARISH.
-                 - QUY TẮC GIÁ: "suggestedDiscount" phải được tính toán sao cho Giá sau giảm KHÔNG thấp hơn [breakEvenPrice].
-                 - NGOẠI LỆ: Chỉ khi sản phẩm có dấu hiệu tồn kho quá lâu và thị trường cực xấu, mới được giảm chạm mức [liquidatePrice] (đáy cắt lỗ). KHÔNG bao giờ được giảm dưới [liquidatePrice].
+              ANALYSIS RULES & FINANCIAL CONSTRAINTS:
+              1. Clearance: 
+                 - Conditions: High inventory (>50), low 30-day sales, and NEUTRAL/BEARISH market sentiment.
+                 - PRICING RULE: "suggestedDiscount" must be calculated so that the post-discount price is NOT lower than [breakEvenPrice].
+                 - EXCEPTION: Only when a product has been in stock for too long and the market is extremely bad can it be reduced to the [liquidatePrice] (stop-loss floor). NEVER go below [liquidatePrice].
               
-              2. Restock (Nhập hàng): 
-                 - Điều kiện: Tồn kho thấp (<20) HOẶC (doanh số 30 ngày cao VÀ thị trường HOT/VIRAL).
-                 - QUY TẮC THÔNG MINH: 
-                    * Nếu tồn kho hiện tại > 50, TUYỆT ĐỐI KHÔNG dùng từ "Tồn kho thấp".
-                    * Nếu tồn kho đã > 100 và thị trường HOT, chỉ đề xuất mức ưu tiên MEDIUM (không được URGENT).
-                    * AI phải so sánh doanh số 30 ngày với tồn kho để tính "độ phủ" (ví dụ: tồn kho 100 mà bán 50/tháng thì là an toàn, không cần nhập thêm gấp).
-                 - Mức độ ưu tiên: Dựa trên tốc độ bán và xu hướng thực tế.
+              2. Restock: 
+                 - Conditions: Low stock (<20) OR (high 30-day sales AND HOT/VIRAL market sentiment).
+                 - SMART RULES: 
+                    * If current stock > 50, NEVER use the phrase "Low stock".
+                    * If stock is already > 100 and the market is HOT, only suggest MEDIUM priority (not URGENT).
+                    * AI must compare 30-day sales with current stock to calculate "coverage" (e.g., stock of 100 with 50 sales/month is safe, no urgent restock needed).
+                 - Priority Level: Based on sales velocity and actual trends.
       
-              YÊU CẦU ĐỊNH DẠNG TRẢ VỀ (JSON):
+              RETURN FORMAT (JSON):
               {
                 "clearanceList": [
                   { 
@@ -194,7 +194,7 @@ export class InventoryAnalyticsService {
                     "name": "string", 
                     "reason": "string", 
                     "suggestedDiscount": "string", 
-                    "financialNote": "Mô tả tính toán dựa trên Break-even" 
+                    "financialNote": "Calculation description based on Break-even" 
                   }
                 ],
                 "restockList": [
@@ -205,7 +205,7 @@ export class InventoryAnalyticsService {
           },
           {
             role: 'user',
-            content: `DỮ LIỆU ĐẦU VÀO (JSON):\n${JSON.stringify(contextData)}`
+            content: `INPUT DATA (JSON):\n${JSON.stringify(contextData)}`
           }
         ],
         response_format: { type: 'json_object' },
@@ -352,7 +352,7 @@ export class InventoryAnalyticsService {
         const expectedSalePrice = originalPrice * (1 - discountPercent / 100);
 
         if (expectedSalePrice < liquidatePrice) {
-          throw new HttpException('AI gợi ý mức giá dưới đáy cắt lỗ. Giao dịch bị huỷ!', HttpStatus.BAD_REQUEST);
+          throw new HttpException('AI suggested price is below liquidation floor. Transaction cancelled!', HttpStatus.BAD_REQUEST);
         }
 
         const now = new Date();
@@ -456,7 +456,7 @@ export class InventoryAnalyticsService {
         type: 'RESTOCK' as any,
         reason: item.reason,
         suggested_action_value: item.priority,
-        financial_note: 'Dựa trên tốc độ bán và cân đối dòng tiền.',
+        financial_note: 'Based on sales velocity and cash flow balance.',
         status: 'PENDING' as any,
       }));
 
@@ -530,33 +530,33 @@ export class InventoryAnalyticsService {
           {
             role: 'system',
             content: `
-              Bạn là chuyên gia Toán học Tài chính (Actuary) kiêm Giám đốc Rủi ro mô hình "Blind Box" (Hộp Mù).
-              Nhiệm vụ: Tính toán giá trị kỳ vọng (Expected Value - EV) rút thưởng và đề xuất giá bán vé AN TOÀN không bị lỗ.
+              You are an Actuary and Risk Manager for "Blind Box" models.
+              Task: Calculate Expected Value (EV) and suggest a SAFE ticket price that ensures no loss.
               
-              Quy tắc 4 Vùng phần thưởng (4-Zone):
-              - Zone 1 (35% xác suất): Trúng hàng giá thấp (khoảng Min -> TicketPrice * 0.9)
-              - Zone 2 (60% xác suất): Trúng hàng giá trung bình (TicketPrice * 0.9 -> TicketPrice * 1.3)
-              - Zone 3 (4% xác suất): Trúng hàng giá cao (TicketPrice * 1.3 -> Max * 0.9)
-              - Zone 4 (1% xác suất): Trúng đặc biệt Jackpot (Max * 0.9 -> Max)
+              4-Zone Reward Rules:
+              - Zone 1 (35% probability): Low value items (Min -> TicketPrice * 0.9)
+              - Zone 2 (60% probability): Medium value items (TicketPrice * 0.9 -> TicketPrice * 1.3)
+              - Zone 3 (4% probability): High value items (TicketPrice * 1.3 -> Max * 0.9)
+              - Zone 4 (1% probability): Jackpot items (Max * 0.9 -> Max)
 
-              Đầu vào:
+              Inputs:
               - Min Value: ${minValue}
               - Max Value: ${maxValue}
-              - Tổng chi phí vận hành (OPEX): ${totalOpexPct * 100}% trên doanh thu
-              - Mức giá dự kiến đưa ra: ${suggestedTicketPrice || "Chưa có"}
+              - Total OPEX: ${totalOpexPct * 100}% of revenue
+              - Suggested Price: ${suggestedTicketPrice || "None"}
 
-              Công thức cốt lõi: Giá Bán Vé (TicketPrice) PHẢI LỚN HƠN (EV_Phân_Thưởng + OPEX). Mức lợi nhuận gộp an toàn đề xuất là 7% - 15%.
+              Core Formula: TicketPrice MUST BE GREATER THAN (EV_Rewards + OPEX). Recommended gross profit margin is 7% - 15%.
               
-              Nếu Manager đã điền giá dự kiến ban đầu, hãy Validate nó. Nếu chưa có, tự tính và Suggest.
+              If a suggested price is provided, validate it. If not, calculate and suggest one.
               
-              ĐỊNH DẠNG JSON TRẢ VỀ:
+              RETURN FORMAT (JSON):
               {
-                "isValid": boolean, // Mức giá dự kiến có an toàn để phát hành không? (Hoặc true nếu AI tự gợi ý)
-                "expectedCostEV": number, // Giá trị kỳ vọng vốn xuất kho trung bình
-                "breakEvenPrice": number, // Giá vé nhỏ nhất để hòa vốn (đã tính OPEX)
-                "suggestedTicketPrice": number, // Mức giá bán tối ưu đề xuất (dễ nhìn, số tròn)
-                "profitMarginExpected": number, // % Lợi nhuận dự kiến
-                "rationale": string // Chuyên gia giải thích ngắn gọn, súc tích (1-2 câu tiếng việt) vì sao mức giá này an toàn.
+                "isValid": boolean,
+                "expectedCostEV": number,
+                "breakEvenPrice": number,
+                "suggestedTicketPrice": number,
+                "profitMarginExpected": number,
+                "rationale": string // Expert explanation of why this pricing is safe.
               }
             `
           }
@@ -573,7 +573,7 @@ export class InventoryAnalyticsService {
     } catch (error) {
       this.logger.error('Blindbox Risk Analysis Error:', error);
       throw new HttpException(
-        'Không thể tính toán rủi ro Blind Box lúc này',
+        'Cannot calculate Blind Box risk at this time',
         HttpStatus.INTERNAL_SERVER_ERROR
       );
     }
