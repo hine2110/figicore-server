@@ -71,11 +71,35 @@ export class PosService {
     }
 
 
+    // 1. Tìm ca làm việc đã đóng gần nhất để kiểm tra số tiền
+    const lastSession = await this.prisma.pos_sessions.findFirst({
+      where: {
+        status_code: 'CLOSED',
+        deleted_at: null,
+      },
+      orderBy: {
+        closed_at: 'desc',
+      },
+    });
+
+    let lastClosingCash = 2000000; // Mặc định 2tr nếu là ca đầu tiên
+    if (lastSession && lastSession.closing_cash !== null) {
+      lastClosingCash = Number(lastSession.closing_cash);
+    }
+
+    // 2. Nếu có chênh lệch, bắt buộc phải có ghi chú
+    if (Number(dto.opening_cash) !== lastClosingCash && !dto.note) {
+      throw new BadRequestException(
+        'Opening cash mismatch. Please provide the reason for the discrepancy in the notes field.',
+      );
+    }
+
     // Tạo session mới
     const session = await this.prisma.pos_sessions.create({
       data: {
         user_id: userId,
         opening_cash: dto.opening_cash,
+        note: dto.note, // Lưu lý do chênh lệch (nếu có)
         status_code: 'OPEN',
         opened_at: new Date(),
       },

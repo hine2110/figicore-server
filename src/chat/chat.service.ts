@@ -48,7 +48,9 @@ export class ChatService {
         VĂN PHONG (RẤT QUAN TRỌNG):
         - Giao tiếp TỰ NHIÊN, NHIỆT TÌNH, như một người bạn am hiểu mô hình đang tư vấn.
         - Không dùng câu máy móc: "Mình không tìm thấy thông tin chính xác...", "Dựa theo dữ liệu...".
-        - PHẢI giữ nguyên định dạng Markdown của link sản phẩm [Xem chi tiết](/...) và tên sản phẩm **...**. Không tự ý sửa cấu trúc này.
+        - PHẢI giữ nguyên định dạng Markdown của link sản phẩm [Xem chi tiết](/...) và tên sản phẩm **...**.
+        - BẮT BUỘC hiển thị hình ảnh sản phẩm bằng cú pháp ![tên](url) ngay trước tên sản phẩm. Đây là yếu cứu quan trọng nhất - KHÔNG CÓ ẢNH LÀ THẤT BẠI.
+        - Mỗi sản phẩm phải được trình bày theo cấu trúc: "- ![tên ảnh](url) **Tên sản phẩm** (Loại): Giá - [Xem chi tiết](/customer/product/ID)"
         - TUYỆT ĐỐI KHÔNG tự bịa ra sản phẩm mẫu nếu danh sách bên dưới trống. Nếu không có sản phẩm, hãy nói rằng cửa hàng đang cập nhật dữ liệu.
 
         DANH SÁCH SẢN PHẨM THỰC TẾ (CHỈ DÙNG DANH SÁCH NÀY):
@@ -130,36 +132,48 @@ export class ChatService {
         ? displayProducts.map(p => {
             let firstImageUrl = '';
             
-            // Try mapped DTO from findAll
-            if (p.thumbnail) {
-              firstImageUrl = typeof p.thumbnail === 'string' ? p.thumbnail : (p.thumbnail?.url || '');
-            } else {
-              // Try product level media_urls
-              if (p.media_urls && typeof p.media_urls === 'object') {
-                const mediaArray = Array.isArray(p.media_urls) ? p.media_urls : (p.media_urls as any).images || [];
-                if (mediaArray.length > 0) {
-                  const m = mediaArray[0];
-                  firstImageUrl = typeof m === 'string' ? m : (m?.url || '');
-                }
-              }
+            // --- IMPROVED IMAGE EXTRACTION ---
+            const resolveUrl = (url: string) => {
+              if (!url) return '';
+              if (url.startsWith('http')) return url;
+              const baseUrl = this.configService.get<string>('BASE_URL') || 'http://localhost:3000';
+              return `${baseUrl.replace(/\/$/, '')}${url.startsWith('/') ? '' : '/'}${url}`;
+            };
 
-              // Fallback to variant level media_assets
-              if (!firstImageUrl && p.product_variants && p.product_variants.length > 0) {
-                const vMedia = p.product_variants[0].media_assets;
-                if (vMedia) {
-                  try {
-                    const assets = typeof vMedia === 'string' ? JSON.parse(vMedia) : vMedia;
-                    if (Array.isArray(assets) && assets.length > 0) {
-                      const a = assets[0];
-                      firstImageUrl = typeof a === 'string' ? a : (a?.url || '');
-                    }
-                  } catch (e) {}
-                }
-              }
+            if (p.thumbnail) {
+              const thumb = typeof p.thumbnail === 'string' ? p.thumbnail : (p.thumbnail?.url || '');
+              firstImageUrl = resolveUrl(thumb);
+            } 
+            
+            if (!firstImageUrl && p.media_urls) {
+               try {
+                 const media = typeof p.media_urls === 'string' ? JSON.parse(p.media_urls) : p.media_urls;
+                 const mediaArray = Array.isArray(media) ? media : (media.images || []);
+                 if (mediaArray.length > 0) {
+                    const m = mediaArray[0];
+                    const url = typeof m === 'string' ? m : (m?.url || '');
+                    firstImageUrl = resolveUrl(url);
+                 }
+               } catch(e) {}
             }
+
+            if (!firstImageUrl && p.product_variants?.[0]?.media_assets) {
+               try {
+                 const vMedia = p.product_variants[0].media_assets;
+                 const assets = typeof vMedia === 'string' ? JSON.parse(vMedia) : vMedia;
+                 if (Array.isArray(assets) && assets.length > 0) {
+                    const a = assets[0];
+                    const url = typeof a === 'string' ? a : (a?.url || '');
+                    firstImageUrl = resolveUrl(url);
+                 }
+               } catch(e) {}
+            }
+            // ---------------------------------
 
             const imageMarkdown = firstImageUrl ? `![${p.name || p.product_name}](${firstImageUrl})` : '';
             const price = p.variants?.[0]?.price ?? p.product_variants?.[0]?.price;
+            
+            // Format each product as a clean markdown item for the AI to replicate
             return `- ${imageMarkdown} **${p.name || p.product_name}** (${p.type_code || p.product_type}): ${formatPrice(price)} - [Xem chi tiết](/customer/product/${p.product_id})`;
           }).join('\n\n')
         : '--- HIỆN TẠI HỆ THỐNG CHƯA CÓ SẢN PHẨM NÀO. KHÔNG ĐƯỢC BỊA RA TÊN SẢN PHẨM. ---';
@@ -204,14 +218,35 @@ export class ChatService {
 
       this.logger.debug(`Sending chat to Groq with ${messages.length} messages and ${displayProducts.length} local products.`);
 
-      const completion = await this.openai.chat.completions.create({
-        messages: messages,
-        model: 'llama-3.1-8b-instant',
-        temperature: 0.7,
-        max_tokens: 2048,
-      });
+      // Use Primary Model (8B) first
+      try {
+        const response = await this.openai.chat.completions.create({
+          model: 'llama-3.1-8b-instant',
+          messages: messages as any,
+          temperature: 0.7,
+        });
 
-      return completion.choices[0]?.message?.content || 'Rất tiếc, mình không nhận được phản hồi từ AI.';
+        const aiMessage = response.choices[0].message.content;
+        this.logger.log(`Groq logic completed successfully (8B).`);
+        return aiMessage;
+      } catch (error) {
+        this.logger.warn(`Primary Groq (8B) failed: ${error.message}. Attempting fallback to 70B...`);
+        
+        try {
+          const response = await this.openai.chat.completions.create({
+            model: 'llama-3.3-70b-versatile',
+            messages: messages as any,
+            temperature: 0.6, // Slightly lower for more stability
+          });
+
+          const aiMessage = response.choices[0].message.content;
+          this.logger.log(`Groq logic completed successfully (70B Fallback).`);
+          return aiMessage;
+        } catch (fallbackError) {
+          this.logger.error(`Secondary Groq (70B) also failed: ${fallbackError.message}. Using Mock response.`);
+          return this.getMockResponse(message);
+        }
+      }
     } catch (error) {
       this.logger.error(`Error getting AI response: ${error.message}`);
 
