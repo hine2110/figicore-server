@@ -6,6 +6,7 @@ import { join } from 'path';
 import { ConfigService, ConfigModule } from '@nestjs/config';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { PrismaModule } from '../prisma/prisma.module';
+import { EncryptionService } from '../common/encryption.service';
 
 @Global()
 @Module({
@@ -41,7 +42,7 @@ import { PrismaModule } from '../prisma/prisma.module';
             inject: [ConfigService],
         }),
     ],
-    providers: [MailService],
+    providers: [MailService, EncryptionService],
     exports: [MailService],
 })
 export class MailModule { }
