@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { MailService } from '../mail/mail.service';
 import { CreatePromotionDto } from './dto/create-promotion.dto';
 import { UpdatePromotionDto } from './dto/update-promotion.dto';
+import { EncryptionService } from '../common/encryption.service';
 
 @Injectable()
 export class PromotionsService {
@@ -12,6 +13,7 @@ export class PromotionsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly mailService: MailService,
+    private readonly encryption: EncryptionService,
   ) {}
 
   // ─── Manager APIs ──────────────────────────────────────────────────────────
@@ -73,9 +75,11 @@ export class PromotionsService {
     // Send emails sequentially to avoid overwhelming SMTP
     for (const user of usersWithEmails) {
       try {
-        await this.mailService.sendTargetedPromotionEmail(user as any, promotion);
+        const decEmail = this.encryption.decrypt(user!.email!);
+        const decName = this.encryption.decrypt(user!.full_name!);
+        await this.mailService.sendTargetedPromotionEmail({ email: decEmail, full_name: decName }, promotion);
       } catch (err) {
-        this.logger.error(`[EmailDispatch] Failed to send to ${user.email}`, err);
+        this.logger.error(`[EmailDispatch] Failed to send to ${user!.email}`, err);
       }
     }
 
@@ -147,13 +151,17 @@ export class PromotionsService {
     });
     const rankCode = customer?.current_rank_code || 'BRONZE';
 
+    // Get rank hierarchy
+    const rankLookups = await this.prisma.system_lookups.findMany({
+      where: { type: 'CUSTOMER_RANK' },
+    });
+    const rankOrderMap = new Map(rankLookups.map((r) => [r.code, r.sort_order]));
+    const userRankOrder = rankOrderMap.get(rankCode) || 1;
+
+    // Fetch ALL public promotions (ignoring rank filter)
     const promotions = await this.prisma.promotions.findMany({
       where: {
         is_public: true,
-        OR: [
-          { apply_rank_code: null },
-          { apply_rank_code: rankCode },
-        ],
       },
       orderBy: { created_at: 'desc' },
     });
@@ -162,19 +170,26 @@ export class PromotionsService {
       where: { user_id: userId },
       select: { promotion_id: true },
     });
-    const collectedIds = new Set(collected.map(c => c.promotion_id));
+    const collectedIds = new Set(collected.map((c) => c.promotion_id));
 
     const now = new Date();
     return promotions
-      .filter(p => !collectedIds.has(p.promotion_id))
-      .filter(p => !(p.max_quantity && (p.collected_quantity || 0) >= p.max_quantity))
-      .filter(p => !p.end_date || new Date(p.end_date) >= now)
-      .map(p => ({
-        ...p,
-        is_collected: false,
-        can_collect: true,
-        is_out_of_stock: false,
-      }));
+      .filter((p) => !collectedIds.has(p.promotion_id))
+      .filter((p) => !(p.max_quantity && (p.collected_quantity || 0) >= p.max_quantity))
+      .filter((p) => !p.end_date || new Date(p.end_date) >= now)
+      .map((p) => {
+        const requiredRankOrder = p.apply_rank_code
+          ? rankOrderMap.get(p.apply_rank_code) || 0
+          : 0;
+        const isEligible = userRankOrder >= requiredRankOrder;
+
+        return {
+          ...p,
+          is_collected: false,
+          can_collect: isEligible,
+          is_out_of_stock: false,
+        };
+      });
   }
   /**
    * POST /promotions/:id/collect
@@ -217,52 +232,59 @@ export class PromotionsService {
       }
     }
 
-    // 5. Existing collection check (using unique compound key)
-    const existing = await this.prisma.user_vouchers.findUnique({
-      where: {
-        user_id_promotion_id: {
-          user_id: userId,
-          promotion_id: promotionId,
-        },
-      },
-    });
-    if (existing) {
-      throw new BadRequestException('You have already collected this voucher.');
-    }
-
     // 6. Transactional collection
-    return this.prisma.$transaction(async (tx) => {
-      // Re-verify quota inside transaction for Atomic increment
-      if (promotion.max_quantity) {
-        const result = await tx.promotions.updateMany({
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        // 5. Existing collection check (Move inside transaction for Atomicity)
+        const existing = await tx.user_vouchers.findUnique({
           where: {
-            promotion_id: promotionId,
-            collected_quantity: { lt: promotion.max_quantity },
+            user_id_promotion_id: {
+              user_id: userId,
+              promotion_id: promotionId,
+            },
           },
-          data: { collected_quantity: { increment: 1 } },
         });
-        if (result.count === 0) {
-          throw new BadRequestException('Voucher is out of stock.');
+        if (existing) {
+          throw new BadRequestException('You have already collected this voucher.');
         }
-      } else {
-        await tx.promotions.update({
-          where: { promotion_id: promotionId },
-          data: { collected_quantity: { increment: 1 } },
+
+        // Re-verify quota inside transaction for Atomic increment
+        if (promotion.max_quantity) {
+          const result = await tx.promotions.updateMany({
+            where: {
+              promotion_id: promotionId,
+              collected_quantity: { lt: promotion.max_quantity },
+            },
+            data: { collected_quantity: { increment: 1 } },
+          });
+          if (result.count === 0) {
+            throw new BadRequestException('Voucher is out of stock.');
+          }
+        } else {
+          await tx.promotions.update({
+            where: { promotion_id: promotionId },
+            data: { collected_quantity: { increment: 1 } },
+          });
+        }
+
+        // Create user voucher (wallet entry)
+        const wallet = await tx.user_vouchers.create({
+          data: {
+            user_id: userId,
+            promotion_id: promotionId,
+            status: 'COLLECTED', // Explicitly set status from enum
+          },
+          include: { promotions: true },
         });
-      }
 
-      // Create user voucher (wallet entry)
-      const wallet = await tx.user_vouchers.create({
-        data: {
-          user_id: userId,
-          promotion_id: promotionId,
-          status: 'COLLECTED', // Explicitly set status from enum
-        },
-        include: { promotions: true },
+        return { success: true, message: 'Voucher collected successfully', voucher: wallet };
       });
-
-      return { success: true, message: 'Voucher collected successfully', voucher: wallet };
-    });
+    } catch (error) {
+      if (error.code === 'P2002') {
+        throw new BadRequestException('You have already collected this voucher.');
+      }
+      throw error;
+    }
   }
 
   /**

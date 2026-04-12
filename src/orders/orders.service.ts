@@ -493,7 +493,7 @@ export class OrdersService {
 
               if (stockUpdateResult.count === 0) {
                 this.logger.error(`[OUT OF STOCK] Variant: ${variant.variant_id} | SKU: ${variant.sku} | Quantity Requested: ${quantity}`);
-                throw new BadRequestException(`Sản phẩm ${variant.sku} đã hết hàng hoặc vừa được người khác mua mất. Vui lòng cập nhật giỏ hàng.`);
+                throw new BadRequestException(`Product ${variant.sku} is out of stock or was just purchased by someone else. Please update your cart.`);
               }
             }
 

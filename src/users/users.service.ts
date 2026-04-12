@@ -92,7 +92,7 @@ export class UsersService {
     });
 
     if (!employee) {
-      throw new ForbiddenException('Chỉ nhân viên (Employee) mới có thể cập nhật thông tin ngân hàng.');
+      throw new ForbiddenException('Only employees can update bank information.');
     }
 
     // 2. Cập nhật thẳng vào bảng employees (Không cần thông qua bảng requests)
@@ -114,7 +114,32 @@ export class UsersService {
     const safeData = { ...data };
     if (safeData.email) safeData.email = this.encryption.encryptDeterministic(safeData.email);
     if (safeData.phone) safeData.phone = this.encryption.encryptDeterministic(safeData.phone);
-    return this.prisma.users.create({ data: safeData });
+
+    // Auto-create Customer profile and Wallet if role is CUSTOMER
+    const isCustomer = safeData.role_code === 'CUSTOMER';
+
+    return this.prisma.users.create({
+      data: {
+        ...safeData,
+        customers: isCustomer ? {
+          create: {
+            current_rank_code: 'BRONZE',
+            loyalty_points: 0,
+            total_spent: 0
+          }
+        } : undefined,
+        wallets: isCustomer ? {
+          create: {
+            balance_available: 0,
+            balance_locked: 0
+          }
+        } : undefined
+      },
+      include: {
+        customers: true,
+        wallets: true
+      }
+    });
   }
 
   async findAll() {
@@ -284,7 +309,7 @@ export class UsersService {
   }
 
   async updateStatus(id: number, status: string, reason?: string) {
-    const user = await this.findOne(id);
+    const user = await this.findOne(id, false);
     if (!user) {
       throw new NotFoundException(`User with ID ${id} not found`);
     }
@@ -294,19 +319,23 @@ export class UsersService {
       throw new ForbiddenException('Cannot change status of Super Admin');
     }
 
-    // Prevent self-ban (Need to pass current user context ideally, but for now simple check)
-    // NOTE: Controller should handle "Can't ban self" by checking Request user vs ID
+    // Determine target status
+    let finalStatus = status;
+    if (status === 'ACTIVE' && !user.is_verified) {
+      // If unbanning/activating a user who hasn't completed activation flow
+      finalStatus = user.role_code === 'CUSTOMER' ? 'INACTIVE' : 'PENDING';
+    }
 
-    // If Banning, require reason (optional but good practice)
-    if (status === 'BANNED' && !reason) {
+    // If Banning, require reason
+    if (finalStatus === 'BANNED' && !reason) {
       throw new BadRequestException('Reason is required when banning a user');
     }
 
     return this.prisma.users.update({
       where: { user_id: id },
       data: {
-        status_code: status,
-        ban_reason: status === 'BANNED' ? reason : null // Clear reason if unbanning
+        status_code: finalStatus,
+        ban_reason: finalStatus === 'BANNED' ? reason : null // Clear reason if unbanning
       },
     });
   }
@@ -504,8 +533,8 @@ export class UsersService {
       });
 
       if (duplicate) {
-        const field = (encryptedEmail && duplicate.email === encryptedEmail) ? 'Email' : 'Số điện thoại';
-        throw new BadRequestException(`${field} này đã được sử dụng bởi một tài khoản khác.`);
+        const field = (encryptedEmail && duplicate.email === encryptedEmail) ? 'Email' : 'Phone number';
+        throw new BadRequestException(`This ${field.toLowerCase()} is already used by another account.`);
       }
     }
 
@@ -554,8 +583,8 @@ export class UsersService {
     for (const admin of admins) {
       await this.notifications.create(
         admin.user_id,
-        'Yêu cầu thay đổi thông tin cá nhân',
-        `Nhân viên ${user.full_name} đã gửi yêu cầu thay đổi thông tin cá nhân. Vui lòng xem xét.`,
+        'Personal Information Update Request',
+        `Employee ${user.full_name} has submitted a request to change personal information. Please review.`,
         '/admin/approvals',
         true
       );
@@ -654,8 +683,8 @@ export class UsersService {
              });
 
              if (duplicate) {
-               const field = (updateData.email && duplicate.email === updateData.email) ? 'Email' : 'Số điện thoại';
-               throw new BadRequestException(`${field} này đã được sử dụng bởi một tài khoản khác.`);
+               const field = (updateData.email && duplicate.email === updateData.email) ? 'Email' : 'Phone number';
+               throw new BadRequestException(`This ${field.toLowerCase()} is already used by another account.`);
              }
           }
 
@@ -700,7 +729,7 @@ export class UsersService {
 
     // 3. Notify Employee about resolution (Moved OUTSIDE transaction to avoid P2028 timeout)
     try {
-      const statusText = status === 'APPROVED' ? 'Duyệt' : 'Từ chối';
+      const statusText = status === 'APPROVED' ? 'Approved' : 'Rejected';
       const roleLinks: Record<string, string> = {
         'SUPER_ADMIN': '/admin/profile',
         'MANAGER': '/manager/profile',
@@ -713,8 +742,8 @@ export class UsersService {
 
       await this.notifications.create(
         request.user_id,
-        'Cập nhật yêu cầu thay đổi thông tin',
-        `Yêu cầu thay đổi thông tin cá nhân của bạn đã được ${statusText}.`,
+        'Profile Update Request Status',
+        `Your request to change personal information has been ${statusText.toLowerCase()}.`,
         targetUrl,
         true
       );

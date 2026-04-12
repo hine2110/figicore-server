@@ -5,9 +5,10 @@ import { PosOrdersController } from './pos-orders.controller';
 import { PosOrdersService } from './pos-orders.service';
 import { CustomersModule } from '../customers/customers.module';
 import { EncryptionService } from '../common/encryption.service';
+import { UsersModule } from '../users/users.module';
 
 @Module({
-  imports: [CustomersModule],
+  imports: [CustomersModule, UsersModule],
   controllers: [PosController, PosOrdersController],
   providers: [PosService, PosOrdersService, EncryptionService],
 })
