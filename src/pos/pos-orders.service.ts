@@ -9,6 +9,7 @@ import * as bcrypt from 'bcrypt';
 
 import { CustomersService } from '../customers/customers.service';
 import { EncryptionService } from '../common/encryption.service';
+import { UsersService } from '../users/users.service';
 import { maskEmail, maskPhone } from '../common/mask.util';
 
 @Injectable()
@@ -16,6 +17,7 @@ export class PosOrdersService {
     constructor(
         private prisma: PrismaService,
         private customersService: CustomersService,
+        private usersService: UsersService,
         private encryption: EncryptionService,
     ) { }
 
@@ -471,26 +473,20 @@ export class PosOrdersService {
         }
 
         // 2. Create new GUEST_POS user
-        const newUser = await this.prisma.users.create({
-            data: {
-                email: dto.email ? this.encryption.encryptDeterministic(dto.email) : null,
-                password_hash: null,
-                full_name: dto.full_name || 'Khách POS',
-                phone: encryptedPhone,
-                role_code: 'CUSTOMER',
-                status_code: 'GUEST_POS',
-                is_verified: false
-            }
-        });
-
-        const profile = await this.prisma.customers.create({
-            data: { user_id: newUser.user_id, current_rank_code: 'BRONZE' }
+        const newUser = await this.usersService.create({
+            email: dto.email || null,
+            password_hash: null,
+            full_name: dto.full_name || 'Khách POS',
+            phone: dto.phone,
+            role_code: 'CUSTOMER',
+            status_code: 'GUEST_POS',
+            is_verified: false
         });
 
         return {
             success: true,
             message: 'Đăng ký khách hàng mới thành công.',
-            data: { ...this.decryptPii(newUser), customers: profile }
+            data: this.decryptPii(newUser)
         };
     }
 

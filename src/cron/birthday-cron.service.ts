@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { MailService } from '../mail/mail.service';
+import { EncryptionService } from '../common/encryption.service';
 
 @Injectable()
 export class BirthdayCronService {
@@ -10,6 +11,7 @@ export class BirthdayCronService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly mailService: MailService,
+    private readonly encryption: EncryptionService,
   ) {}
 
   /**
@@ -88,14 +90,15 @@ export class BirthdayCronService {
       const promotion = await tx.promotions.create({
         data: {
           code:               voucherCode,
-          discount_value:     10,             // 10% discount
-          discount_type:      'PERCENTAGE',
-          min_order_value:    0,              // No min order for birthday gift
-          max_quantity:       1,              // Single-use
-          collected_quantity: 1,
-          is_public:          false,          // Private (not shown in collectible list)
-          start_date:         startDate,
-          end_date:           endDate,
+          discount_value:      10,              // 10% discount
+          discount_type:       'PERCENTAGE',
+          max_discount_amount: 100000,          // Cap at 100,000 VND
+          min_order_value:     0,               // No min order for birthday gift
+          max_quantity:        1,               // Single-use
+          collected_quantity:  1,
+          is_public:           false,           // Private (not shown in collectible list)
+          start_date:          startDate,
+          end_date:            endDate,
         },
       });
 
@@ -113,10 +116,12 @@ export class BirthdayCronService {
 
     // ── Step 4: Send birthday email ──
     if (user.email) {
+      const decEmail = this.encryption.decrypt(user.email);
+      const decName = this.encryption.decrypt(user.full_name);
       this.mailService
-        .sendBirthdayEmail(user.email, user.full_name, voucherCode, endDate)
+        .sendBirthdayEmail(decEmail, decName, voucherCode, endDate)
         .catch(err =>
-          this.logger.error(`[BirthdayCron] Email failed for ${user.email}: ${err?.message}`)
+          this.logger.error(`[BirthdayCron] Email failed for ${decEmail}: ${err?.message}`)
         );
     }
   }

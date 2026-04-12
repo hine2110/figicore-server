@@ -109,10 +109,10 @@ async function main() {
     console.log('--- 4. Customer Ranks ---');
 
     const ranks = [
-        { code: 'BRONZE', value: 'Newbie Collector', sort: 1, meta: { threshold: 0, discount: 0, color: '#CD7F32' } },
-        { code: 'SILVER', value: 'Active Collector', sort: 2, meta: { threshold: 2000000, discount: 2, color: '#C0C0C0' } },
-        { code: 'GOLD', value: 'Elite Collector', sort: 3, meta: { threshold: 10000000, discount: 5, color: '#FFD700' } },
-        { code: 'DIAMOND', value: 'Legendary Collector', sort: 4, meta: { threshold: 50000000, discount: 10, color: '#B9F2FF' } },
+        { code: 'BRONZE', value: 'Bronze Member', sort: 1, meta: { threshold: 0, discount: 0, color: '#CD7F32' } },
+        { code: 'SILVER', value: 'Silver Member', sort: 2, meta: { threshold: 2000000, discount: 2, color: '#C0C0C0' } },
+        { code: 'GOLD', value: 'Gold Member', sort: 3, meta: { threshold: 10000000, discount: 5, color: '#FFD700' } },
+        { code: 'DIAMOND', value: 'Diamond Member', sort: 4, meta: { threshold: 50000000, discount: 10, color: '#B9F2FF' } },
     ];
     for (const r of ranks) await upsertLookup('CUSTOMER_RANK', r.code, r.value, r.sort, r.meta);
 

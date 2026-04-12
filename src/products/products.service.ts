@@ -6,13 +6,11 @@ import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { Prisma } from '@prisma/client';
 import OpenAI from 'openai';
-import { GoogleGenerativeAI } from '@google/generative-ai';
 
 @Injectable()
 export class ProductsService {
   private logger = new Logger('ProductsService');
   private groq: OpenAI;
-  private genAI: GoogleGenerativeAI;
 
   constructor(
     private prisma: PrismaService,
@@ -25,11 +23,6 @@ export class ProductsService {
         apiKey: groqKey,
         baseURL: 'https://api.groq.com/openai/v1',
       });
-    }
-
-    const geminiKey = this.configService.get<string>('GEMINI_API_KEY') || this.configService.get<string>('GOOGLE_AI_API_KEY');
-    if (geminiKey) {
-      this.genAI = new GoogleGenerativeAI(geminiKey);
     }
   }
 
@@ -92,20 +85,10 @@ export class ProductsService {
           this.logger.warn(`Llama 4 failed on attempt ${attempts}: ${e.message}`);
         }
 
-        if ((!aiHint.productName && !aiHint.brand) && this.genAI) {
-          this.logger.log(`Attempt ${attempts} - Llama failed keywords, trying Gemini Lite...`);
-          try {
-            const model = this.genAI.getGenerativeModel({ model: 'gemini-2.0-flash-lite-001' });
-            const result = await model.generateContent([
-              dynamicPrompt + " (Respond in raw JSON)",
-              { inlineData: { data: imageData, mimeType: mimeType } }
-            ]);
-            const text = (await result.response).text().replace(/```json/g, '').replace(/```/g, '').trim();
-            aiHint = JSON.parse(text);
-            this.logger.log(`Attempt ${attempts} - Gemini Hint: ${JSON.stringify(aiHint)}`);
-          } catch (e) {
-            this.logger.warn(`Gemini failed on attempt ${attempts}: ${e.message}`);
-          }
+        // Replaced Gemini fallback with simple retry or empty hint handling
+        if ((!aiHint.productName && !aiHint.brand) && attempts === 1) {
+          this.logger.log(`Attempt ${attempts} - No keywords found, will try one more deep scan...`);
+          // The loop will handle the second attempt with the 'Deep Scan' prompt
         }
 
         // -- STEP 2: Database Searching (4 Layers) --
@@ -1293,8 +1276,8 @@ export class ProductsService {
     imageUrl?: string;
     richContext?: any;
   }) {
-    if (!this.genAI) {
-      throw new ServiceUnavailableException("AI service is not configured (Missing API Key).");
+    if (!this.groq) {
+      throw new ServiceUnavailableException("AI service (Groq) is not configured.");
     }
 
     const context = dto.userContext ? `User Notes/Context: "${dto.userContext}"` : "User Notes: N/A";
