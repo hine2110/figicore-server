@@ -696,58 +696,19 @@ export class ProductsService {
 
     if (!product) return [];
 
-    let similarProducts: any[] = []; // Explicit type to avoid never[] inference
-    const limit = 4;
+    let candidates: any[] = [];
+    const targetLimit = 4;
+    const fetchLimit = 20; // Fetch more to shuffle
 
-    // 1. Priority: Same Series
-    if (product.series_id) {
-      const bySeries = await this.prisma.products.findMany({
-        where: {
-          series_id: product.series_id,
-          product_id: { not: id },
-          status_code: 'ACTIVE' // Changed from status to status_code
-        },
-        take: limit,
-        include: {
-          brands: true,
-          categories: true,
-          series: true,
-          product_variants: { include: { product_preorder_configs: true } },
-          product_blindboxes: true
-        }
-      });
-      similarProducts = [...bySeries];
-    }
-
-    // 2. Priority: Same Brand
-    if (similarProducts.length < limit && product.brand_id) {
-      const byBrand = await this.prisma.products.findMany({
-        where: {
-          brand_id: product.brand_id,
-          product_id: { not: id, notIn: similarProducts.map(p => p.product_id) },
-          status_code: 'ACTIVE' // Changed from status to status_code
-        },
-        take: limit - similarProducts.length,
-        include: {
-          brands: true,
-          categories: true,
-          series: true,
-          product_variants: { include: { product_preorder_configs: true } },
-          product_blindboxes: true
-        }
-      });
-      similarProducts = [...similarProducts, ...byBrand];
-    }
-
-    // 3. Priority: Same Category
-    if (similarProducts.length < limit && product.category_id) {
+    // 1. Priority: Same Category (The most relevant grouping)
+    if (product.category_id) {
       const byCategory = await this.prisma.products.findMany({
         where: {
           category_id: product.category_id,
-          product_id: { not: id, notIn: similarProducts.map(p => p.product_id) },
-          status_code: 'ACTIVE' // Changed from status to status_code
+          product_id: { not: id },
+          status_code: 'ACTIVE'
         },
-        take: limit - similarProducts.length,
+        take: fetchLimit,
         include: {
           brands: true,
           categories: true,
@@ -756,10 +717,57 @@ export class ProductsService {
           product_blindboxes: true,
         }
       });
-      similarProducts = [...similarProducts, ...byCategory];
+      candidates = [...byCategory];
     }
 
-    return similarProducts;
+    // 2. Priority: Same Brand
+    if (candidates.length < targetLimit && product.brand_id) {
+      const byBrand = await this.prisma.products.findMany({
+        where: {
+          brand_id: product.brand_id,
+          product_id: { not: id, notIn: candidates.map(p => p.product_id) },
+          status_code: 'ACTIVE'
+        },
+        take: fetchLimit - candidates.length,
+        include: {
+          brands: true,
+          categories: true,
+          series: true,
+          product_variants: { include: { product_preorder_configs: true } },
+          product_blindboxes: true
+        }
+      });
+      candidates = [...candidates, ...byBrand];
+    }
+
+    // 3. Optional: Same Series
+    if (candidates.length < targetLimit && product.series_id) {
+      const bySeries = await this.prisma.products.findMany({
+        where: {
+          series_id: product.series_id,
+          product_id: { not: id, notIn: candidates.map(p => p.product_id) },
+          status_code: 'ACTIVE'
+        },
+        take: targetLimit - candidates.length,
+        include: {
+          brands: true,
+          categories: true,
+          series: true,
+          product_variants: { include: { product_preorder_configs: true } },
+          product_blindboxes: true
+        }
+      });
+      candidates = [...candidates, ...bySeries];
+    }
+
+    // --- SHUFFLE LOGIC ---
+    // Randomly shuffle the pool of candidates to avoid static recommendations
+    for (let i = candidates.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [candidates[i], candidates[j]] = [candidates[j], candidates[i]];
+    }
+
+    return candidates.slice(0, targetLimit);
   }
 
 
@@ -797,15 +805,23 @@ export class ProductsService {
       const ticket = Number(bbConfig.price);
 
       // 1. Generate Dynamic 4-Zone Config (Sync with BlindboxesService)
-      const z1Upper = ticket * 0.9;
-      const z2Upper = ticket * 1.3;
-      const z3Upper = max * 0.9;
+      let rawZ1 = ticket * 0.9;
+      let rawZ2 = ticket * 1.3;
+      let rawZ3 = max * 0.9;
+
+      const splits = [rawZ1, rawZ2, rawZ3]
+        .map(v => Math.max(min, Math.min(max, v)))
+        .sort((a, b) => a - b);
+        
+      const b1 = Math.floor(splits[0]);
+      const b2 = Math.floor(splits[1]);
+      const b3 = Math.floor(splits[2]);
 
       const zones = [
-        { name: 'Common (Shop Profit)', probability: 55, min: min, max: Math.max(min, z1Upper), key: 'Z1' },
-        { name: 'Fair Zone', probability: 40, min: Math.max(min, z1Upper), max: Math.max(z1Upper, z2Upper), key: 'Z2' },
-        { name: 'Big Win', probability: 4, min: Math.max(z2Upper, min), max: Math.max(z2Upper, z3Upper), key: 'Z3' },
-        { name: 'Legendary (Jackpot)', probability: 1, min: Math.max(z3Upper, min), max: max, key: 'Z4' }
+        { name: 'Common (Shop Profit)', probability: 55, min: min, max: b1, key: 'Z1' },
+        { name: 'Fair Zone', probability: 40, min: b1 + 1, max: b2, key: 'Z2' },
+        { name: 'Big Win', probability: 4, min: b2 + 1, max: b3, key: 'Z3' },
+        { name: 'Legendary (Jackpot)', probability: 1, min: b3 + 1, max: max, key: 'Z4' }
       ];
 
       // 2. Calculate Stock per Zone from REAL warehouse items
@@ -825,6 +841,8 @@ export class ProductsService {
 
         return {
           ...zone,
+          stock_good: agg._sum.stock_available || 0,
+          stock_defect: agg._sum.stock_defect || 0,
           stock_count: (agg._sum.stock_available || 0) + (agg._sum.stock_defect || 0)
         };
       }));

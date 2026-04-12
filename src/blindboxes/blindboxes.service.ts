@@ -38,33 +38,41 @@ export class BlindboxesService {
             const ticket = Number(config.price);
 
             // Calculate dynamic thresholds with safety guards
-            const zone1Upper = ticket * 0.9;
-            const zone2Upper = ticket * 1.3;
-            const zone3Upper = max * 0.9;
+            let rawZ1 = ticket * 0.9;
+            let rawZ2 = ticket * 1.3;
+            let rawZ3 = max * 0.9;
+
+            const splits = [rawZ1, rawZ2, rawZ3]
+                .map(v => Math.max(min, Math.min(max, v)))
+                .sort((a, b) => a - b);
+                
+            const b1 = Math.floor(splits[0]);
+            const b2 = Math.floor(splits[1]);
+            const b3 = Math.floor(splits[2]);
 
             rawConfig = [
                 {
                     name: 'ZONE_1_SHOP_PROFIT',
                     probability: 55,
                     min: min,
-                    max: Math.max(min, zone1Upper)
+                    max: b1
                 },
                 {
                     name: 'ZONE_2_FAIR',
                     probability: 40,
-                    min: Math.max(min, zone1Upper),
-                    max: Math.max(zone1Upper, zone2Upper)
+                    min: b1 + 1,
+                    max: b2
                 },
                 {
                     name: 'ZONE_3_BIG_WIN',
                     probability: 4,
-                    min: Math.max(zone2Upper, min),
-                    max: Math.max(zone2Upper, zone3Upper)
+                    min: b2 + 1,
+                    max: b3
                 },
                 {
                     name: 'ZONE_4_JACKPOT',
                     probability: 1,
-                    min: Math.max(zone3Upper, min),
+                    min: b3 + 1,
                     max: max
                 }
             ];
@@ -79,10 +87,10 @@ export class BlindboxesService {
         };
 
         for (let i = 0; i < quantity; i++) {
-            let winner: any = null;
+            let allocated = false;
             let attempts = 0;
 
-            while (!winner && attempts < 5) {
+            while (!allocated && attempts < 10) {
                 attempts++;
                 const tierName = this.rollTier(rawConfig);
                 const range = getRange(tierName);
@@ -106,49 +114,53 @@ export class BlindboxesService {
                     take: 20
                 });
 
-                if (candidates.length > 0) {
-                    winner = candidates[Math.floor(Math.random() * candidates.length)];
-                }
-            }
+                if (candidates.length === 0) continue;
 
-            if (!winner) throw new BadRequestException("OOS: Cannot find valid Blindbox item!");
+                const winner = candidates[Math.floor(Math.random() * candidates.length)];
 
-            // 2. SMART DEDUCTION LOGIC (Defect First)
-            let deducted = false;
+                // 2. SMART DEDUCTION LOGIC (Defect First) - NOW INSIDE RETRY LOOP
+                let deducted = false;
 
-            // Priority 1: Try to deduct Defect Stock
-            const defectUpdate = await tx.product_variants.updateMany({
-                where: {
-                    variant_id: winner.variant_id,
-                    stock_defect: { gt: 0 }
-                },
-                data: { stock_defect: { decrement: 1 } }
-            });
-
-            if (defectUpdate.count > 0) {
-                deducted = true;
-                (winner as any)._source_stock = 'DEFECT';
-            } else {
-                // Priority 2: Fallback to Good Stock
-                const normalUpdate = await tx.product_variants.updateMany({
+                // Priority 1: Try to deduct Defect Stock
+                const defectUpdate = await tx.product_variants.updateMany({
                     where: {
                         variant_id: winner.variant_id,
-                        stock_available: { gt: 0 }
+                        stock_defect: { gt: 0 }
                     },
-                    data: { stock_available: { decrement: 1 } }
+                    data: { stock_defect: { decrement: 1 } }
                 });
-                if (normalUpdate.count > 0) {
+
+                if (defectUpdate.count > 0) {
                     deducted = true;
-                    (winner as any)._source_stock = 'AVAILABLE';
+                    (winner as any)._source_stock = 'DEFECT';
+                } else {
+                    // Priority 2: Fallback to Good Stock
+                    const normalUpdate = await tx.product_variants.updateMany({
+                        where: {
+                            variant_id: winner.variant_id,
+                            stock_available: { gt: 0 }
+                        },
+                        data: { stock_available: { decrement: 1 } }
+                    });
+                    if (normalUpdate.count > 0) {
+                        deducted = true;
+                        (winner as any)._source_stock = 'AVAILABLE';
+                    }
+                }
+
+                if (deducted) {
+                    allocated = true;
+                    excludeIds.add(winner.variant_id);
+                    results.push(winner);
+                    // this.logger.log(`Allocated box item: ${winner.sku} after ${attempts} attempts.`);
+                } else {
+                    this.logger.warn(`Collision detected: Item ${winner.sku} was taken by another customer. Retrying allocation... (Attempt ${attempts}/10)`);
                 }
             }
 
-            if (!deducted) {
-                throw new BadRequestException("Item out of stock during transaction.");
+            if (!allocated) {
+                throw new BadRequestException("OOS: All candidate items in this Blindbox zone are currently out of stock or reserved.");
             }
-
-            excludeIds.add(winner.variant_id);
-            results.push(winner);
         }
         return results;
     }

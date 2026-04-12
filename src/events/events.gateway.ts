@@ -68,10 +68,20 @@ export class EventsGateway
     }
 
     /**
-     * Bắn một sự kiện chung với payload tới một user cụ thể (Dùng cho Notification System)
+     * Thông báo cho một người dùng cụ thể về một sự kiện
      */
-    notifyUser(userId: number, eventName: string, payload: any) {
-        this.server.emit(`user:${userId}:${eventName}`, payload);
-        this.logger.log(`🔔 Emitted user:${userId}:${eventName}`);
+    notifyUser(userId: number, event: string, data: any) {
+        this.server.emit(`user:${userId}:${event}`, data);
+        this.logger.log(`🔔 Emitted user:${userId}:${event}`);
+    }
+
+    /**
+     * Notify about order status update for real-time UI refresh
+     */
+    notifyOrderStatusUpdate(orderId: number | string, status: string, orderData?: any) {
+        this.server.emit(`order:status_update:${orderId}`, { status, orderData });
+        // Also notify general warehouse if it is a status they care about
+        this.server.emit('warehouse:order_status_update', { orderId, status });
+        this.logger.log(`🔔 Emitted order:status_update:${orderId} with status ${status}`);
     }
 }
