@@ -341,26 +341,41 @@ export class OrdersService {
 
         // --- A. BLINDBOX PROCESSING ---
         if (blindboxItems.length > 0) {
+          const bbGroups = new Map<number, any[]>();
           for (const bItem of blindboxItems) {
+            const pId = bItem.variant.product_id;
+            if (!bbGroups.has(pId)) bbGroups.set(pId, []);
+            bbGroups.get(pId)!.push(bItem);
+          }
+
+          for (const [productId, itemsGroup] of bbGroups.entries()) {
             const bbConfig = await tx.product_blindboxes.findUnique({
-              where: { product_id: bItem.variant.product_id }
+              where: { product_id: productId }
             });
             if (!bbConfig) throw new BadRequestException("Blindbox config missing");
 
-            const wonVariants = await this.blindboxesService.pickUniqueItems(tx, bbConfig, bItem.quantity);
-            const ticketVariant = await tx.product_variants.findFirst({
-              where: { product_id: bItem.variant.product_id, option_name: 'Blindbox Ticket' }
-            }) || bItem.variant;
+            const totalQuantity = itemsGroup.reduce((sum, item) => sum + item.quantity, 0);
 
-            for (const won of wonVariants) {
-              retailItems.push({
-                ...bItem,
-                variant: ticketVariant,
-                quantity: 1,
-                _allocated_product_id: won.variant_id,
-                _is_opened: false,
-                _metadata: { source: (won as any)._source_stock || 'AVAILABLE' }
-              });
+            // Fetch ALL unique items for this blindbox product simultaneously so they do not overlap
+            const wonVariants = await this.blindboxesService.pickUniqueItems(tx, bbConfig, totalQuantity);
+            
+            const ticketVariant = await tx.product_variants.findFirst({
+              where: { product_id: productId, option_name: 'Blindbox Ticket' }
+            }) || itemsGroup[0].variant;
+
+            let wonIndex = 0;
+            for (const bItem of itemsGroup) {
+              for (let i = 0; i < bItem.quantity; i++) {
+                const won = wonVariants[wonIndex++];
+                retailItems.push({
+                  ...bItem,
+                  variant: ticketVariant,
+                  quantity: 1, // Enforce uniqueness mathematically
+                  _allocated_product_id: won.variant_id,
+                  _is_opened: false,
+                  _metadata: { source: (won as any)._source_stock || 'AVAILABLE' }
+                });
+              }
             }
           }
         }
@@ -1723,15 +1738,60 @@ export class OrdersService {
         }
 
         if (cart) {
-          await tx.cart_items.createMany({
-            data: order.order_items.map(item => ({
-              cart_id: cart!.cart_id,
-              variant_id: item.variant_id,
-              quantity: item.quantity,
-              livestream_id: item.livestream_id,
-              giveaway_claim_id: item.giveaway_claim_id // Restore prize status
-            }))
-          });
+          // GROUP ITEMS TO PREVENT CART CLUTTER
+          const mergedItems = new Map<string, any>();
+          
+          for (const item of order.order_items) {
+            if (item.giveaway_claim_id) {
+              // Prizes are strictly 1 quantity each row
+              await tx.cart_items.create({
+                data: {
+                  cart_id: cart.cart_id,
+                  variant_id: item.variant_id,
+                  quantity: item.quantity,
+                  livestream_id: item.livestream_id,
+                  giveaway_claim_id: item.giveaway_claim_id,
+                  payment_option: 'FULL_PAYMENT'
+                }
+              });
+            } else {
+              // Note: payment_option might be stored on order_items depending on schema, if not rely on order level.
+              // We'll safely merge by variant and livestream.
+              const key = `${item.variant_id}-${item.livestream_id || 'null'}`;
+              if (mergedItems.has(key)) {
+                mergedItems.get(key).quantity += item.quantity;
+              } else {
+                mergedItems.set(key, { ...item });
+              }
+            }
+          }
+
+          for (const v of mergedItems.values()) {
+            const existingInCart = await tx.cart_items.findFirst({
+               where: {
+                   cart_id: cart.cart_id,
+                   variant_id: v.variant_id,
+                   livestream_id: v.livestream_id,
+                   deleted_at: null
+               }
+            });
+
+            if (existingInCart) {
+               await tx.cart_items.update({
+                   where: { item_id: existingInCart.item_id },
+                   data: { quantity: { increment: v.quantity } }
+               });
+            } else {
+               await tx.cart_items.create({
+                   data: {
+                       cart_id: cart.cart_id,
+                       variant_id: v.variant_id,
+                       quantity: v.quantity,
+                       livestream_id: v.livestream_id
+                   }
+               });
+            }
+          }
         }
       } catch (err) {
         console.error("Failed to restore items to cart", err);
@@ -1859,10 +1919,15 @@ export class OrdersService {
       });
     }
 
-    return this.prisma.orders.update({
+    const updatedOrder = await this.prisma.orders.update({
       where: { order_id: order.order_id },
       data: { status_code: status }
     });
+
+    // Notify Real-time for Defense Presentation (Teammate with Postman -> Presenter machine UI)
+    this.eventsGateway.notifyOrderStatusUpdate(order.order_id, status, updatedOrder);
+
+    return updatedOrder;
   }
 
   async simulateReturnByOrderCode(orderCode: string) {
@@ -1948,6 +2013,9 @@ export class OrdersService {
         this.logger.error(`Failed to sync auction status for order ${order.order_code}:`, err);
       }
     }
+
+    // E. Trigger Real-time Notification
+    this.eventsGateway.notifyOrderStatusUpdate(order.order_id, 'COMPLETED');
 
     return { success: true, message: `Order ${trackingCode} completed and points added.` };
   }

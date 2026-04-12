@@ -3,685 +3,737 @@ import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
-const items = [
-  // --- GUNDAM MODELS (20) ---
-  {
-    name: "RG RX-93-v2 Hi-v Gundam",
-    type: "RETAIL",
-    cat: "Mô Hình",
-    brand: "Bandai",
-    price: 1250000,
-    stock: 24,
-    scale: "1/144",
-    mat: "PVC, ABS",
-    weight: 450,
-    dims: { l: 31, w: 20, h: 10 },
-    items: ["Beam Rifle", "Shield", "Fin Funnels", "Beam Saber"],
-    desc: "Mẫu Real Grade (RG) với độ chi tiết cực cao, khớp nối linh hoạt và tỉ lệ cơ thể hoàn hảo."
-  },
-  {
-    name: "MG Gundam Barbatos",
-    type: "RETAIL",
-    cat: "Mô Hình",
-    brand: "Bandai",
-    price: 980000,
-    stock: 15,
-    scale: "1/100",
-    mat: "PVC, ABS, POM",
-    weight: 800,
-    dims: { l: 39, w: 31, h: 8 },
-    items: ["Mace", "Long Sword", "300mm Smoothbore Gun"],
-    desc: "Master Grade (MG) tái hiện khung xương Gundam Frame cực kỳ cơ khí và chi tiết từ series Iron-Blooded Orphans."
-  },
-  {
-    name: "HG Rising Freedom Gundam",
-    type: "RETAIL",
-    cat: "Mô Hình",
-    brand: "Bandai",
-    price: 520000,
-    stock: 50,
-    scale: "1/144",
-    mat: "PVC, ABS",
-    weight: 300,
-    dims: { l: 30, w: 19, h: 7 },
-    items: ["Beam Rifle", "Shield", "Beam Saber"],
-    desc: "Mẫu High Grade (HG) mới nhất từ phim Gundam Seed Freedom với khả năng biến hình phi cơ."
-  },
-  {
-    name: "MGEX Strike Freedom Gundam",
-    type: "RETAIL",
-    cat: "Mô Hình",
-    brand: "Bandai",
-    price: 3500000,
-    stock: 5,
-    scale: "1/100",
-    mat: "PVC, ABS, Metal Parts",
-    weight: 1500,
-    dims: { l: 55, w: 40, h: 15 },
-    items: ["Multi-material Frame", "LED Unit", "Water Decals"],
-    desc: "Đỉnh cao của dòng MG với khung xương mạ vàng nhiều lớp và độ chi tiết lộng lẫy."
-  },
-  {
-    name: "PG Unleashed RX-78-2 Gundam",
-    type: "RETAIL",
-    cat: "Mô Hình",
-    brand: "Bandai",
-    price: 6500000,
-    stock: 3,
-    scale: "1/60",
-    mat: "PVC, ABS, Die-cast",
-    weight: 4000,
-    dims: { l: 60, w: 45, h: 20 },
-    items: ["LED Beam Saber", "Light-up Chest", "Core Fighter"],
-    desc: "Perfect Grade (PG) thế hệ mới với trải nghiệm lắp ráp 5 giai đoạn tiến hóa của Robot."
-  },
-  {
-    name: "HG Calibarn Gundam",
-    type: "RETAIL",
-    cat: "Mô Hình",
-    brand: "Bandai",
-    price: 480000,
-    stock: 40,
-    scale: "1/144",
-    mat: "PVC, ABS",
-    weight: 280,
-    dims: { l: 30, w: 19, h: 6 },
-    items: ["Broom Rifle", "Escutcheon Shield"],
-    desc: "Cỗ máy mạnh nhất của nhân vật chính trong series The Witch from Mercury."
-  },
-  {
-    name: "MG Sazabi Ver.Ka",
-    type: "RETAIL",
-    cat: "Mô Hình",
-    brand: "Bandai",
-    price: 2200000,
-    stock: 8,
-    scale: "1/100",
-    mat: "PVC, ABS",
-    weight: 2200,
-    dims: { l: 59, w: 39, h: 12 },
-    items: ["Long Beam Rifle", "Funnel effect parts", "Water Decals"],
-    desc: "Một trong những mẫu MG đồ sộ và đẹp nhất thiết kế bởi Hajime Katoki."
-  },
-  {
-    name: "RG Nu Gundam",
-    type: "RETAIL",
-    cat: "Mô Hình",
-    brand: "Bandai",
-    price: 1100000,
-    stock: 20,
-    scale: "1/144",
-    mat: "PVC, ABS",
-    weight: 400,
-    dims: { l: 31, w: 19, h: 8 },
-    items: ["Fin Funnels", "Beam Shot Rifle", "Hyper Bazooka"],
-    desc: "Mẫu RG đỉnh cao với khả năng đứng vững dù mang dàn Funnel cồng kềnh."
-  },
-  {
-    name: "HG Aerial Gundam",
-    type: "RETAIL",
-    cat: "Mô Hình",
-    brand: "Bandai",
-    price: 360000,
-    stock: 100,
-    scale: "1/144",
-    mat: "PVC, ABS",
-    weight: 250,
-    dims: { l: 30, w: 19, h: 5 },
-    items: ["Beam Rifle", "Shield Bit Stave"],
-    desc: "Sản phẩm bán chạy nhất năm 2023 với thiết kế hiện đại và khớp nối thông minh."
-  },
-  {
-    name: "MG Wing Gundam Zero EW Ver.Ka",
-    type: "RETAIL",
-    cat: "Mô Hình",
-    brand: "Bandai",
-    price: 1450000,
-    stock: 12,
-    scale: "1/100",
-    mat: "PVC, ABS",
-    weight: 850,
-    dims: { l: 39, w: 31, h: 10 },
-    items: ["Twin Buster Rifle", "Shield", "Feather parts"],
-    desc: "Cánh thiên thần huyền thoại được tái hiện chân thực có thể gập mở linh hoạt."
-  },
-  {
-    name: "RG Zeong",
-    type: "RETAIL",
-    cat: "Mô Hình",
-    brand: "Bandai",
-    price: 1400000,
-    stock: 10,
-    scale: "1/144",
-    mat: "PVC, ABS",
-    weight: 900,
-    dims: { l: 39, w: 31, h: 9 },
-    items: ["Lead wires", "Display Stand"],
-    desc: "Mẫu Zeong hiện đại nhất với cơ chế chuyển động mắt và các chi tiết cơ khí bên trong."
-  },
-  {
-    name: "MG Eclipse Gundam",
-    type: "RETAIL",
-    cat: "Mô Hình",
-    brand: "Bandai",
-    price: 1350000,
-    stock: 18,
-    scale: "1/100",
-    mat: "PVC, ABS",
-    weight: 950,
-    dims: { l: 39, w: 31, h: 11 },
-    items: ["Beam Rifle", "Beam Sword", "Transformable parts"],
-    desc: "Thiết kế góc cạnh đặc trưng có khả năng biến hình sang dạng phi cơ tốc độ cao."
-  },
-  {
-    name: "HG Moon Gundam",
-    type: "RETAIL",
-    cat: "Mô Hình",
-    brand: "Bandai",
-    price: 680000,
-    stock: 25,
-    scale: "1/144",
-    mat: "PVC, ABS",
-    weight: 450,
-    dims: { l: 30, w: 19, h: 8 },
-    items: ["Psycho Plate", "Long Rifle", "Butterfly Edge"],
-    desc: "Mẫu HG không cần sticker với độ chi tiết vượt xa các sản phẩm cùng dòng."
-  },
-  {
-    name: "RG Epyon Gundam",
-    type: "RETAIL",
-    cat: "Mô Hình",
-    brand: "Bandai",
-    price: 1050000,
-    stock: 15,
-    scale: "1/144",
-    mat: "PVC, ABS",
-    weight: 380,
-    dims: { l: 31, w: 19, h: 9 },
-    items: ["Epyon Sword", "Heat Rod", "Shield"],
-    desc: "Kiệt tác phe phản diện từ series Gundam Wing với roi heat rod uốn lượn."
-  },
-  {
-    name: "MG Freedom Gundam 2.0",
-    type: "RETAIL",
-    cat: "Mô Hình",
-    brand: "Bandai",
-    price: 1100000,
-    stock: 30,
-    scale: "1/100",
-    mat: "PVC, ABS",
-    weight: 750,
-    dims: { l: 39, w: 31, h: 8 },
-    items: ["Beam Rifle", "Lacus figure", "Shield"],
-    desc: "Mẫu Gundam được yêu thích nhất mọi thời đại với biên độ khớp cực rộng."
-  },
-  {
-    name: "HG Kshatriya",
-    type: "RETAIL",
-    cat: "Mô Hình",
-    brand: "Bandai",
-    price: 1150000,
-    stock: 10,
-    scale: "1/144",
-    mat: "PVC, ABS",
-    weight: 1200,
-    dims: { l: 39, w: 31, h: 15 },
-    items: ["Funnel x24", "Beam Saber x2"],
-    desc: "Mẫu HG khổng lồ với 4 cánh (binder) đồ sộ có thể đóng mở linh hoạt."
-  },
-  {
-    name: "RG God Gundam",
-    type: "RETAIL",
-    cat: "Mô Hình",
-    brand: "Bandai",
-    price: 1050000,
-    stock: 20,
-    scale: "1/144",
-    mat: "PVC, ABS",
-    weight: 350,
-    dims: { l: 31, w: 19, h: 8 },
-    items: ["Effect parts", "Hand parts set"],
-    desc: "Khả năng tạo dáng võ thuật đỉnh cao nhờ khung xương mới mô phỏng cơ bắp người."
-  },
-  {
-    name: "MG Tallgeese III",
-    type: "RETAIL",
-    cat: "Mô Hình",
-    brand: "Bandai",
-    price: 1650000,
-    stock: 5,
-    scale: "1/100",
-    mat: "PVC, ABS",
-    weight: 880,
-    dims: { l: 39, w: 31, h: 9 },
-    items: ["Mega Cannon", "Heat Rod", "Shield"],
-    desc: "Hàng hiếm (P-Bandai) với thiết kế đầu chim ưng và vũ khí hạng nặng đặc trưng."
-  },
-  {
-    name: "HG Penelope",
-    type: "RETAIL",
-    cat: "Mô Hình",
-    brand: "Bandai",
-    price: 1680000,
-    stock: 7,
-    scale: "1/144",
-    mat: "PVC, ABS",
-    weight: 1800,
-    dims: { l: 45, w: 32, h: 18 },
-    items: ["Odysseus Gundam", "Flight Unit"],
-    desc: "Quái vật khổng lồ có thể tách ra thành robot cốt lõi và hệ thống bay Flight Unit."
-  },
-  {
-    name: "RG Wing Gundam TV Ver",
-    type: "RETAIL",
-    cat: "Mô Hình",
-    brand: "Bandai",
-    price: 820000,
-    stock: 15,
-    scale: "1/144",
-    mat: "PVC, ABS",
-    weight: 320,
-    dims: { l: 31, w: 19, h: 7 },
-    items: ["Buster Rifle", "Shield", "Sabers"],
-    desc: "Mẫu RG tái hiện trọn vẹn thiết kế gốc trên TV với phối màu rực rỡ."
-  },
+async function main() {
+    console.log('🚀 CHIẾN DỊCH TỔNG LỰC: NẠP DỮ LIỆU SIÊU CẤP CHO FIGICORE...');
 
-  // --- PRO TOOLS (10) ---
-  {
-    name: "GodHand PN-120 Blade Nipper",
-    type: "RETAIL",
-    cat: "Dụng Cụ",
-    brand: "GodHand",
-    price: 1150000,
-    stock: 10,
-    scale: "Professional",
-    mat: "Special Steel",
-    weight: 120,
-    dims: { l: 15, w: 8, h: 2 },
-    items: ["Protection Cap"],
-    desc: "Kìm cắt chuyên dụng với lưỡi siêu mỏng, giúp vết cắt phẳng mịn gần như không cần chà nhám."
-  },
-  {
-    name: "Tamiya Extra Thin Cement (40ml)",
-    type: "RETAIL",
-    cat: "Dụng Cụ",
-    brand: "Tamiya",
-    price: 105000,
-    stock: 100,
-    scale: "Essential",
-    mat: "Chemical Liquid",
-    weight: 80,
-    dims: { l: 5, w: 5, h: 7 },
-    items: ["Brush Cap"],
-    desc: "Keo dán nhựa lỏng siêu loãng, tự len lỏi vào khe hở nhờ lực mao dẫn."
-  },
-  {
-    name: "Mr.Hobby Airbrush Procon Boy PS-289",
-    type: "RETAIL",
-    cat: "Dụng Cụ",
-    brand: "Mr.Hobby",
-    price: 2850000,
-    stock: 4,
-    scale: "0.3mm",
-    mat: "Metal",
-    weight: 350,
-    dims: { l: 20, w: 10, h: 4 },
-    items: ["Wrench", "Nozzle key"],
-    desc: "Bút vẽ mô hình chuyên dụng 0.3mm, tiêu chuẩn vàng cho mọi Gundamer."
-  },
-  {
-    name: "DSPIAE ST-A Single Blade Nipper",
-    type: "RETAIL",
-    cat: "Dụng Cụ",
-    brand: "DSPIAE",
-    price: 780000,
-    stock: 25,
-    scale: "Precision",
-    mat: "Carbon Steel",
-    weight: 140,
-    dims: { l: 16, w: 9, h: 2 },
-    items: ["Cleaning cloth", "Spring spare"],
-    desc: "Đối thủ nặng ký của GodHand với giá thành hợp lý và độ bền cực cao."
-  },
-  {
-    name: "Tamiya Sharp Pointed Nipper (Blue)",
-    type: "RETAIL",
-    cat: "Dụng Cụ",
-    brand: "Tamiya",
-    price: 640000,
-    stock: 30,
-    scale: "High Quality",
-    mat: "Hardened Steel",
-    weight: 110,
-    dims: { l: 14, w: 7, h: 2 },
-    items: ["Grip case"],
-    desc: "Kìm cắt bền bỉ bậc nhất từ Tamiya, phù hợp cho cả người mới và chuyên nghiệp."
-  },
-  {
-    name: "The Gundam Marker Set - Basic",
-    type: "RETAIL",
-    cat: "Dụng Cụ",
-    brand: "Mr.Hobby",
-    price: 320000,
-    stock: 50,
-    scale: "Painting",
-    mat: "Ink",
-    weight: 150,
-    dims: { l: 15, w: 10, h: 2 },
-    items: ["6 Colors markers"],
-    desc: "Bộ bút tô màu chuyên dụng cho Gundam, dễ sử dụng, khô nhanh và bám tốt."
-  },
-  {
-    name: "Mr.Color Thinner 400ml",
-    type: "RETAIL",
-    cat: "Dụng Cụ",
-    brand: "Mr.Hobby",
-    price: 240000,
-    stock: 40,
-    scale: "Chemical",
-    mat: "Solvent",
-    weight: 450,
-    dims: { l: 18, w: 8, h: 8 },
-    items: ["Sealed cap"],
-    desc: "Dung môi pha sơn gốc Lacquer tiêu chuẩn, giúp lớp sơn mịn màng và đều màu."
-  },
-  {
-    name: "Tamiya Modeler's Knife",
-    type: "RETAIL",
-    cat: "Dụng Cụ",
-    brand: "Tamiya",
-    price: 210000,
-    stock: 60,
-    scale: "Trimming",
-    mat: "Plastic & Carbon Steel",
-    weight: 50,
-    dims: { l: 16, w: 2, h: 2 },
-    items: ["25 Spare blades"],
-    desc: "Dao trổ mô hình độ chính xác cao, tay cầm chắc chắn chống trượt."
-  },
-  {
-    name: "Glass File - Shine Polisher",
-    type: "RETAIL",
-    cat: "Dụng Cụ",
-    brand: "DSPIAE",
-    price: 180000,
-    stock: 80,
-    scale: "Finishing",
-    mat: "Tempered Glass",
-    weight: 40,
-    dims: { l: 10, w: 1, h: 0.5 },
-    items: ["Small case"],
-    desc: "Giũa thủy tinh giúp xử lý ghẻ nhanh chóng và đánh bóng nhựa như gương."
-  },
-  {
-    name: "Tamiya Panel Line Accent (Black)",
-    type: "RETAIL",
-    cat: "Dụng Cụ",
-    brand: "Tamiya",
-    price: 145000,
-    stock: 90,
-    scale: "Panel Lining",
-    mat: "Enamel",
-    weight: 60,
-    dims: { l: 4, w: 4, h: 6 },
-    items: ["Brush in cap"],
-    desc: "Sơn kẻ lằn chìm giúp làm nổi bật các chi tiết máy móc trên mô hình."
-  },
+    // 1. DỊCH VỤ CHUẨN BỊ (BRANDS & CATEGORIES)
+    const categoryNames = ["Model Kits", "Action Figures", "Professional Tools", "Modeling Supplies", "Display Accessories"];
+    const brandNames = ["Bandai", "Moshow Toys", "Motor Nuclear", "ThreeZero", "Hot Toys", "Good Smile Company", "GodHand", "DSPIAE", "Stedi", "Mr.Hobby", "Tamiya", "Kotobukiya"];
+    
+    const catMap = new Map();
+    const brandMap = new Map();
 
-  // --- ACCESSORIES & DECAL (10) ---
-  {
-    name: "Action Base 4 Black",
-    type: "RETAIL",
-    cat: "Phụ Kiện",
-    brand: "Bandai",
-    price: 160000,
-    stock: 40,
-    scale: "1/144 & 1/100",
-    mat: "ABS",
-    weight: 300,
-    dims: { l: 25, w: 20, h: 4 },
-    items: ["Connectors", "Base parts"],
-    desc: "Đế trưng bày hỗ trợ nhiều tư thế bay lượn cho mô hình nhựa HG và MG."
-  },
-  {
-    name: "Action Base 1 Clear",
-    type: "RETAIL",
-    cat: "Phụ Kiện",
-    brand: "Bandai",
-    price: 180000,
-    stock: 30,
-    scale: "1/100",
-    mat: "ABS",
-    weight: 350,
-    dims: { l: 30, w: 22, h: 5 },
-    items: ["Large adapter", "Screw set"],
-    desc: "Đế trưng bày bản lớn dành riêng cho các mẫu Master Grade tải trọng lớn."
-  },
-  {
-    name: "LED Unit Blue (Single)",
-    type: "RETAIL",
-    cat: "Phụ Kiện",
-    brand: "Bandai",
-    price: 110000,
-    stock: 25,
-    scale: "Electronics",
-    mat: "Plastic & LED",
-    weight: 20,
-    dims: { l: 2, w: 2, h: 1.5 },
-    items: ["Battery case (No battery)"],
-    desc: "Đèn LED chính hãng giúp mắt Gundam và ngực tỏa sáng rực rỡ."
-  },
-  {
-    name: "Water Slide Decal - RX-93-v2 Hi-v",
-    type: "RETAIL",
-    cat: "Phụ Kiện",
-    brand: "Bandai",
-    price: 120000,
-    stock: 60,
-    scale: "1/144 RG",
-    mat: "Decal Paper",
-    weight: 10,
-    dims: { l: 15, w: 10, h: 0.1 },
-    items: ["Decal sheet"],
-    desc: "Decal nước độ nét cao chính hãng, giúp mô hình trông chuyên nghiệp hơn."
-  },
-  {
-    name: "Detail Up Part - Metal Thruster A",
-    type: "RETAIL",
-    cat: "Phụ Kiện",
-    brand: "G-Temple",
-    price: 250000,
-    stock: 12,
-    scale: "1/100 MG",
-    mat: "Aluminum",
-    weight: 40,
-    dims: { l: 5, w: 5, h: 2 },
-    items: ["4 Metal parts"],
-    desc: "Ống xả kim loại thay thế giúp tăng vẻ cơ khí và hầm hố cho mô hình."
-  },
-  {
-    name: "Mini Figurine Set - Zeon Crew",
-    type: "RETAIL",
-    cat: "Phụ Kiện",
-    brand: "Bandai",
-    price: 150000,
-    stock: 20,
-    scale: "1/144",
-    mat: "PVC",
-    weight: 30,
-    dims: { l: 10, w: 6, h: 1 },
-    items: ["10 Unpainted figures"],
-    desc: "Bộ binh lính và phi công tỉ lệ 1/144 để trang trí sa bàn cạnh Gundam."
-  },
-  {
-    name: "Builders Parts - HD Wing 01",
-    type: "RETAIL",
-    cat: "Phụ Kiện",
-    brand: "Bandai",
-    price: 160000,
-    stock: 15,
-    scale: "Customization",
-    mat: "ABS",
-    weight: 120,
-    dims: { l: 18, w: 12, h: 2 },
-    items: ["Wing parts set"],
-    desc: "Cánh phản lực gắn thêm để tùy biến robot của bạn theo phong cách độc đáo."
-  },
-  {
-    name: "HGBC Giant Gatling",
-    type: "RETAIL",
-    cat: "Phụ Kiện",
-    brand: "Bandai",
-    price: 150000,
-    stock: 45,
-    scale: "1/144",
-    mat: "ABS",
-    weight: 150,
-    dims: { l: 20, w: 10, h: 2 },
-    items: ["Gatling gun", "Ammo belt"],
-    desc: "Vũ khí gatling khổng lồ có thể gắn cho bất kỳ dòng HG nào có tay cầm chuẩn."
-  },
-  {
-    name: "MS Effect 01 (Yellow)",
-    type: "RETAIL",
-    cat: "Phụ Kiện",
-    brand: "Bandai",
-    price: 190000,
-    stock: 20,
-    scale: "Interaction",
-    mat: "Soft PVC",
-    weight: 200,
-    dims: { l: 15, w: 10, h: 5 },
-    items: ["Blast effect x3"],
-    desc: "Hiệu ứng nổ và động cơ giúp các bức ảnh chụp mô hình sinh động hơn."
-  },
-  {
-    name: "Mechanical Chain Base 01",
-    type: "RETAIL",
-    cat: "Phụ Kiện",
-    brand: "Kotobukiya",
-    price: 450000,
-    stock: 10,
-    scale: "1/144 & 1/100",
-    mat: "ABS",
-    weight: 600,
-    dims: { l: 15, w: 15, h: 18 },
-    items: ["Floor unit", "Wall unit"],
-    desc: "Bối cảnh xưởng sửa chữa Robot có thể ghép nối nhiều bộ lại với nhau."
-  }
-];
-
-async function seed() {
-  console.log('🚀 CHIẾN DỊCH NẠP 40 MOCK DATA RETAIL BẮT ĐẦU...');
-
-  // 1. CHUẨN BỊ MÔI TRƯỜNG (CATEGORY & BRAND)
-  const categoryMap = new Map();
-  const brandMap = new Map();
-
-  // Tạo Category chuẩn
-  const categoryNames = ["Mô Hình", "Dụng Cụ", "Phụ Kiện"];
-  for (const name of categoryNames) {
-    const cat = await prisma.categories.upsert({
-      where: { name },
-      update: {},
-      create: { name, slug: name.toLowerCase().replace(/ /g, '-') }
-    });
-    categoryMap.set(name, cat.category_id);
-  }
-
-  // Tạo Brand chuẩn
-  const brandNames = ["Bandai", "GodHand", "Tamiya", "Mr.Hobby", "DSPIAE", "G-Temple", "Kotobukiya"];
-  for (const name of brandNames) {
-    const brand = await prisma.brands.upsert({
-      where: { name },
-      update: {},
-      create: { name }
-    });
-    brandMap.set(name, brand.brand_id);
-  }
-
-  // 2. NẠP PRODUCT & VARIANT
-  let count = 0;
-  for (const item of items) {
-    // Tạo format description Markdown
-    const formattedDesc = `${item.desc}\n\n**Thông số kỹ thuật:**\n* **Thương hiệu:** ${item.brand}\n* **Tỉ lệ:** ${item.scale}\n* **Chất liệu:** ${item.mat}\n* **Cấu thành cơ bản:** ${item.items.join(', ')}`;
-
-    const generateVariantData = (optName: string, priceModifier: number, stockModifier: number, extraItems: string[] = []) => {
-      const sku = `FIGI-${count.toString().padStart(3, '0')}-${Math.random().toString(36).substring(2, 5).toUpperCase()}`;
-      const barcode = `BAR-${Math.floor(Math.random() * 9000) + 1000}-${Math.floor(Math.random() * 1000)}`;
-      const vPrice = item.price + priceModifier;
-      return {
-        sku: sku,
-        barcode: barcode,
-        option_name: optName,
-        price: vPrice,
-        cost_price: Math.round(vPrice * 0.7),
-        stock_available: Math.max(1, item.stock + stockModifier),
-        weight_g: item.weight,
-        length_cm: item.dims.l,
-        width_cm: item.dims.w,
-        height_cm: item.dims.h,
-        scale: item.scale,
-        material: item.mat,
-        included_items: [...item.items, ...extraItems],
-        description: `${formattedDesc}\n* **Giá tham khảo:** ${vPrice.toLocaleString('vi-VN')} VND`
-      };
-    };
-
-    let variantsToCreate: any[] = [];
-
-    // Tạo đa dạng biến thể cho từng dòng sản phẩm
-    if (item.cat === "Dụng Cụ") {
-      variantsToCreate.push(generateVariantData("Bộ tiêu chuẩn", 0, 0));
-      if (item.name.includes("Knife")) {
-        variantsToCreate.push(generateVariantData("Combo VIP (Tặng thêm 50 lưỡi dao)", 80000, -10, ["50 Lưỡi dao dự phòng"]));
-      } else if (item.name.includes("Nipper")) {
-        variantsToCreate.push(generateVariantData("Bản Đặc Biệt (Kèm bao da bảo vệ)", 150000, -5, ["Bao da bảo vệ cao cấp"]));
-      }
-    } else if (item.name.includes("Gundam")) {
-      variantsToCreate.push(generateVariantData("Standard Edition", 0, 0));
-      if (item.price > 1500000) {
-        variantsToCreate.push(generateVariantData("Premium Color Edition", 500000, -2, ["Màu sơn giới hạn", "Decal kim loại"]));
-        variantsToCreate.push(generateVariantData("Full Mechanics (Kèm Base + LED)", 800000, -4, ["Đế trưng bày", "Đèn LED RGB"]));
-      } else {
-        variantsToCreate.push(generateVariantData("Clear Color Limited", 300000, -5, ["Áo giáp trong suốt (Clear Armor)"]));
-      }
-    } else {
-      variantsToCreate.push(generateVariantData("Standard Set", 0, 0));
-      if (item.cat === "Phụ Kiện") {
-        variantsToCreate.push(generateVariantData("Combo x2 (Tiết kiệm 10%)", Math.round((item.price * 2) * 0.9) - item.price, -2, ["Gấp đôi phụ kiện"]));
-      }
+    for (const name of categoryNames) {
+        const cat = await prisma.categories.upsert({
+            where: { name },
+            update: {},
+            create: { name, slug: name.toLowerCase().replace(/ /g, '-') }
+        });
+        catMap.set(name, cat.category_id);
     }
 
-    try {
-      await prisma.products.create({
-        data: {
-          name: item.name,
-          type_code: item.type,
-          status_code: "ACTIVE",
-          category_id: categoryMap.get(item.cat),
-          brand_id: brandMap.get(item.brand),
-          description: formattedDesc,
-          product_variants: {
-            create: variantsToCreate as any
-          }
+    for (const name of brandNames) {
+        const brand = await prisma.brands.upsert({
+            where: { name },
+            update: {},
+            create: { name }
+        });
+        brandMap.set(name, brand.brand_id);
+    }
+
+    console.log(`✅ [SETUP] Đã chuẩn bị ${catMap.size} danh mục và ${brandMap.size} thương hiệu.`);
+
+    // 2. DANH SÁCH 50 SẢN PHẨM RETAIL (DỰ KIẾN)
+    const retailItems = [
+        // --- 1. BANDAI GUNDAM (15 ITEMS) ---
+        {
+            name: "PG Unleashed RX-78-2 Gundam",
+            brand: "Bandai",
+            cat: "Model Kits",
+            price: 6500000,
+            scale: "1/60",
+            mat: "PVC, ABS, Die-cast",
+            desc: "Đỉnh cao của công nghệ chế tác mô hình từ Bandai. PG Unleashed RX-78-2 mang đến trải nghiệm lắp ráp 5 giai đoạn tiến hóa, từ khung xương cơ bản đến lớp giáp hoàn thiện với hệ thống LED tích hợp lộng lẫy.",
+            specs: { height: "30cm", features: ["LED Internal Lighting", "Multi-layered Frame", "Metal Parts"] },
+            stockGood: 15, stockDefect: 2
+        },
+        {
+            name: "MGEX Strike Freedom Gundam",
+            brand: "Bandai",
+            cat: "Model Kits",
+            price: 3650000,
+            scale: "1/100",
+            mat: "PS, ABS, PP",
+            desc: "Dòng Master Grade Extreme tập trung vào biểu cảm cao nhất của kim loại. Khung xương mạ vàng 3 lớp khác nhau tạo nên vẻ ngoài lộng lẫy chưa từng có cho Strike Freedom.",
+            specs: { height: "19cm", features: ["Extreme Metallic Combination", "LED Unit included", "Water Slide Decals"] },
+            stockGood: 25, stockDefect: 3
+        },
+        {
+            name: "RG RX-93-v2 Hi-v Gundam",
+            brand: "Bandai",
+            cat: "Model Kits",
+            price: 1350000,
+            scale: "1/144",
+            mat: "PVC, ABS",
+            desc: "Mẫu Real Grade được đánh giá là xuất sắc nhất mọi thời đại. Hi-v Gundam sở hữu biên độ khớp cực rộng và độ chi tiết tương đương dòng PG thu nhỏ.",
+            specs: { features: ["Advanced MS Joint", "Fin Funnel Deployment", "Rich Decals"] },
+            stockGood: 40, stockDefect: 5
+        },
+        {
+            name: "MG Sazabi Ver.Ka",
+            brand: "Bandai",
+            cat: "Model Kits",
+            price: 2450000,
+            scale: "1/100",
+            mat: "PVC, ABS",
+            desc: "Thiết kế huyền thoại của Hajime Katoki. Sazabi Ver.Ka là một mẫu mô hình đồ sộ với cơ chế mở giáp (Hatch Open) cực kỳ chi tiết.",
+            specs: { weight: "1.2kg", features: ["Katoki Design", "Funnel Rack", "Chrome Parts"] },
+            stockGood: 12, stockDefect: 1
+        },
+        {
+            name: "MG Wing Gundam Zero EW Ver.Ka",
+            brand: "Bandai",
+            cat: "Model Kits",
+            price: 1550000,
+            scale: "1/100",
+            mat: "PVC, ABS",
+            desc: "Tái hiện đôi cánh thiên thần huyền thoại. Wing Zero EW Ver.Ka có khả năng biến hình sang dạng phi cơ (Neo Bird Mode) và hệ thống lông vũ sắc sảo.",
+            specs: { features: ["Neo Bird Transformation", "Feather Shell mechanism", "Duo Buster Rifles"] },
+            stockGood: 30, stockDefect: 4
+        },
+        {
+            name: "RG MSN-04 Sazabi",
+            brand: "Bandai",
+            cat: "Model Kits",
+            price: 1200000,
+            scale: "1/144",
+            mat: "PVC, ABS",
+            desc: "Mẫu RG lớn nhất với khối lượng và độ chi tiết vượt trội. Sazabi 1/144 mang lại cảm giác chắc chắn và mạnh mẽ trên lòng bàn tay.",
+            specs: { features: ["Life-sized detail", "Multi-stage hatch opening"] },
+            stockGood: 20, stockDefect: 2
+        },
+        {
+            name: "HG Calibarn Gundam",
+            brand: "Bandai",
+            cat: "Model Kits",
+            price: 550000,
+            scale: "1/144",
+            mat: "PVC, ABS",
+            desc: "Phù thủy tối thượng từ 'The Witch from Mercury'. Calibarn nổi bật với khẩu chổi thần kỳ Broom Rifle và hệ thống Escutcheon bits.",
+            specs: { features: ["Permet Score 8+ Effect", "Broom Rifle included"] },
+            stockGood: 100, stockDefect: 10
+        },
+        {
+            name: "MG Gundam Barbatos",
+            brand: "Bandai",
+            cat: "Model Kits",
+            price: 1100000,
+            scale: "1/100",
+            mat: "ABS, PVC",
+            desc: "Master Grade tái hiện khung xương cơ khí Gundam Frame hoàn hảo nhất. Chi tiết piston chuyển động thật khi cử động khớp.",
+            specs: { features: ["Working Hydraulic Pistons", "Full Inner Frame", "Iconic Mace Weapon"] },
+            stockGood: 50, stockDefect: 5
+        },
+        {
+            name: "RG God Gundam",
+            brand: "Bandai",
+            cat: "Model Kits",
+            price: 1050000,
+            scale: "1/144",
+            mat: "Plastic",
+            desc: "Mẫu mô hình có khả năng tạo dáng võ thuật đỉnh cao nhất lịch sử. Khung xương mô phỏng cơ bắp người cho phép thực hiện các tư thế cực khó.",
+            specs: { features: ["Martial Arts Poseability", "Burning Finger parts", "Energy Ring effect"] },
+            stockGood: 35, stockDefect: 4
+        },
+        {
+            name: "PG Exia Gundam (Lighting Edition)",
+            brand: "Bandai",
+            cat: "Model Kits",
+            price: 7800000,
+            scale: "1/60",
+            mat: "Plastic, LED",
+            desc: "Sự kết hợp hoàn hảo giữa công nghệ LED chuyển màu và cơ khí chính xác. Đèn LED có thể chuyển đổi từ xanh sang đỏ để mô phỏng trạng thái Trans-Am.",
+            specs: { features: ["Color Changing LED", "GN Drive unit", "Silicon Band cable"] },
+            stockGood: 5, stockDefect: 1
+        },
+        {
+            name: "MG Freedom Gundam 2.0",
+            brand: "Bandai",
+            cat: "Model Kits",
+            price: 1150000,
+            scale: "1/100",
+            mat: "Plastic",
+            desc: "Biểu tượng của sự tự do. Mẫu 2.0 cải tiến toàn bộ hệ thống khớp và cánh, cho phép tạo những dáng bay lượn biểu cảm nhất.",
+            specs: { features: ["Burst Mode wing", "Double Jointed Hip", "Lacus Figure included"] },
+            stockGood: 45, stockDefect: 6
+        },
+        {
+            name: "RG Epyon Gundam",
+            brand: "Bandai",
+            cat: "Model Kits",
+            price: 1100000,
+            scale: "1/144",
+            mat: "Plastic",
+            desc: "Sát thủ bóng đêm từ series Gundam Wing. Epyon RG sử dụng công nghệ Advanced MS Joint cho dây roi Heat Rod uốn lượn tự nhiên.",
+            specs: { features: ["Heat Rod articulation", "Dragon Mode transformation"] },
+            stockGood: 25, stockDefect: 3
+        },
+        {
+            name: "MG Sinanju Stein (Narrative Ver.) Ver.Ka",
+            brand: "Bandai",
+            cat: "Model Kits",
+            price: 1850000,
+            scale: "1/100",
+            mat: "Plastic",
+            desc: "Thiết kế trang nhã nhưng đầy sức mạnh. Sinanju Stein Ver.Ka sở hữu tông màu trắng xám đặc trưng và các chi tiết chạm khắc 'Engraved' tinh xảo.",
+            specs: { features: ["Engraved parts", "High Mobility Thrusters", "Shield & Beam Rifle"] },
+            stockGood: 15, stockDefect: 2
+        },
+        {
+            name: "HG Aerial Gundam (Permet Score Six)",
+            brand: "Bandai",
+            cat: "Model Kits",
+            price: 650000,
+            scale: "1/144",
+            mat: "Plastic",
+            desc: "Phiên bản giới hạn với hiệu ứng phát sáng xanh cực đẹp trên ngực và vai, mô phỏng khoảnh khắc Aerial đạt sức mạnh tối đa.",
+            specs: { features: ["Blue Shell Unit parts", "Bit Stave combination"] },
+            stockGood: 30, stockDefect: 5
+        },
+        {
+            name: "MG Narrative Gundam C-Packs Ver.Ka",
+            brand: "Bandai",
+            cat: "Model Kits",
+            price: 1650000,
+            scale: "1/100",
+            mat: "Plastic",
+            desc: "Dòng Ver.Ka mới nhất 2024. Narrative Gundam với bộ giáp Psycho-Frame hồng rực rỡ và độ chi tiết cơ khí bậc thầy.",
+            specs: { features: ["Clear Psycho-Frame", "Functional Cockpit", "Premium Decals"] },
+            stockGood: 20, stockDefect: 2
+        },
+
+        // --- 2. METAL BUILD / HIGH-END (10 ITEMS) ---
+        {
+            name: "MOSHOW TOYS MCT-J02 Takeda Shingen",
+            brand: "Moshow Toys",
+            cat: "Action Figures",
+            price: 3250000,
+            scale: "1/72",
+            mat: "Plastic, Die-cast",
+            desc: "Đỉnh cao của dòng Metal Build từ Moshow. Takeda Shingen với khối lượng kim loại cực lớn, khớp nối chắc chắn và các chi tiết sơn mạ vàng lộng lẫy.",
+            specs: { height: "29cm", material: "60% Die-cast", features: ["LED Eyes", "Extensive Armor details"] },
+            stockGood: 10, stockDefect: 1
+        },
+        {
+            name: "MOTOR NUCLEAR MNQ-XH01 Bai Qi",
+            brand: "Motor Nuclear",
+            cat: "Action Figures",
+            price: 4500000,
+            scale: "1/72",
+            mat: "Die-cast, ABS",
+            desc: "Sát Thần Bạch Khởi với đôi cánh pha lê khổng lồ. Sản phẩm đình đám của Motor Nuclear với độ hoàn thiện sơn phủ bề mặt cực kỳ cao cấp.",
+            specs: { features: ["Crystal Wings", "Die-cast skeleton", "Multiple weapon sets"] },
+            stockGood: 8, stockDefect: 1
+        },
+        {
+            name: "MOSHOW TOYS MCT-E02 Lake Knight Lancelot",
+            brand: "Moshow Toys",
+            cat: "Action Figures",
+            price: 3100000,
+            scale: "1/100",
+            mat: "Die-cast, ABS",
+            desc: "Kỵ sĩ hồ nước với thiết kế trang nhã, tông màu xanh ngọc lục bảo sang trọng. Khung xương kim loại mang lại cảm giác cầm nắm đầm tay.",
+            specs: { features: ["Sword of the Lake", "LED Head", "Display Base"] },
+            stockGood: 12, stockDefect: 2
+        },
+        {
+            name: "MOTOR NUCLEAR MNQ-05X Cao Ren",
+            brand: "Motor Nuclear",
+            cat: "Action Figures",
+            price: 4200000,
+            scale: "1/72",
+            mat: "Die-cast, ABS",
+            desc: "Hiện thân của sự kiên cường. Cao Ren sở hữu bộ giáp hầm hố và hệ thống biến hình sang dạng Phoenix cực kỳ ấn tượng.",
+            specs: { features: ["Phoenix Mode Transformation", "Metal frame", "Heavy Shield"] },
+            stockGood: 6, stockDefect: 1
+        },
+        {
+            name: "MOSHOW TOYS MCT-AP02 Marquis of Wencheng",
+            brand: "Moshow Toys",
+            cat: "Action Figures",
+            price: 3400000,
+            scale: "1/72",
+            mat: "Die-cast, ABS",
+            desc: "Thiết kế mang đậm phong cách văn hóa phương Đông cổ đại kết hợp công nghệ robot tương lai.",
+            specs: { features: ["Traditional Armor cues", "Magnetic LED switch"] },
+            stockGood: 10, stockDefect: 1
+        },
+        {
+            name: "ThreeZero Robo-Dou Evangelion Unit-01",
+            brand: "ThreeZero",
+            cat: "Action Figures",
+            price: 3850000,
+            scale: "25cm",
+            mat: "Zink Alloy, ABS",
+            desc: "Tái hiện Evangelion Unit-01 với 48 điểm khớp nối và hiệu ứng sơn phong hóa chân thực đặc trưng của ThreeZero.",
+            specs: { features: ["Entry Plug opening", "Umbilical Cable included", "Bio-mechanical paint"] },
+            stockGood: 15, stockDefect: 2
+        },
+        {
+            name: "ThreeZero DLX Iron Man Mark 50",
+            brand: "ThreeZero",
+            cat: "Action Figures",
+            price: 2450000,
+            scale: "1/12",
+            mat: "Die-cast, PVC",
+            desc: "Giáp Nano từ Avengers: Infinity War. Độ chi tiết sắc sảo và hệ thống LED bố trí tại 5 vị trí khác nhau.",
+            specs: { features: ["LED Chest & Eyes", "Nano-Repulsor Cannons", "Zink Alloy parts"] },
+            stockGood: 20, stockDefect: 3
+        },
+        {
+            name: "ThreeZero Robo-Dou Shin Getter 1",
+            brand: "ThreeZero",
+            cat: "Action Figures",
+            price: 4100000,
+            scale: "23cm",
+            mat: "ABS, PVC, Metal",
+            desc: "Robot khổng lồ Shin Getter 1 với thiết kế gân guốc, cơ bắp và hiệu ứng sơn giả kim loại cổ điển.",
+            specs: { features: ["Getter Tomahawk", "Getter Scythe", "Glowing Paint effects"] },
+            stockGood: 7, stockDefect: 1
+        },
+        {
+            name: "Hot Toys TMS051 Fennec Shand",
+            brand: "Hot Toys",
+            cat: "Action Figures",
+            price: 5800000,
+            scale: "1/6",
+            mat: "Fabric, PVC",
+            desc: "Mô hình tỉ lệ 1/6 cực kỳ chân thực của sát thủ Fennec Shand từ series Star Wars: The Book of Boba Fett.",
+            specs: { features: ["Hand-painted head sculpt", "Tailored costume", "Sniper Rifle"] },
+            stockGood: 5, stockDefect: 0
+        },
+         {
+            name: "Hot Toys DX25 Boba Fett",
+            brand: "Hot Toys",
+            cat: "Action Figures",
+            price: 7500000,
+            scale: "1/6",
+            mat: "PVC, ABS, Fabric",
+            desc: "Phiên bản Boba Fett ngồi trên ngai vàng của Jabba. Đây là mẫu sưu tầm cấp cao với hệ thống mắt đảo linh hoạt (Rolling Eyeballs).",
+            specs: { features: ["Rolling Eyeballs system", "Armored Throne display", "Jetpack effects"] },
+            stockGood: 3, stockDefect: 0
+        },
+
+        // --- 3. TOOLS & SUPPLIES (15 ITEMS) ---
+        {
+            name: "GodHand SPN-120 Ultimate Nipper",
+            brand: "GodHand",
+            cat: "Professional Tools",
+            price: 1350000,
+            scale: "Pro",
+            mat: "Hardened Steel",
+            desc: "Huyền thoại của làng mô hình. Kìm cắt một lưỡi siêu mỏng mang lại vết cắt phẳng mịn như gương, giúp tiết kiệm 90% thời gian chà nhám.",
+            specs: { features: ["Single Blade technology", "Ultra-thin blade", "Protective cap included"] },
+            stockGood: 30, stockDefect: 2
+        },
+        {
+            name: "DSPIAE ST-A Single Blade Nipper",
+            brand: "DSPIAE",
+            cat: "Professional Tools",
+            price: 850000,
+            scale: "Precision",
+            mat: "High Carbon Steel",
+            desc: "Đối thủ trực tiếp của GodHand với độ bền lưỡi tốt hơn và giá thành hợp lý hơn cho người mới bắt đầu.",
+            specs: { features: ["Tungsten Steel reinforced", "Ergonomic handles"] },
+            stockGood: 50, stockDefect: 5
+        },
+        {
+            name: "Stedi ST-A Single Blade Nipper",
+            brand: "Stedi",
+            cat: "Professional Tools",
+            price: 550000,
+            scale: "Standard",
+            mat: "Chrome Moly Steel",
+            desc: "Lựa chọn kinh tế nhất cho dòng kìm một lưỡi. Hiệu năng cắt vượt trội so với các loại kìm hai lưỡi thông thường.",
+            specs: { features: ["Best price-performance", "Leather pouch included"] },
+            stockGood: 70, stockDefect: 10
+        },
+        {
+            name: "Tamiya Sharp Pointed Nipper (Blue)",
+            brand: "Tamiya",
+            cat: "Professional Tools",
+            price: 680000,
+            scale: "Durable",
+            mat: "Alloy Steel",
+            desc: "Kìm cắt bền bỉ bậc nhất thế giới. Thích hợp để cắt những phần cuống (runner) dày mà không sợ mẻ lưỡi.",
+            specs: { features: ["High Durability", "Perfect for thick sprues"] },
+            stockGood: 45, stockDefect: 3
+        },
+        {
+            name: "Mr.Hobby Airbrush Procon Boy PS-289",
+            brand: "Mr.Hobby",
+            cat: "Professional Tools",
+            price: 2850000,
+            scale: "0.3mm",
+            mat: "Chrome Metal",
+            desc: "Bút vẽ mô hình chuyên dụng 0.3mm. Tiêu chuẩn vàng của các nhà xưởng mô hình Nhật Bản.",
+            specs: { features: ["Double Action trigger", "Precision needle", "Gravity feed"] },
+            stockGood: 10, stockDefect: 1
+        },
+        {
+            name: "Mr.Color Thinner 400ml",
+            brand: "Mr.Hobby",
+            cat: "Modeling Supplies",
+            price: 245000,
+            scale: "400ml",
+            mat: "Chemical Solvent",
+            desc: "Dung môi pha sơn Lacquer tiêu chuẩn. Đảm bảo bề mặt sơn mịn màng và khô nhanh.",
+            specs: { features: ["Quick drying", "Compatible with Gaia paint"] },
+            stockGood: 120, stockDefect: 5
+        },
+        {
+            name: "Tamiya Extra Thin Cement",
+            brand: "Tamiya",
+            cat: "Modeling Supplies",
+            price: 115000,
+            scale: "40ml",
+            mat: "Liquid Cement",
+            desc: "Keo dán nhựa siêu loãng. Tự động len lỏi vào khe hở nhờ lực mao dẫn, không để lại vết keo thừa.",
+            specs: { features: ["Capillary action", "Quick bond"] },
+            stockGood: 200, stockDefect: 0
+        },
+        {
+            name: "DSPIAE Glass File - Sine Polisher",
+            brand: "DSPIAE",
+            cat: "Professional Tools",
+            price: 185000,
+            scale: "Nano",
+            mat: "Tempered Glass",
+            desc: "Giũa thủy tinh công nghệ Nano. Vừa mài ghẻ (nub mark) vừa đánh bóng bề mặt nhựa chỉ trong một bước.",
+            specs: { features: ["Nano-grinding tech", "Washable", "Safe for plastic"] },
+            stockGood: 85, stockDefect: 2
+        },
+        {
+            name: "Mr.Hobby Gundam Marker Set - Basic",
+            brand: "Mr.Hobby",
+            cat: "Modeling Supplies",
+            price: 325000,
+            scale: "Set of 6",
+            mat: "Alcohol Based Ink",
+            desc: "Bộ bút tô màu cơ bản dành cho người mới chơi Gundam. Phù hợp để tô chi tiết nhỏ và mắt robot.",
+            specs: { features: ["Basic Colors included", "Easy to apply"] },
+            stockGood: 65, stockDefect: 0
+        },
+        {
+            name: "Tamiya Panel Line Accent (Black)",
+            brand: "Tamiya",
+            cat: "Modeling Supplies",
+            price: 155000,
+            scale: "40ml",
+            mat: "Enamel Ink",
+            desc: "Sơn kẻ lằn chìm giúp làm nổi bật các rãnh máy móc trên mô hình một cách tự nhiên.",
+            specs: { features: ["Pre-mixed ink", "Precision brush in cap"] },
+            stockGood: 150, stockDefect: 1
+        },
+        {
+            name: "DSPIAE AT-TH Multi-angle Hobby Vice",
+            brand: "DSPIAE",
+            cat: "Professional Tools",
+            price: 1450000,
+            scale: "Universal",
+            mat: "Alloy",
+            desc: "Ê-tô xoay đa hướng chuyên dụng. Cố định chi tiết nhỏ để đi lằn hoặc sơn tay cực kỳ chắc chắn.",
+            specs: { features: ["360 degree rotation", "Heavy base", "Silicon grips"] },
+            stockGood: 12, stockDefect: 1
+        },
+        {
+            name: "Madworks Tungsten Steel Sciber 0.15mm",
+            brand: "DSPIAE",
+            cat: "Professional Tools",
+            price: 450000,
+            scale: "0.15mm",
+            mat: "Tungsten Steel",
+            desc: "Dao đi lằn siêu cứng làm từ thép Vonfram. Giúp tạo lại các rãnh cũ hoặc khắc rãnh mới sắc nét.",
+            specs: { features: ["High Hardness", "Precision tip"] },
+            stockGood: 25, stockDefect: 2
+        },
+        {
+            name: "Action Base 4 Black",
+            brand: "Bandai",
+            cat: "Display Accessories",
+            price: 185000,
+            scale: "1/100, 1/144",
+            mat: "Plastic",
+            desc: "Đế trưng bày hỗ trợ các tư thế bay lượn cho Gundam. Hỗ trợ nhiều khớp nối khác nhau.",
+            specs: { features: ["Modular design", "Stable support"] },
+            stockGood: 90, stockDefect: 5
+        },
+         {
+            name: "LED Unit Blue for PG/MG",
+            brand: "Bandai",
+            cat: "Display Accessories",
+            price: 125000,
+            scale: "Electronic",
+            mat: "Plastic, LED",
+            desc: "Đèn LED chính hãng của Bandai để thắp sáng mắt và ngực cho các mẫu Master Grade hoặc Perfect Grade.",
+            specs: { features: ["Push button switch", "Blue light"] },
+            stockGood: 55, stockDefect: 10
+        },
+        {
+            name: "Mechanical Chain Base 01",
+            brand: "Kotobukiya",
+            cat: "Display Accessories",
+            price: 480000,
+            scale: "Non-scale",
+            mat: "Plastic",
+            desc: "Bối cảnh xưởng sửa chữa robot. Có thể ghép nhiều bộ để tạo thành một Workshop khổng lồ.",
+            specs: { features: ["Connectable walls", "Hangar details"] },
+            stockGood: 18, stockDefect: 2
+        },
+
+        // --- 4. MIXED FIGURES & MISC (10 ITEMS) ---
+        {
+            name: "Hot Toys TMS064 Echo (The Bad Batch)",
+            brand: "Hot Toys",
+            cat: "Action Figures",
+            price: 6200000,
+            scale: "1/6",
+            mat: "PVC, Fabric",
+            desc: "Nhân vật Echo từ series hoạt hình đình đám Star Wars: The Bad Batch với đầy đủ phụ kiện máy móc thay thế.",
+            specs: { features: ["Mechanical arm", "Realistic head sculpt", "Armor plates"] },
+            stockGood: 4, stockDefect: 0
+        },
+        {
+            name: "Hot Toys MMS647 Doctor Strange",
+            brand: "Hot Toys",
+            cat: "Action Figures",
+            price: 8500000,
+            scale: "1/6",
+            mat: "PVC, Fabric",
+            desc: "Doctor Strange trong Multiverse of Madness. Đi kèm vô số hiệu ứng pháp thuật và đôi mắt thứ 3 tinh xảo.",
+            specs: { features: ["Eye of Agamotto", "Cloak of Levitation", "Magic Mandalas"] },
+            stockGood: 6, stockDefect: 0
+        },
+        {
+            name: "Good Smile Nendoroid Marin Kitagawa",
+            brand: "Good Smile Company",
+            cat: "Action Figures",
+            price: 1250000,
+            scale: "Nendoroid",
+            mat: "PVC",
+            desc: "Mô hình chibi đáng yêu của nàng 'Wife' quốc dân Marin. Phụ kiện đi kèm gồm máy ảnh và túi xách thời trang.",
+            specs: { features: ["Interchangeable faces", "Articulation points"] },
+            stockGood: 35, stockDefect: 3
+        },
+        {
+            name: "Good Smile POP UP PARADE Erza Scarlet",
+            brand: "Good Smile Company",
+            cat: "Action Figures",
+            price: 950000,
+            scale: "17cm",
+            mat: "PVC",
+            desc: "Dòng tượng chất lượng cao với giá thành cực mềm. Erza trong trang phục kỵ sĩ chiến đấu oai phong.",
+            specs: { features: ["Fixed pose", "Clean paint finish"] },
+            stockGood: 25, stockDefect: 2
+        },
+        {
+            name: "ThreeZero DLX Black Panther",
+            brand: "ThreeZero",
+            cat: "Action Figures",
+            price: 2550000,
+            scale: "1/12",
+            mat: "Die-cast, ABS",
+            desc: "Chiến binh báo đen với bộ giáp dệt mịn màng và độ linh hoạt cực cao để thực hiện các tư thế chiến đấu đặc trưng.",
+            specs: { features: ["Zink Alloy frame", "Energy effect parts"] },
+            stockGood: 18, stockDefect: 2
+        },
+        {
+            name: "Good Smile Figma Power (Chainsaw Man)",
+            brand: "Good Smile Company",
+            cat: "Action Figures",
+            price: 1850000,
+            scale: "Figma",
+            mat: "PVC",
+            desc: "Cô nàng ác quỷ máu tinh nghịch từ Chainsaw Man. Đi kèm chú mèo Nyako và vũ khí máu đỏ rực.",
+            specs: { features: ["Nyako cat included", "Blood hammers", "Smooth joints"] },
+            stockGood: 22, stockDefect: 2
+        },
+        {
+            name: "Kotobukiya Megami Device Asra Archer",
+            brand: "Kotobukiya",
+            cat: "Model Kits",
+            price: 1450000,
+            scale: "1/1",
+            mat: "Plastic",
+            desc: "Sự kết hợp giữa nhân vật nữ anime và giáp kỵ sĩ cơ khí. Độ chi tiết giáp và vũ khí cung tên cực kỳ sắc sảo.",
+            specs: { features: ["Armed & Unarmed mode", "Complex decals"] },
+            stockGood: 15, stockDefect: 2
+        },
+        {
+            name: "Kotobukiya Frame Arms Girl Stylet XF-3",
+            brand: "Kotobukiya",
+            cat: "Model Kits",
+            price: 1550000,
+            scale: "1/100",
+            mat: "Plastic",
+            desc: "Mẫu F.A.G cải tiến với hệ thống drone bay kèm và vũ khí hạng nặng mới.",
+            specs: { features: ["Transformable drone", "Multiple facial expressions"] },
+            stockGood: 10, stockDefect: 1
+        },
+        {
+            name: "Good Smile POP UP PARADE Guts (Berserker Armor)",
+            brand: "Good Smile Company",
+            cat: "Action Figures",
+            price: 1650000,
+            scale: "28cm (L size)",
+            mat: "PVC",
+            desc: "Kiếm sĩ đen Guts trong bộ giáp điên cuồng. Kích thước lớn hơn hẳn các mẫu Pop Up Parade thông thường.",
+            specs: { features: ["L-Size figure", "Dark paint wash", "Dragon Slayer sword"] },
+            stockGood: 20, stockDefect: 3
+        },
+        {
+            name: "Bandai Metal Build Hi-v Gundam",
+            brand: "Bandai",
+            cat: "Action Figures",
+            price: 9500000,
+            scale: "1/100",
+            mat: "Die-cast, ABS",
+            desc: "Siêu phẩm đã hoàn thiện sơn sẵn với khung xương kim loại nặng trịch. Đây là mơ ước của mọi nhà sưu tầm Gundam.",
+            specs: { features: ["Real metal joints", "Luxury paint finish", "Heavy armament"] },
+            stockGood: 4, stockDefect: 0
         }
-      });
-      count++;
-      console.log(`✅ [${count}/40] Nạp thành công: ${item.name} (${variantsToCreate.length} variants)`);
-    } catch (e: any) {
-      console.error(`❌ Lỗi khi nạp ${item.name}:`, e.message);
-    }
-  }
+    ];
 
-  console.log('🎉 HOÀN TẤT NẠP 40 MOCK ITEMS. HỆ THỐNG ĐÃ SẴN SÀNG ĐỂ TEST BÁN HÀNG.');
+    // 3. NẠP PRODUCT & VARIANTS
+    let count = 0;
+    for (const item of retailItems) {
+        const formattedDesc = `${item.desc}\n\n**Thông số kỹ thuật:**\n* **Thương hiệu:** ${item.brand}\n* **Phân loại:** ${item.cat}\n* **Chất liệu:** ${item.mat}\n* **Tính năng:** ${item.specs.features?.join(', ') || 'N/A'}`;
+
+        await prisma.products.create({
+            data: {
+                name: item.name,
+                type_code: "RETAIL",
+                status_code: "ACTIVE",
+                category_id: catMap.get(item.cat),
+                brand_id: brandMap.get(item.brand),
+                description: formattedDesc,
+                specifications: item.specs,
+                product_variants: {
+                    create: {
+                        sku: `SKU-${Date.now()}-${count}`,
+                        option_name: "Standard Edition",
+                        price: item.price,
+                        cost_price: item.price * 0.75,
+                        stock_available: item.stockGood,
+                        stock_defect: item.stockDefect,
+                        weight_g: 500,
+                        length_cm: 30, width_cm: 20, height_cm: 10,
+                        scale: item.scale,
+                        material: item.mat,
+                        description: formattedDesc
+                    }
+                }
+            }
+        });
+        count++;
+        // console.log(`✅ [${count}/50] Added: ${item.name}`);
+    }
+    console.log(`✅ Đã nạp xong 50 sản phẩm Retail.`);
+
+    // 4. NẠP SẢN PHẨM PRE-ORDER (7 ITEMS)
+    const preorderItems = [
+        { name: "Metal Build Gundam Astray Red Frame Kai", price: 6500000, deposit: 1500000, date: "2026-12-25T00:00:00Z" },
+        { name: "Hot Toys Iron Man Mark 85 (Reissue)", price: 8200000, deposit: 2000000, date: "2026-10-10T00:00:00Z" },
+        { name: "PG Unleashed RX-178 Gundam Mk-II", price: 7200000, deposit: 1500000, date: "2027-01-15T00:00:00Z" },
+        { name: "MOSHOW MCT-J03 Date Masamune", price: 3500000, deposit: 1000000, date: "2026-09-20T00:00:00Z" },
+        { name: "ThreeZero DLX Optimus Prime (ROTB)", price: 5800000, deposit: 1500000, date: "2026-11-30T00:00:00Z" },
+        { name: "Nendoroid Furina (Genshin Impact)", price: 1350000, deposit: 300000, date: "2026-08-05T00:00:00Z" },
+        { name: "RG Akatsuki Gundam (Oowashi Pack)", price: 1850000, deposit: 500000, date: "2026-11-15T00:00:00Z" }
+    ];
+
+    for (const p of preorderItems) {
+        await prisma.products.create({
+            data: {
+                name: p.name,
+                type_code: "PREORDER",
+                status_code: "ACTIVE",
+                category_id: catMap.get("Action Figures") || catMap.get("Model Kits"),
+                brand_id: brandMap.get("Bandai") || brandMap.get("ThreeZero"),
+                description: `Sản phẩm phiên bản giới hạn sắp ra mắt. Hãy đặt cọc ngay để đảm bảo có hàng sớm nhất với mức giá ưu đãi nhất.`,
+                product_variants: {
+                    create: {
+                        sku: `PRE-${Date.now()}-${p.name.substring(0,3).toUpperCase()}`,
+                        option_name: "Pre-order Slot",
+                        price: p.price,
+                        cost_price: p.price * 0.7,
+                        stock_available: 50,
+                        weight_g: 1000,
+                        product_preorder_configs: {
+                            create: {
+                                deposit_amount: p.deposit,
+                                full_price: p.price,
+                                release_date: p.date,
+                                total_slots: 50,
+                                sold_slots: 0,
+                                max_qty_per_user: 2
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
+    console.log(`✅ Đã nạp xong 7 sản phẩm Pre-order.`);
+
+    // 5. NẠP SẢN PHẨM BLINDBOX (5 TIERED)
+    // Lấy ID một vài món hàng Retail xịn làm phần thưởng Big Win/Legendary
+    const highEndVariants = await prisma.product_variants.findMany({
+        where: { price: { gte: 3000000 } },
+        take: 5
+    });
+
+    const commonVariants = await prisma.product_variants.findMany({
+        where: { price: { lte: 1000000 } },
+        take: 10
+    });
+
+    const blindboxConfigs = [
+        { name: "Blindbox: Beginner Luck (350k)", price: 350000 },
+        { name: "Blindbox: Collector Series (850k)", price: 850000 },
+        { name: "Blindbox: Professional Gacha (1.5M)", price: 1500000 },
+        { name: "Blindbox: Premium Whale (3.5M)", price: 3500000 },
+        { name: "Blindbox: Legendary Artifacts (7M)", price: 7000000 }
+    ];
+
+    for (let i = 0; i < blindboxConfigs.length; i++) {
+        const config = blindboxConfigs[i];
+        
+        // Cấu hình Tier mẫu
+        const tierConfig = [
+            { tier: "LEGENDARY", rate: 2, variants: [highEndVariants[i % highEndVariants.length]?.variant_id] },
+            { tier: "BIG_WIN", rate: 5, variants: [highEndVariants[(i+1) % highEndVariants.length]?.variant_id] },
+            { tier: "FAIR", rate: 23, variants: commonVariants.slice(0, 5).map(v => v.variant_id) },
+            { tier: "COMMON", rate: 70, variants: commonVariants.slice(5, 10).map(v => v.variant_id) }
+        ];
+
+        const bb = await prisma.products.create({
+            data: {
+                name: config.name,
+                type_code: "BLINDBOX",
+                status_code: "ACTIVE",
+                category_id: catMap.get("Model Kits"),
+                brand_id: brandMap.get("Bandai"),
+                description: `Thử thách vận may của bạn với gói Blindbox ${config.name}. Có cơ hội nhận được các sản phẩm giá trị lên tới hàng triệu đồng!`,
+                product_blindboxes: {
+                    create: {
+                        price: config.price,
+                        min_value: config.price * 0.5,
+                        max_value: config.price * 5,
+                        tier_config: tierConfig
+                    }
+                }
+            }
+        });
+    }
+
+    console.log(`✅ Đã nạp xong 5 sản phẩm Blindbox.`);
+    console.log('🎉 TỔNG LỰC NẠP DỮ LIỆU HOÀN TẤT. CHÚC BẠN BẢO VỆ ĐỒ ÁN THÀNH CÔNG!');
 }
 
-seed()
-  .catch((e) => {
-    console.error('❌ Seeding Error:', e);
-    // process.exit(1);
-  })
-  .finally(async () => {
-    await prisma.$disconnect();
-  });
+main()
+    .catch((e) => {
+        console.error('❌ Seeding Error:', e);
+    })
+    .finally(async () => {
+        await prisma.$disconnect();
+    });
