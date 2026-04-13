@@ -525,8 +525,8 @@ export class OrdersService {
             if (!rItem.giveaway_claim_id && Math.abs(Number(price) - authoritativePrice) > 1) {
               this.logger.error(`[PRICE MISMATCH] SKU: ${variant.sku} | Client Sent: ${price} | Backend Expected: ${authoritativePrice} | _backendVerifiedPrice: ${_backendVerifiedPrice} | LivestreamId: ${livestreamId}`);
             }
-            // SECURITY: Reject if price deviates
-            if (Math.abs(Number(price) - authoritativePrice) > 1) {
+            // SECURITY: Reject if price deviates (skip for giveaway prizes — price is always 0)
+            if (!rItem.giveaway_claim_id && Math.abs(Number(price) - authoritativePrice) > 1) {
               const appliedPromoId = variant.product_promotion_id;
               this.logger.error(`[PRICE MISMATCH] SKU: ${variant.sku} | Client Sent: ${price} | Backend Expected: ${authoritativePrice} | _backendVerifiedPrice: ${_backendVerifiedPrice} | Applied Promo ID: ${appliedPromoId} | LivestreamId: ${livestreamId}`);
               throw new BadRequestException(`Product price for ${variant.sku} has changed. Please update your cart.`);
