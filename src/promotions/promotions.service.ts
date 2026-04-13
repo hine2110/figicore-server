@@ -32,9 +32,12 @@ export class PromotionsService {
     });
 
     // ── Fire-and-forget: Send targeted emails without blocking the HTTP response ──
-    this._dispatchTargetedPromotionEmails(promotion).catch(err =>
-      this.logger.error(`[PromotionsService] Background email dispatch failed for promotion #${promotion.promotion_id}`, err)
-    );
+    // Only send emails if a specific rank is targeted. We don't want to spam everyone for "All Customer" vouchers.
+    if (promotion.apply_rank_code) {
+      this._dispatchTargetedPromotionEmails(promotion).catch((err) =>
+        this.logger.error(`[PromotionsService] Background email dispatch failed for promotion #${promotion.promotion_id}`, err),
+      );
+    }
 
     return promotion;
   }
