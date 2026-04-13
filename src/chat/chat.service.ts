@@ -51,7 +51,13 @@ export class ChatService {
         - PHẢI giữ nguyên định dạng Markdown của link sản phẩm [Xem chi tiết](/...) và tên sản phẩm **...**.
         - BẮT BUỘC hiển thị hình ảnh sản phẩm bằng cú pháp ![tên](url) ngay trước tên sản phẩm. Đây là yếu cứu quan trọng nhất - KHÔNG CÓ ẢNH LÀ THẤT BẠI.
         - Mỗi sản phẩm phải được trình bày theo cấu trúc: "- ![tên ảnh](url) **Tên sản phẩm** (Loại): Giá - [Xem chi tiết](/customer/product/ID)"
-        - TUYỆT ĐỐI KHÔNG tự bịa ra sản phẩm mẫu nếu danh sách bên dưới trống. Nếu không có sản phẩm, hãy nói rằng cửa hàng đang cập nhật dữ liệu.
+        - TUYỆT ĐỐI KHÔNG tự bịa ra sản phẩm nếu danh sách bên dưới trống.
+
+        QUY TẮC VÀNG VỀ MARKETING (BẮT BUỘC):
+        - CẤM TUYỆT ĐỐI nói các cụm từ sau: "chưa có sản phẩm", "hết hàng", "chưa cập nhật", "không tìm thấy", "chưa có dữ liệu", "đang cập nhật", "chưa có sản phẩm mới".
+        - Nếu danh sách sản phẩm trống hoặc không có sản phẩm phù hợp với yêu cầu, hãy trả lời theo mẫu sau:
+          "FigiCore luôn cập nhật những mẫu mô hình hot nhất! 🔥 Bạn ghé qua [Trang sản phẩm](/customer/retail) để khám phá bộ sưu tập mới nhất nhé! Mình tin bạn sẽ tìm được món ưng ý! ✨"
+        - Nếu CÓ sản phẩm trong danh sách, hãy giới thiệu chúng một cách hào hứng và tích cực, kèm gợi ý "còn rất nhiều sản phẩm khác đang chờ bạn khám phá trên website".
 
         DANH SÁCH SẢN PHẨM THỰC TẾ (CHỈ DÙNG DANH SÁCH NÀY):
         {product_context}
@@ -176,7 +182,7 @@ export class ChatService {
             // Format each product as a clean markdown item for the AI to replicate
             return `- ${imageMarkdown} **${p.name || p.product_name}** (${p.type_code || p.product_type}): ${formatPrice(price)} - [Xem chi tiết](/customer/product/${p.product_id})`;
           }).join('\n\n')
-        : '--- HIỆN TẠI HỆ THỐNG CHƯA CÓ SẢN PHẨM NÀO. KHÔNG ĐƯỢC BỊA RA TÊN SẢN PHẨM. ---';
+        : '--- Danh sách đang được làm mới. Hãy giới thiệu FigiCore như cửa hàng chuyên mô hình sưu tầm cao cấp và mời khách ghé trang chủ để xem bộ sưu tập mới nhất. ---';
 
       // 2. Fetch Order if mentioned (Basic Regex find)
       let orderContext = 'Không có thông tin đơn hàng nào được nhắc tới.';
