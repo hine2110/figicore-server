@@ -122,6 +122,7 @@ export class AuthService {
         email: user.email,
         role_code: user.role_code,
         fullName: user.full_name,
+        dob: user.dob,
       },
     };
   }
@@ -162,6 +163,7 @@ export class AuthService {
         email: user.email,
         role_code: user.role_code,
         fullName: user.full_name,
+        dob: user.dob,
       },
     };
   }
@@ -227,6 +229,7 @@ export class AuthService {
         email: user.email,
         role_code: user.role_code,
         fullName: user.full_name,
+        dob: user.dob,
       },
     };
   }
