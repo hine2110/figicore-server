@@ -545,6 +545,13 @@ export class UsersService {
       if (changes.full_name) updateData.full_name = changes.full_name;
       if (changes.phone) updateData.phone = this.encryption.encryptDeterministic(changes.phone);
       if (changes.email) updateData.email = this.encryption.encryptDeterministic(changes.email);
+      
+      if (changes.dob) {
+        if (user.dob && new Date(user.dob).toISOString().split('T')[0] !== new Date(changes.dob).toISOString().split('T')[0]) {
+          throw new BadRequestException('Date of Birth cannot be changed once set.');
+        }
+        updateData.dob = new Date(changes.dob);
+      }
 
       await this.prisma.users.update({
         where: { user_id: userId },
