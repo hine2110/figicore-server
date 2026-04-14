@@ -641,10 +641,42 @@ export class OrdersService {
         // --- D. CLEANUP: Clear Cart & Consume Vouchers ---
         const cart = await tx.carts.findFirst({ where: { user_id: userId, deleted_at: null } });
         if (cart) {
-          const allVariantIds = items.map((i: any) => i.variant_id);
-          await tx.cart_items.deleteMany({
-            where: { cart_id: cart.cart_id, variant_id: { in: allVariantIds } }
-          });
+          for (const vi of validatedItems) {
+            if (vi.giveaway_claim_id) {
+               await tx.cart_items.deleteMany({
+                 where: { cart_id: cart.cart_id, giveaway_claim_id: vi.giveaway_claim_id }
+               });
+               continue;
+            }
+
+            const isFs = vi._applied_flash_sale || false;
+            const targetRow = await tx.cart_items.findFirst({
+              where: {
+                cart_id: cart.cart_id,
+                variant_id: vi.variant_id,
+                livestream_id: vi.livestreamId || null,
+                is_flash_sale: isFs,
+                deleted_at: null
+              }
+            });
+
+            if (targetRow) {
+              const currentQuantity = targetRow.quantity || 1;
+              if (currentQuantity <= vi.quantity) {
+                await tx.cart_items.delete({ where: { item_id: targetRow.item_id } });
+              } else {
+                await tx.cart_items.update({
+                  where: { item_id: targetRow.item_id },
+                  data: { quantity: currentQuantity - vi.quantity }
+                });
+              }
+            } else {
+              // Fallback
+              await tx.cart_items.deleteMany({
+                where: { cart_id: cart.cart_id, variant_id: vi.variant_id, livestream_id: vi.livestreamId || null }
+              });
+            }
+          }
         }
 
         // --- E. UPDATE GIVEAWAY CLAIMS ---
@@ -1800,6 +1832,7 @@ export class OrdersService {
               where: { item_id: promoItem.item_id },
               data: { sold: { decrement: item.quantity } }
             });
+            (item as any)._was_flash_sale = true;
             this.logger.log(`[Cancel] Restored ${item.quantity} quota to Flash Sale Item #${promoItem.item_id}`);
           }
 
@@ -1847,12 +1880,13 @@ export class OrdersService {
               });
             } else {
               // Note: payment_option might be stored on order_items depending on schema, if not rely on order level.
-              // We'll safely merge by variant and livestream.
-              const key = `${item.variant_id}-${item.livestream_id || 'null'}`;
+              // We'll safely merge by variant, livestream, and RETAIL flash sale status.
+              const isFs = (item as any)._was_flash_sale || false;
+              const key = `${item.variant_id}-${item.livestream_id || 'null'}-${isFs}`;
               if (mergedItems.has(key)) {
                 mergedItems.get(key).quantity += item.quantity;
               } else {
-                mergedItems.set(key, { ...item });
+                mergedItems.set(key, { ...item, _is_flash_sale: isFs });
               }
             }
           }
@@ -1863,6 +1897,7 @@ export class OrdersService {
                    cart_id: cart.cart_id,
                    variant_id: v.variant_id,
                    livestream_id: v.livestream_id,
+                   is_flash_sale: v._is_flash_sale,
                    deleted_at: null
                }
             });
@@ -1878,7 +1913,8 @@ export class OrdersService {
                        cart_id: cart.cart_id,
                        variant_id: v.variant_id,
                        quantity: v.quantity,
-                       livestream_id: v.livestream_id
+                       livestream_id: v.livestream_id,
+                       is_flash_sale: v._is_flash_sale
                    }
                });
             }
