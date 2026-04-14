@@ -86,6 +86,12 @@ export class OrdersController {
     return this.ordersService.findMyContracts(req.user.user_id);
   }
 
+  @Get('analytics/kpi')
+  @UseGuards(AuthGuard('jwt'))
+  getDashboardKPIs() {
+    return this.ordersService.getDashboardKPIs();
+  }
+
   @Get('contracts/:id')
   @UseGuards(AuthGuard('jwt'))
   getContract(@Req() req, @Param('id') id: string) {

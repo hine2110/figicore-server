@@ -384,7 +384,17 @@ export class OrdersService {
         if (preOrderItems.length > 0) {
           for (const pItem of preOrderItems) {
             const { variant, quantity } = pItem;
-            await this.validateAntiScalping(tx, userId, variant.variant_id, quantity, variant.product_preorder_configs?.max_qty_per_user || 2);
+
+            // --- GUARD: Kiểm tra hạn đặt cọc ---
+            const preConfig = variant.product_preorder_configs;
+            if (preConfig?.booking_end_date && new Date() > new Date(preConfig.booking_end_date)) {
+              throw new BadRequestException(
+                `Thời gian đặt cọc cho sản phẩm "${variant.sku}" đã kết thúc. Pre-order này không còn nhận đơn mới.`
+              );
+            }
+            // ------------------------------------
+
+            await this.validateAntiScalping(tx, userId, variant.variant_id, quantity, preConfig?.max_qty_per_user || 2);
 
             const result = await tx.$executeRaw`
                 UPDATE "product_preorder_configs"
@@ -394,6 +404,7 @@ export class OrdersService {
             `;
 
             if (Number(result) === 0) throw new BadRequestException(`Pre-order sold out for item: ${variant.sku}`);
+
 
             const requestedOption = pItem.payment_option || pItem.paymentOption;
             let isFullPayment = requestedOption === 'FULL_PAYMENT';
@@ -2214,5 +2225,73 @@ export class OrdersService {
       },
       orderBy: { created_at: 'desc' }
     });
+  }
+
+  // --- WAREHOUSE & BUSINESS KPI DASHBOARD ---
+  async getDashboardKPIs() {
+    const now = new Date();
+    const startOfCurrentMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    
+    const startOfPreviousMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const endOfPreviousMonth = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
+
+    const getStatsForTimeframe = async (start: Date, end?: Date) => {
+      const dateFilter = end ? { gte: start, lte: end } : { gte: start };
+
+      const [
+        packedOrders, totalOrders, totalOnlineOrders, totalLivestreamOrders,
+        onlineOrders, livestreamOrders, preorderContracts, shipments, collectedShipping,
+      ] = await Promise.all([
+        this.prisma.orders.count({ where: { packed_at: dateFilter, deleted_at: null } }),
+        this.prisma.orders.count({ where: { created_at: dateFilter, deleted_at: null } }),
+        this.prisma.orders.count({ where: { channel_code: 'WEB', created_at: dateFilter, deleted_at: null } }),
+        this.prisma.orders.count({ where: { channel_code: 'LIVESTREAM', created_at: dateFilter, deleted_at: null } }),
+        this.prisma.orders.aggregate({ _sum: { paid_amount: true }, where: { channel_code: 'WEB', created_at: dateFilter, deleted_at: null } }),
+        this.prisma.orders.aggregate({ _sum: { paid_amount: true }, where: { channel_code: 'LIVESTREAM', created_at: dateFilter, deleted_at: null } }),
+        this.prisma.preorder_contracts.aggregate({ _sum: { deposit_amount_paid: true }, _count: { contract_id: true }, where: { created_at: dateFilter } }),
+        this.prisma.shipments.aggregate({ _sum: { shipping_fee: true }, where: { created_at: dateFilter } }),
+        this.prisma.orders.aggregate({ _sum: { shipping_fee: true }, where: { created_at: dateFilter, deleted_at: null, shipments: { isNot: null } } }),
+      ]);
+
+      return {
+        packedOrders, totalOrders, totalOnlineOrders, totalLivestreamOrders,
+        onlineRevenue: Number(onlineOrders._sum.paid_amount || 0),
+        livestreamRevenue: Number(livestreamOrders._sum.paid_amount || 0),
+        preorderCount: preorderContracts._count.contract_id,
+        preorderRevenue: Number(preorderContracts._sum.deposit_amount_paid || 0),
+        shippingCollected: Number(collectedShipping._sum.shipping_fee || 0),
+        shippingPaid: Number(shipments._sum.shipping_fee || 0),
+      };
+    };
+
+    const activePreorderContracts = await this.prisma.preorder_contracts.count({
+      where: { status_code: { in: ['WAITING_DEPOSIT', 'DEPOSITED'] } },
+    });
+
+    const currentMonth = await getStatsForTimeframe(startOfCurrentMonth);
+    const previousMonth = await getStatsForTimeframe(startOfPreviousMonth, endOfPreviousMonth);
+
+    const calculateGrowth = (current: number, previous: number) => {
+      if (previous === 0) return current > 0 ? 100 : 0;
+      return Number((((current - previous) / previous) * 100).toFixed(1));
+    };
+
+    return {
+      currentMonth,
+      previousMonth,
+      activePreorderContracts,
+      growth: {
+        totalOrders: calculateGrowth(currentMonth.totalOrders, previousMonth.totalOrders),
+        packedOrders: calculateGrowth(currentMonth.packedOrders, previousMonth.packedOrders),
+        onlineRevenue: calculateGrowth(currentMonth.onlineRevenue, previousMonth.onlineRevenue),
+        livestreamRevenue: calculateGrowth(currentMonth.livestreamRevenue, previousMonth.livestreamRevenue),
+        preorderRevenue: calculateGrowth(currentMonth.preorderRevenue, previousMonth.preorderRevenue),
+        preorderCount: calculateGrowth(currentMonth.preorderCount, previousMonth.preorderCount),
+        shippingMargin: calculateGrowth(
+          currentMonth.shippingCollected - currentMonth.shippingPaid,
+          previousMonth.shippingCollected - previousMonth.shippingPaid
+        )
+      }
+    };
   }
 }
