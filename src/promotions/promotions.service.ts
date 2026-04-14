@@ -228,9 +228,21 @@ export class PromotionsService {
       if (!customer) {
         throw new ForbiddenException('Customer profile not found.');
       }
-      if (customer.current_rank_code !== promotion.apply_rank_code) {
+
+      const rankCode = customer.current_rank_code || 'BRONZE';
+
+      // Load rank hierarchy
+      const rankLookups = await this.prisma.system_lookups.findMany({
+        where: { type: 'CUSTOMER_RANK' },
+      });
+      const rankOrderMap = new Map(rankLookups.map((r) => [r.code, r.sort_order]));
+
+      const userRankOrder = rankOrderMap.get(rankCode) || 1;
+      const requiredRankOrder = rankOrderMap.get(promotion.apply_rank_code) || 0;
+
+      if (userRankOrder < requiredRankOrder) {
         throw new ForbiddenException(
-          `This voucher is exclusively for ${promotion.apply_rank_code} members. Your current rank is ${customer.current_rank_code || 'BRONZE'}.`
+          `This voucher is exclusively for ${promotion.apply_rank_code} members or above. Your current rank is ${rankCode}.`
         );
       }
     }

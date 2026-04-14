@@ -50,6 +50,7 @@ import { PayrollDisputesModule } from './payroll-disputes/payroll-disputes.modul
 import { LivestreamsModule } from './livestreams/livestreams.module';
 import { InventoryAnalyticsModule } from './inventory-analytics/inventory-analytics.module';
 import { BirthdayCronModule } from './cron/birthday-cron.module';
+import { DashboardModule } from './dashboard/dashboard.module';
 
 
 @Module({
@@ -105,6 +106,7 @@ import { BirthdayCronModule } from './cron/birthday-cron.module';
     LivestreamsModule,
     InventoryAnalyticsModule,
     BirthdayCronModule,
+    DashboardModule,
   ],
 
   controllers: [AppController],
