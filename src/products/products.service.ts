@@ -251,15 +251,21 @@ export class ProductsService {
           const createdVariant = await tx.product_variants.create({ data: variantData });
 
           if (isPreorder && variantDto.preorder_config) {
+            // Auto-calculate booking_end_date = ngày tạo + 14 ngày
+            const bookingEndDate = new Date();
+            bookingEndDate.setDate(bookingEndDate.getDate() + 14);
+
             await tx.product_preorder_configs.create({
               data: {
                 variant_id: createdVariant.variant_id,
                 deposit_amount: variantDto.preorder_config.deposit_amount,
                 full_price: variantDto.preorder_config.full_price,
-                total_slots: variantDto.preorder_config.total_slots,
+                total_slots: variantDto.preorder_config.total_slots || 50,
                 sold_slots: 0,
                 max_qty_per_user: variantDto.preorder_config.max_qty_per_user ?? 2,
                 release_date: preorder?.release_date ? new Date(preorder.release_date) : null,
+                booking_end_date: bookingEndDate,
+                extension_count: 0,
               },
             });
           }
@@ -1384,5 +1390,47 @@ export class ProductsService {
     };
 
     return [tier1, tier2, tier3];
+  }
+
+  // --- PREORDER: GIA HẠN BOOKING WINDOW ---
+  async extendPreorderBooking(variantId: number): Promise<any> {
+    const config = await this.prisma.product_preorder_configs.findUnique({
+      where: { variant_id: variantId },
+    });
+
+    if (!config) {
+      throw new BadRequestException('Không tìm thấy cấu hình Pre-order cho variant này.');
+    }
+
+    if (config.extension_count >= 1) {
+      throw new BadRequestException(
+        'Pre-order này đã được gia hạn 1 lần (tối đa). Tổng thời gian đặt cọc là 4 tuần.'
+      );
+    }
+
+    // Gia hạn từ booking_end_date cũ + 14 ngày
+    const currentEnd = config.booking_end_date ? new Date(config.booking_end_date) : new Date();
+    const newEndDate = new Date(currentEnd);
+    newEndDate.setDate(newEndDate.getDate() + 14);
+
+    const updated = await this.prisma.product_preorder_configs.update({
+      where: { variant_id: variantId },
+      data: {
+        booking_end_date: newEndDate,
+        extension_count: { increment: 1 },
+        updated_at: new Date(),
+      },
+    });
+
+    this.logger.log(
+      `[PREORDER EXTEND] variant_id=${variantId} | New booking_end_date=${newEndDate.toISOString()} | extension_count=1`
+    );
+
+    return {
+      variant_id: variantId,
+      booking_end_date: newEndDate,
+      extension_count: updated.extension_count,
+      message: 'Gia hạn thành công. Hạn đặt cọc mới: ' + newEndDate.toLocaleDateString('vi-VN'),
+    };
   }
 }
