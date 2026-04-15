@@ -1104,7 +1104,10 @@ export class OrdersService {
       // --- NEW: SYNC AUCTION STATUS ---
       const updatedOrdersForAuction = await this.prisma.orders.findMany({
         where: { payment_ref_code: paymentRefCode, user_id: userId },
-        include: { users: true }
+        include: { 
+          users: true,
+          order_items: { include: { product_variants: { include: { products: true } } } } 
+        }
       });
 
       for (const order of updatedOrdersForAuction) {
@@ -1176,6 +1179,8 @@ export class OrdersService {
           const commercialTotal = commercialItems.reduce((sum, i) => sum + Number(i.total_price), 0);
 
           this.livestreamLiveGateway.broadcastOrder(`LIVE-${lsId}`, {
+            order_id: order.order_id,
+            status: order.status_code,
             customer_name: customerName,
             product_name: extraCount > 0 ? `${mainName} + ${extraCount} items` : mainName,
             quantity: commercialItems.reduce((sum, i) => sum + i.quantity, 0),
@@ -1191,6 +1196,8 @@ export class OrdersService {
             const pName = gItem.product_variants?.products?.name || gItem.product_variants?.option_name || 'Giải thưởng';
             // We use a different event or flag it as Giveaway
             this.livestreamLiveGateway.broadcastOrder(`LIVE-${lsId}`, {
+              order_id: `G-${order.order_id}`,
+              status: order.status_code,
               customer_name: customerName,
               product_name: pName,
               quantity: gItem.quantity,
@@ -1433,6 +1440,10 @@ export class OrdersService {
           }
         },
         addresses: true,
+        packer: {
+          include: { users: { select: { full_name: true, avatar_url: true } } }
+        },
+        shipments: true,
       }
     });
 

@@ -274,6 +274,8 @@ export class LivestreamLiveGateway implements OnGatewayConnection, OnGatewayDisc
   }
 
   broadcastOrder(roomId: string, order: {
+    order_id?: number | string;
+    status?: string;
     customer_name: string;
     product_name: string;
     quantity: number;
