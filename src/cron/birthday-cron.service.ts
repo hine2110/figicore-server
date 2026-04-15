@@ -12,7 +12,7 @@ export class BirthdayCronService {
     private readonly prisma: PrismaService,
     private readonly mailService: MailService,
     private readonly encryption: EncryptionService,
-  ) {}
+  ) { }
 
   /**
    * Runs daily at midnight.
@@ -20,7 +20,7 @@ export class BirthdayCronService {
    *
    * For local testing, change to: @Cron(CronExpression.EVERY_MINUTE)
    */
-  @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
+  @Cron('* * * * *')
   async handleBirthdayVouchers() {
     const now = new Date();
     const currentMonth = now.getMonth() + 1; // 1-12
@@ -89,25 +89,25 @@ export class BirthdayCronService {
       // Create a unique promotion for this user
       const promotion = await tx.promotions.create({
         data: {
-          code:               voucherCode,
-          discount_value:      10,              // 10% discount
-          discount_type:       'PERCENTAGE',
+          code: voucherCode,
+          discount_value: 10,              // 10% discount
+          discount_type: 'PERCENTAGE',
           max_discount_amount: 100000,          // Cap at 100,000 VND
-          min_order_value:     0,               // No min order for birthday gift
-          max_quantity:        1,               // Single-use
-          collected_quantity:  1,
-          is_public:           false,           // Private (not shown in collectible list)
-          start_date:          startDate,
-          end_date:            endDate,
+          min_order_value: 0,               // No min order for birthday gift
+          max_quantity: 1,               // Single-use
+          collected_quantity: 1,
+          is_public: false,           // Private (not shown in collectible list)
+          start_date: startDate,
+          end_date: endDate,
         },
       });
 
       // Insert directly into user wallet as COLLECTED
       await tx.user_vouchers.create({
         data: {
-          user_id:      user.user_id,
+          user_id: user.user_id,
           promotion_id: promotion.promotion_id,
-          status:       'COLLECTED', 
+          status: 'COLLECTED',
         },
       });
 

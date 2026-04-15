@@ -1,17 +1,17 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, Req } from '@nestjs/common';
 import { ShipmentsService } from './shipments.service';
 import { CreateShipmentDto } from './dto/create-shipment.dto';
 import { UpdateShipmentDto } from './dto/update-shipment.dto';
+import { AuthGuard } from '@nestjs/passport';
 
 @Controller('shipments')
 export class ShipmentsController {
   constructor(private readonly shipmentsService: ShipmentsService) { }
 
   @Post('create/:orderId')
-  createShipment(@Param('orderId') orderId: string, @Body() body: { staffId?: number, videoUrl?: string }) {
-    // Assuming staffId is passed in body, or extracted from Request User in a real app with Guards
-    // For now, we accept it from body or default to a dummy if needed
-    return this.shipmentsService.createShipment(+orderId, body.staffId || 1, body.videoUrl);
+  @UseGuards(AuthGuard('jwt'))
+  createShipment(@Req() req, @Param('orderId') orderId: string, @Body() body: { videoUrl?: string }) {
+    return this.shipmentsService.createShipment(+orderId, req.user.user_id, body.videoUrl);
   }
 
   @Post()

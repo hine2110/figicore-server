@@ -24,20 +24,23 @@ export class GHNWebhookController {
             case 'picking':
             case 'picked':
             case 'storing':
+                // State 1: Shipper picked up and delivering
                 await this.ordersService.updateStatusByTrackingCode(OrderCode, 'SHIPPING');
                 break;
 
             case 'delivered':
-                // Critical: Complete Order + Loyalty + Fee Sync
+                // State 2: Delivered successfully
                 await this.ordersService.completeOrder(OrderCode, TotalFee);
                 break;
 
             case 'return':
-            case 'returning': // Handling both variations just in case
+            case 'returning':
+                // State 3: Shipper picked up return items
                 await this.ordersService.updateStatusByTrackingCode(OrderCode, 'RETURNING');
                 break;
 
             case 'returned':
+                // State 4: Delivered return items to warehouse
                 await this.ordersService.updateStatusByTrackingCode(OrderCode, 'RETURNED');
                 break;
 

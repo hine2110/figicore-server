@@ -60,6 +60,7 @@ model cart_items {
   updated_at       DateTime?        @default(now()) @db.Timestamp(6)
   deleted_at       DateTime?        @db.Timestamp(6)
   giveaway_claim_id Int?
+  is_flash_sale    Boolean?         @default(false)
   carts            carts            @relation(fields: [cart_id], references: [cart_id], onDelete: NoAction, onUpdate: NoAction)
   livestreams      livestreams?     @relation(fields: [livestream_id], references: [id], onUpdate: NoAction)
   product_variants product_variants @relation(fields: [variant_id], references: [variant_id], onDelete: Cascade, onUpdate: NoAction)
@@ -145,7 +146,8 @@ model employees {
   users                   users                     @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
   inventory_receipts      inventory_receipts[]
   leave_requests          leave_requests[]
-  orders                  orders[]
+  orders                  orders[]                  @relation("OrderCreator")
+  packed_orders           orders[]                  @relation("OrderPacker")
   payroll_disputes        payroll_disputes[]
   approved_payrolls       payrolls[]                @relation("PayrollApprover")
   reviewed_payrolls       payrolls[]                @relation("PayrollReviewer")
@@ -288,6 +290,7 @@ model orders {
   payment_ref_code      String?                @db.VarChar(50)
   status_code           String?                @default("PENDING") @db.VarChar(50)
   packing_video_urls    Json?
+  packed_by_staff_id    Int?
   packed_at             DateTime?              @db.Timestamp(6)
   note                  String?
   cash_received         Decimal?               @db.Decimal(15, 2)
@@ -298,7 +301,8 @@ model orders {
   feedbacks             feedbacks[]
   order_items           order_items[]
   order_status_history  order_status_history[]
-  employees             employees?             @relation(fields: [created_by_staff_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  employees             employees?             @relation("OrderCreator", fields: [created_by_staff_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  packer                employees?             @relation("OrderPacker", fields: [packed_by_staff_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
   promotions            promotions?            @relation("DiscountPromotionRel", fields: [promotion_id], references: [promotion_id], onDelete: NoAction, onUpdate: NoAction)
   pos_sessions          pos_sessions?          @relation(fields: [session_id], references: [session_id], onDelete: NoAction, onUpdate: NoAction)
   addresses             addresses?             @relation(fields: [shipping_address_id], references: [address_id], onDelete: NoAction, onUpdate: NoAction)
@@ -394,10 +398,12 @@ model product_preorder_configs {
   deposit_amount   Decimal          @default(0) @db.Decimal(15, 2)
   full_price       Decimal          @default(0) @db.Decimal(15, 2)
   release_date     DateTime?        @db.Timestamp(6)
-  total_slots      Int              @default(0)
+  total_slots      Int              @default(50)
   sold_slots       Int              @default(0)
   max_qty_per_user Int              @default(1)
   stock_held       Int              @default(0)
+  booking_end_date DateTime?        @db.Timestamp(6)  // Hạn đặt cọc (auto = created_at + 14 ngày)
+  extension_count  Int              @default(0)        // Số lần đã gia hạn (tối đa 1)
   created_at       DateTime?        @default(now())
   updated_at       DateTime?        @default(now())
   product_variants product_variants @relation(fields: [variant_id], references: [variant_id], onDelete: Cascade)

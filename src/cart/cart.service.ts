@@ -178,8 +178,7 @@ export class CartService {
       }
     }
 
-    // 3. Upsert Item
-    // FIX: Must check payment_option to avoid merging Deposit vs Full Payment
+    // 3. Upsert Item (Flash Sale Split Logic)
     const paymentOption = dto.paymentOption || 'DEPOSIT';
 
     // FIX: User cannot have the same variant with DIFFERENT payment options in the cart.
@@ -196,121 +195,103 @@ export class CartService {
       throw new BadRequestException(`Bạn đã có sản phẩm này trong giỏ hàng với hình thức thanh toán khác (${conflictingItem.payment_option}). Vui lòng xóa sản phẩm cũ trước khi chọn hình thức mới.`);
     }
 
-    const existingItem = await this.prisma.cart_items.findFirst({
-      where: {
-        cart_id: cart.cart_id,
-        variant_id: variantId,
-        payment_option: paymentOption, // <--- CRITICAL FIX
-        livestream_id: dto.livestreamId || null,
-        deleted_at: null
-      }
-    });
+    const promo = variant.product_promotions;
+    const isFlashSaleActive = this.isActivePromo(promo) && promo?.is_flash_sale;
 
-    if (existingItem) {
-      // If payment option differs -> Block (Backend Double Check)
-      // Note: dto should have paymentOption. If not provided, default? 
-      // Current DTO might not have paymentOption for add? Let's check DTO.
-      // Assuming logic was handled in frontend, but helpful to enforce here if we had the field.
+    let fsAddQty = 0;
+    let regAddQty = 0;
 
-      const newQuantity = (existingItem.quantity || 1) + quantity;
-
-      // Re-validate for the TOTAL accumulated quantity
-      if (variant.products.type_code === 'PREORDER' || variant.product_preorder_configs) {
-        // Re-check user limit
-        const def = variant.product_preorder_configs;
-        if (def?.max_qty_per_user && newQuantity > def.max_qty_per_user) {
-          throw new BadRequestException(`Limit exceeded. You include this add, total would be ${newQuantity}. Max: ${def.max_qty_per_user}`);
-        }
-
-        const currentSold = def?.sold_slots || 0;
-        const limit = def?.total_slots || 0;
-        const availableSlots = Math.max(0, limit - currentSold);
-
-        if (quantity > availableSlots) {
-          throw new BadRequestException(`Cannot add ${quantity} more. Remaining slots: ${availableSlots}`);
-        }
-      } else if (variant.products.type_code === 'BLINDBOX') {
-        const bbConfig = await this.prisma.product_blindboxes.findFirst({
-          where: { product_id: variant.product_id }
-        });
-
-        if (bbConfig) {
-          const aggregation = await this.prisma.product_variants.aggregate({
-            _sum: { stock_available: true, stock_defect: true },
-            where: {
-              products: { type_code: 'RETAIL', status_code: 'ACTIVE' },
-              price: { gte: Number(bbConfig.min_value), lte: Number(bbConfig.max_value) },
-              deleted_at: null
-            }
-          });
-          const dynamicStock = (aggregation._sum.stock_available || 0) + (aggregation._sum.stock_defect || 0);
-
-          if (newQuantity > dynamicStock) {
-            throw new BadRequestException(`Rất tiếc, kho báu chỉ còn tổng cộng ${dynamicStock} sản phẩm. Giỏ hàng của bạn đang có ${existingItem.quantity}.`);
-          }
-        }
-      } else {
-        if (variant.stock_available < newQuantity) {
-          throw new BadRequestException(`Cannot add ${quantity} more. Max available: ${variant.stock_available}, In Cart: ${existingItem.quantity}`);
-        }
-
-// Standard Flash Sale Quota Check (Promotions Module)
-        const promo = variant.product_promotions;
-        if (this.isActivePromo(promo) && promo?.is_flash_sale) {
-          const fsItem = promo.promotion_items?.find((i: any) => i.variant_id === variantId);
-          if (fsItem) {
-            const limit = fsItem.quota - fsItem.sold;
-            if (newQuantity > limit) {
-              throw new BadRequestException(`Sản phẩm Flash Sale này chỉ được mua tối đa ${limit} suất (Kể cả giỏ hàng cũ). Bạn không thể thêm nữa.`);
-            }
-          }
-        }
-
-        // LIVESTREAM FLASH SALE Check (Livestream Module)
-        const activeLivestreamId = dto.livestreamId || existingItem.livestream_id;
-        if (activeLivestreamId) {
-          const liveConfig = await this.prisma.livestream_products.findUnique({
-            where: { livestream_id_variant_id: { livestream_id: Number(activeLivestreamId), variant_id: variantId } }
-          });
-          if (liveConfig && liveConfig.flash_sale_price && Number(liveConfig.flash_sale_price) > 0) {
-            const fsStockAvailable = liveConfig.flash_sale_stock || 0;
-            if (newQuantity > fsStockAvailable) {
-              throw new BadRequestException(`Suất Flash Sale hiện tại chỉ còn ${fsStockAvailable} suất. Bạn không thể tăng số lượng thêm nữa.`);
-            }
-          }
-        }
-      }
-
-      await this.prisma.cart_items.update({
-        where: { item_id: existingItem.item_id },
-        data: {
-          quantity: newQuantity,
-          updated_at: new Date(),
-          livestream_id: dto.livestreamId || existingItem.livestream_id
-        }
+    if (isFlashSaleActive && !dto.livestreamId && variant.products.type_code !== 'PREORDER' && variant.products.type_code !== 'BLINDBOX') {
+      const existingFsItem = await this.prisma.cart_items.findFirst({
+        where: { cart_id: cart.cart_id, variant_id: variantId, payment_option: paymentOption, is_flash_sale: true, deleted_at: null }
       });
+      const fsCurrentQty = existingFsItem?.quantity || 0;
+      const availableFsSlots = Math.max(0, 1 - fsCurrentQty);
+      
+      fsAddQty = Math.min(quantity, availableFsSlots);
+      regAddQty = quantity - fsAddQty;
     } else {
-      // NEW: Fresh Add - Check Current Flash Sale stock before creating
-      if (dto.livestreamId) {
-        const liveConfig = await this.prisma.livestream_products.findUnique({
-          where: { livestream_id_variant_id: { livestream_id: Number(dto.livestreamId), variant_id: variantId } }
-        });
-        if (liveConfig && liveConfig.flash_sale_price && Number(liveConfig.flash_sale_price) > 0) {
-          if (quantity > (liveConfig.flash_sale_stock || 0)) {
-            throw new BadRequestException(`Suất Flash Sale hiện tại chỉ còn ${liveConfig.flash_sale_stock || 0} sản phẩm. Vui lòng giảm số lượng.`);
-          }
-        }
-      }
+      regAddQty = quantity;
+    }
 
-      await this.prisma.cart_items.create({
-        data: {
-          cart_id: cart.cart_id,
-          variant_id: variantId,
-          quantity: quantity,
-          payment_option: dto.paymentOption || 'DEPOSIT',
-          livestream_id: dto.livestreamId || null
-        }
+    // Process FS
+    if (fsAddQty > 0) {
+      const existingFs = await this.prisma.cart_items.findFirst({
+        where: { cart_id: cart.cart_id, variant_id: variantId, payment_option: paymentOption, is_flash_sale: true, deleted_at: null }
       });
+      if (existingFs) {
+        await this.prisma.cart_items.update({
+          where: { item_id: existingFs.item_id },
+          data: { quantity: (existingFs.quantity || 1) + fsAddQty }
+        });
+      } else {
+        await this.prisma.cart_items.create({
+          data: { cart_id: cart.cart_id, variant_id: variantId, payment_option: paymentOption, quantity: fsAddQty, livestream_id: dto.livestreamId || null, is_flash_sale: true }
+        });
+      }
+    }
+
+    // Process REGULAR
+    if (regAddQty > 0) {
+      const existingReg = await this.prisma.cart_items.findFirst({
+        where: { cart_id: cart.cart_id, variant_id: variantId, payment_option: paymentOption, is_flash_sale: false, deleted_at: null }
+      });
+
+      if (existingReg) {
+         const newQuantity = (existingReg.quantity || 1) + regAddQty;
+
+         // Re-validate totals for Preorder/Blindbox/Livestream and normal stock
+         if (variant.products.type_code === 'PREORDER' || variant.product_preorder_configs) {
+           const def = variant.product_preorder_configs;
+           if (def?.max_qty_per_user && newQuantity > def.max_qty_per_user) {
+             throw new BadRequestException(`Limit exceeded. You include this add, total would be ${newQuantity}. Max: ${def.max_qty_per_user}`);
+           }
+           const availableSlots = Math.max(0, (def?.total_slots || 0) - (def?.sold_slots || 0));
+           if (regAddQty > availableSlots) {
+             throw new BadRequestException(`Cannot add ${regAddQty} more. Remaining slots: ${availableSlots}`);
+           }
+         } else if (variant.products.type_code === 'BLINDBOX') {
+           const bbConfig = await this.prisma.product_blindboxes.findFirst({ where: { product_id: variant.product_id } });
+           if (bbConfig) {
+             const aggregation = await this.prisma.product_variants.aggregate({
+               _sum: { stock_available: true, stock_defect: true },
+               where: {
+                 products: { type_code: 'RETAIL', status_code: 'ACTIVE' },
+                 price: { gte: Number(bbConfig.min_value), lte: Number(bbConfig.max_value) },
+                 deleted_at: null
+               }
+             });
+             const dynamicStock = (aggregation._sum.stock_available || 0) + (aggregation._sum.stock_defect || 0);
+             if (newQuantity > dynamicStock) {
+               throw new BadRequestException(`Rất tiếc, kho báu chỉ còn tổng cộng ${dynamicStock} sản phẩm.`);
+             }
+           }
+         } else {
+           if (variant.stock_available < newQuantity) {
+             throw new BadRequestException(`Cannot add ${regAddQty} more. Max available: ${variant.stock_available}`);
+           }
+           if (existingReg.livestream_id) {
+             const liveConfig = await this.prisma.livestream_products.findUnique({
+               where: { livestream_id_variant_id: { livestream_id: Number(existingReg.livestream_id), variant_id: variantId } }
+             });
+             if (liveConfig && liveConfig.flash_sale_price && Number(liveConfig.flash_sale_price) > 0) {
+               const fsStockAvailable = liveConfig.flash_sale_stock || 0;
+               if (newQuantity > fsStockAvailable) {
+                 throw new BadRequestException(`Suất Flash Sale livestream chỉ còn ${fsStockAvailable} suất.`);
+               }
+             }
+           }
+         }
+
+        await this.prisma.cart_items.update({
+          where: { item_id: existingReg.item_id },
+          data: { quantity: newQuantity, updated_at: new Date() }
+        });
+      } else {
+        await this.prisma.cart_items.create({
+          data: { cart_id: cart.cart_id, variant_id: variantId, payment_option: paymentOption, quantity: regAddQty, livestream_id: dto.livestreamId || null, is_flash_sale: false }
+        });
+      }
     }
 
     return this.getCart(userId);
@@ -471,7 +452,7 @@ export class CartService {
           if (this.isActivePromo(promo)) {
             if (promo.is_flash_sale) {
               const fsItem = promo.promotion_items?.find((i: any) => i.variant_id === variant.variant_id);
-              if (fsItem) {
+              if (fsItem && (item as any).is_flash_sale !== false) {
                 effectivePrice = Number(fsItem.flash_sale_price);
               }
             } else {
@@ -505,10 +486,11 @@ export class CartService {
         payment_option: (item as any).payment_option,
         sku: variant.sku,
         maxStock: variant.stock_available,
-        promotion: variant.product_promotions,
+        promotion: (variant.product_promotions?.is_flash_sale && (item as any).is_flash_sale === false) ? null : variant.product_promotions,
         livestream_id: item.livestream_id,
         is_live: (item as any).livestreams?.status === 'LIVE',
-        giveaway_claim_id: (item as any).giveaway_claim_id
+        giveaway_claim_id: (item as any).giveaway_claim_id,
+        is_flash_sale: (item as any).is_flash_sale
       };
     }));
 
@@ -578,6 +560,52 @@ export class CartService {
     // --- CRITICAL GIVEAWAY PROTECTION ---
     if ((item as any).giveaway_claim_id) {
       throw new BadRequestException("Số lượng sản phẩm quà tặng là cố định (1). Bạn không thể thay đổi số lượng này.");
+    }
+
+    const promo = item.product_variants.product_promotions;
+    const isFlashSaleActive = this.isActivePromo(promo) && promo?.is_flash_sale;
+    const isThisRowFlashSale = isFlashSaleActive && (item as any).is_flash_sale !== false;
+
+    // --- FLASH SALE SPLIT LOGIC ---
+    if (isThisRowFlashSale && quantity > 1) {
+      const excess = quantity - 1;
+      
+      // 1. Keep flash sale item at max 1
+      await this.prisma.cart_items.update({
+        where: { item_id: itemId },
+        data: { quantity: 1, is_flash_sale: true, updated_at: new Date() }
+      });
+
+      // 2. Add excess to regular price item
+      const regularItem = await this.prisma.cart_items.findFirst({
+        where: {
+          cart_id: cart.cart_id,
+          variant_id: item.variant_id,
+          payment_option: item.payment_option,
+          livestream_id: item.livestream_id,
+          is_flash_sale: false,
+          deleted_at: null
+        }
+      });
+
+      if (regularItem) {
+        await this.prisma.cart_items.update({
+          where: { item_id: regularItem.item_id },
+          data: { quantity: (regularItem.quantity || 1) + excess, updated_at: new Date() }
+        });
+      } else {
+        await this.prisma.cart_items.create({
+          data: {
+             cart_id: cart.cart_id,
+             variant_id: item.variant_id,
+             quantity: excess,
+             payment_option: item.payment_option,
+             livestream_id: item.livestream_id,
+             is_flash_sale: false
+          }
+        });
+      }
+      return this.getCart(userId);
     }
 
     const isBlindbox = item.product_variants.products.type_code === 'BLINDBOX';

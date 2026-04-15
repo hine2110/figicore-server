@@ -341,26 +341,41 @@ export class OrdersService {
 
         // --- A. BLINDBOX PROCESSING ---
         if (blindboxItems.length > 0) {
+          const bbGroups = new Map<number, any[]>();
           for (const bItem of blindboxItems) {
+            const pId = bItem.variant.product_id;
+            if (!bbGroups.has(pId)) bbGroups.set(pId, []);
+            bbGroups.get(pId)!.push(bItem);
+          }
+
+          for (const [productId, itemsGroup] of bbGroups.entries()) {
             const bbConfig = await tx.product_blindboxes.findUnique({
-              where: { product_id: bItem.variant.product_id }
+              where: { product_id: productId }
             });
             if (!bbConfig) throw new BadRequestException("Blindbox config missing");
 
-            const wonVariants = await this.blindboxesService.pickUniqueItems(tx, bbConfig, bItem.quantity);
-            const ticketVariant = await tx.product_variants.findFirst({
-              where: { product_id: bItem.variant.product_id, option_name: 'Blindbox Ticket' }
-            }) || bItem.variant;
+            const totalQuantity = itemsGroup.reduce((sum, item) => sum + item.quantity, 0);
 
-            for (const won of wonVariants) {
-              retailItems.push({
-                ...bItem,
-                variant: ticketVariant,
-                quantity: 1,
-                _allocated_product_id: won.variant_id,
-                _is_opened: false,
-                _metadata: { source: (won as any)._source_stock || 'AVAILABLE' }
-              });
+            // Fetch ALL unique items for this blindbox product simultaneously so they do not overlap
+            const wonVariants = await this.blindboxesService.pickUniqueItems(tx, bbConfig, totalQuantity);
+            
+            const ticketVariant = await tx.product_variants.findFirst({
+              where: { product_id: productId, option_name: 'Blindbox Ticket' }
+            }) || itemsGroup[0].variant;
+
+            let wonIndex = 0;
+            for (const bItem of itemsGroup) {
+              for (let i = 0; i < bItem.quantity; i++) {
+                const won = wonVariants[wonIndex++];
+                retailItems.push({
+                  ...bItem,
+                  variant: ticketVariant,
+                  quantity: 1, // Enforce uniqueness mathematically
+                  _allocated_product_id: won.variant_id,
+                  _is_opened: false,
+                  _metadata: { source: (won as any)._source_stock || 'AVAILABLE' }
+                });
+              }
             }
           }
         }
@@ -369,7 +384,17 @@ export class OrdersService {
         if (preOrderItems.length > 0) {
           for (const pItem of preOrderItems) {
             const { variant, quantity } = pItem;
-            await this.validateAntiScalping(tx, userId, variant.variant_id, quantity, variant.product_preorder_configs?.max_qty_per_user || 2);
+
+            // --- GUARD: Kiểm tra hạn đặt cọc ---
+            const preConfig = variant.product_preorder_configs;
+            if (preConfig?.booking_end_date && new Date() > new Date(preConfig.booking_end_date)) {
+              throw new BadRequestException(
+                `Thời gian đặt cọc cho sản phẩm "${variant.sku}" đã kết thúc. Pre-order này không còn nhận đơn mới.`
+              );
+            }
+            // ------------------------------------
+
+            await this.validateAntiScalping(tx, userId, variant.variant_id, quantity, preConfig?.max_qty_per_user || 2);
 
             const result = await tx.$executeRaw`
                 UPDATE "product_preorder_configs"
@@ -379,6 +404,7 @@ export class OrdersService {
             `;
 
             if (Number(result) === 0) throw new BadRequestException(`Pre-order sold out for item: ${variant.sku}`);
+
 
             const requestedOption = pItem.payment_option || pItem.paymentOption;
             let isFullPayment = requestedOption === 'FULL_PAYMENT';
@@ -510,8 +536,8 @@ export class OrdersService {
             if (!rItem.giveaway_claim_id && Math.abs(Number(price) - authoritativePrice) > 1) {
               this.logger.error(`[PRICE MISMATCH] SKU: ${variant.sku} | Client Sent: ${price} | Backend Expected: ${authoritativePrice} | _backendVerifiedPrice: ${_backendVerifiedPrice} | LivestreamId: ${livestreamId}`);
             }
-            // SECURITY: Reject if price deviates
-            if (Math.abs(Number(price) - authoritativePrice) > 1) {
+            // SECURITY: Reject if price deviates (skip for giveaway prizes — price is always 0)
+            if (!rItem.giveaway_claim_id && Math.abs(Number(price) - authoritativePrice) > 1) {
               const appliedPromoId = variant.product_promotion_id;
               this.logger.error(`[PRICE MISMATCH] SKU: ${variant.sku} | Client Sent: ${price} | Backend Expected: ${authoritativePrice} | _backendVerifiedPrice: ${_backendVerifiedPrice} | Applied Promo ID: ${appliedPromoId} | LivestreamId: ${livestreamId}`);
               throw new BadRequestException(`Product price for ${variant.sku} has changed. Please update your cart.`);
@@ -615,10 +641,42 @@ export class OrdersService {
         // --- D. CLEANUP: Clear Cart & Consume Vouchers ---
         const cart = await tx.carts.findFirst({ where: { user_id: userId, deleted_at: null } });
         if (cart) {
-          const allVariantIds = items.map((i: any) => i.variant_id);
-          await tx.cart_items.deleteMany({
-            where: { cart_id: cart.cart_id, variant_id: { in: allVariantIds } }
-          });
+          for (const vi of validatedItems) {
+            if (vi.giveaway_claim_id) {
+               await tx.cart_items.deleteMany({
+                 where: { cart_id: cart.cart_id, giveaway_claim_id: vi.giveaway_claim_id }
+               });
+               continue;
+            }
+
+            const isFs = vi._applied_flash_sale || false;
+            const targetRow = await tx.cart_items.findFirst({
+              where: {
+                cart_id: cart.cart_id,
+                variant_id: vi.variant_id,
+                livestream_id: vi.livestreamId || null,
+                is_flash_sale: isFs,
+                deleted_at: null
+              }
+            });
+
+            if (targetRow) {
+              const currentQuantity = targetRow.quantity || 1;
+              if (currentQuantity <= vi.quantity) {
+                await tx.cart_items.delete({ where: { item_id: targetRow.item_id } });
+              } else {
+                await tx.cart_items.update({
+                  where: { item_id: targetRow.item_id },
+                  data: { quantity: currentQuantity - vi.quantity }
+                });
+              }
+            } else {
+              // Fallback
+              await tx.cart_items.deleteMany({
+                where: { cart_id: cart.cart_id, variant_id: vi.variant_id, livestream_id: vi.livestreamId || null }
+              });
+            }
+          }
         }
 
         // --- E. UPDATE GIVEAWAY CLAIMS ---
@@ -940,10 +998,13 @@ export class OrdersService {
           const decryptedUser = this.decryptUser(order.users);
           this.mailService.sendOrderConfirmation(decryptedUser, order).catch(e => console.error("Mail Error", e));
         }
-        // Emit Socket (warehouse)
-        this.eventsGateway.notifyNewOrder(order);
-        // Emit Socket (livestream room) — ONLY on successful payment
-        await this._broadcastLivestreamOrder(order);
+        // ✅ FIX: Only notify warehouse for PROCESSING orders (retail paid).
+        // DEPOSITED preorders must NOT appear in packing queue — they wait for inventory import → FIFO → final payment.
+        if (order.status_code === 'PROCESSING') {
+          this.eventsGateway.notifyNewOrder(order);
+          // Emit Socket (livestream room) — ONLY on successful payment
+          await this._broadcastLivestreamOrder(order);
+        }
       }
       this.logger.log(`Notifications sent for group ${paymentRefCode}`);
 
@@ -960,11 +1021,22 @@ export class OrdersService {
 
     try {
       const result = await this.prisma.$transaction(async (tx) => {
+        // ✅ FIX Bug 1: Include BOTH PENDING_PAYMENT (retail) AND WAITING_DEPOSIT (preorder)
+        const validStatuses = ['PENDING_PAYMENT', 'WAITING_DEPOSIT'];
         const orders = await tx.orders.findMany({
-          where: { payment_ref_code: paymentRefCode, user_id: userId, status_code: 'PENDING_PAYMENT' }
+          where: { payment_ref_code: paymentRefCode, user_id: userId, status_code: { in: validStatuses } }
         });
 
-        if (!orders.length) throw new BadRequestException("No pending orders found");
+        if (!orders.length) throw new BadRequestException("No pending orders found for this payment ref.");
+
+        // Validate no already-processed orders exist in this group
+        const allGroupOrders = await tx.orders.findMany({
+          where: { payment_ref_code: paymentRefCode, user_id: userId }
+        });
+        const alreadyProcessed = allGroupOrders.find(o => !validStatuses.includes(o.status_code || ''));
+        if (alreadyProcessed) {
+          throw new BadRequestException('Some orders in this group are already processed or cancelled.');
+        }
 
         if (voucherId) {
           await this._applyVoucherToGroup(tx, userId, orders, voucherId);
@@ -982,10 +1054,35 @@ export class OrdersService {
         });
 
         for (const order of orders) {
+          // ✅ FIX Bug 1: Retail → PROCESSING, Preorder deposit → DEPOSITED (not PROCESSING)
+          const newStatus = order.status_code === 'WAITING_DEPOSIT' ? 'DEPOSITED' : 'PROCESSING';
+
           await tx.orders.update({
             where: { order_id: order.order_id },
-            data: { status_code: 'PROCESSING', paid_amount: order.total_amount }
+            data: { status_code: newStatus, paid_amount: order.total_amount, payment_method_code: 'WALLET' }
           });
+
+          await tx.order_status_history.create({
+            data: {
+              order_id: order.order_id,
+              previous_status: order.status_code,
+              new_status: newStatus,
+              note: `Paid via FigiWallet. Group Ref: ${paymentRefCode}`
+            }
+          });
+
+          // ✅ FIX Bug 1: Update preorder contract to DEPOSITED when deposit paid via wallet
+          if (newStatus === 'DEPOSITED') {
+            const contract = await tx.preorder_contracts.findFirst({
+              where: { deposit_order_id: order.order_id }
+            });
+            if (contract) {
+              await tx.preorder_contracts.update({
+                where: { contract_id: contract.contract_id },
+                data: { status_code: 'DEPOSITED', deposit_amount_paid: order.total_amount }
+              });
+            }
+          }
         }
 
         await tx.wallet_transactions.create({
@@ -1007,7 +1104,10 @@ export class OrdersService {
       // --- NEW: SYNC AUCTION STATUS ---
       const updatedOrdersForAuction = await this.prisma.orders.findMany({
         where: { payment_ref_code: paymentRefCode, user_id: userId },
-        include: { users: true }
+        include: { 
+          users: true,
+          order_items: { include: { product_variants: { include: { products: true } } } } 
+        }
       });
 
       for (const order of updatedOrdersForAuction) {
@@ -1030,9 +1130,11 @@ export class OrdersService {
           const decryptedUser = this.decryptUser(order.users);
           this.mailService.sendOrderConfirmation(decryptedUser, order).catch(e => console.error("Mail Error", e));
         }
-        this.eventsGateway.notifyNewOrder(order);
-        // Emit Socket (livestream room) — ONLY on successful payment
-        await this._broadcastLivestreamOrder(order);
+        // ✅ FIX: Preorder DEPOSITED orders must NOT trigger warehouse packing queue
+        if (order.status_code === 'PROCESSING') {
+          this.eventsGateway.notifyNewOrder(order);
+          await this._broadcastLivestreamOrder(order);
+        }
       }
       this.logger.log(`Wallet Payment successful for group ${paymentRefCode}`);
       return result;
@@ -1077,6 +1179,8 @@ export class OrdersService {
           const commercialTotal = commercialItems.reduce((sum, i) => sum + Number(i.total_price), 0);
 
           this.livestreamLiveGateway.broadcastOrder(`LIVE-${lsId}`, {
+            order_id: order.order_id,
+            status: order.status_code,
             customer_name: customerName,
             product_name: extraCount > 0 ? `${mainName} + ${extraCount} items` : mainName,
             quantity: commercialItems.reduce((sum, i) => sum + i.quantity, 0),
@@ -1092,6 +1196,8 @@ export class OrdersService {
             const pName = gItem.product_variants?.products?.name || gItem.product_variants?.option_name || 'Giải thưởng';
             // We use a different event or flag it as Giveaway
             this.livestreamLiveGateway.broadcastOrder(`LIVE-${lsId}`, {
+              order_id: `G-${order.order_id}`,
+              status: order.status_code,
               customer_name: customerName,
               product_name: pName,
               quantity: gItem.quantity,
@@ -1334,6 +1440,10 @@ export class OrdersService {
           }
         },
         addresses: true,
+        packer: {
+          include: { users: { select: { full_name: true, avatar_url: true } } }
+        },
+        shipments: true,
       }
     });
 
@@ -1491,8 +1601,9 @@ export class OrdersService {
 
       if (!contract) throw new NotFoundException(`Contract #${contractId} not found`);
 
+      // ✅ Guard: Only allow final payment when stock has arrived and been allocated (FIFO)
       if (contract.status_code !== 'READY_FOR_PAYMENT') {
-        throw new BadRequestException(`Contract is not ready for final payment (Status: ${contract.status_code})`);
+        throw new BadRequestException(`Contract is not ready for final payment (Status: ${contract.status_code}). You will receive an email when your item is ready.`);
       }
 
       // 2. Validate Original Order Existed
@@ -1501,25 +1612,45 @@ export class OrdersService {
       }
 
       // 3. Calculate Amounts
-      // Single Source of Truth for Price: Config
       const config = contract.product_variants.product_preorder_configs;
       if (!config) throw new BadRequestException("Pre-order config missing for variant");
 
       const fullPrice = Number(config.full_price);
-      const shippingFee = 30000; // Fixed Shipping
+      const shippingFee = 30000;
       const totalAmount = (fullPrice * contract.quantity) + shippingFee;
 
-      let newStatus = 'PROCESSING'; // Default to Ready to Ship (COD)
+      let newStatus = 'PROCESSING';
       let additionalPaid = 0;
-
       let paymentRefCodeStr: string | undefined = undefined;
 
       // WALLET PAYMENT LOGIC
+      // ✅ FIX: Inline wallet deduction using tx directly.
+      // Do NOT call walletService.deductBalance() here — it creates a nested $transaction
+      // which conflicts with the outer transaction and causes 500 Internal Server Error.
       if (payment_method_code === 'WALLET') {
         const depositPaid = Number(contract.deposit_amount_paid);
         const amountToDeduct = totalAmount - depositPaid;
 
-        await this.walletService.deductBalance(userId, amountToDeduct, `ORD-${contract.deposit_order_id}`, `Final Payment for Contract #${contractId}`);
+        if (amountToDeduct < 0) throw new BadRequestException("Invalid payment amount: remaining balance is negative.");
+
+        const wallet = await tx.wallets.findUnique({ where: { user_id: userId } });
+        if (!wallet) throw new BadRequestException("Wallet not found.");
+        if (Number(wallet.balance_available) < amountToDeduct) throw new BadRequestException("Insufficient wallet balance.");
+
+        await tx.wallets.update({
+          where: { wallet_id: wallet.wallet_id },
+          data: { balance_available: { decrement: amountToDeduct } }
+        });
+
+        await tx.wallet_transactions.create({
+          data: {
+            wallet_id: wallet.wallet_id,
+            type_code: 'PAYMENT',
+            amount: -amountToDeduct,
+            reference_code: `ORD-${contract.deposit_order_id}`,
+            description: `Final Payment for Pre-order Contract #${contractId}`
+          }
+        });
 
         newStatus = 'PROCESSING';
         additionalPaid = amountToDeduct;
@@ -1528,39 +1659,57 @@ export class OrdersService {
         paymentRefCodeStr = `PAY${Date.now()}${Math.floor(Math.random() * 1000)}`;
       }
 
-      // 4. MUTATE the Original Order (Single ID Strategy)
+      // 4. MUTATE the Original Deposit Order (Single ID Strategy)
       const updatedOrder = await tx.orders.update({
         where: { order_id: contract.deposit_order_id },
         data: {
           status_code: newStatus,
-          // Update total to full price + shipping
           total_amount: totalAmount,
           shipping_fee: shippingFee,
-
           shipping_address_id,
           payment_method_code,
-
-          // If Wallet, we increase paid_amount. If COD, we keep it as Deposit (so Due = Total - Paid)
           paid_amount: { increment: additionalPaid },
           payment_ref_code: paymentRefCodeStr !== undefined ? paymentRefCodeStr : undefined,
-
           updated_at: new Date(),
-
           order_status_history: {
             create: { new_status: newStatus, note: 'Pre-order Final Payment Completed (Single ID)' }
           }
         }
       });
 
-      // 5. Link & Update Contract to logic Closed (Only if fully paid via Wallet)
+      // 5. Update Contract status
       await tx.preorder_contracts.update({
         where: { contract_id: contractId },
         data: {
-          final_payment_order_id: contract.deposit_order_id, // Self-reference
+          final_payment_order_id: contract.deposit_order_id,
           status_code: newStatus === 'PROCESSING' ? 'COMPLETED' : 'READY_FOR_PAYMENT',
           updated_at: new Date()
         }
       });
+
+      // 6. Notify warehouse after commit (fire-and-forget, only for PROCESSING = fully paid)
+      if (newStatus === 'PROCESSING') {
+        setImmediate(async () => {
+          try {
+            const fullOrder = await this.prisma.orders.findUnique({
+              where: { order_id: updatedOrder.order_id },
+              include: {
+                users: true,
+                order_items: { include: { product_variants: { include: { products: true } } } }
+              }
+            });
+            if (fullOrder) {
+              this.eventsGateway.notifyNewOrder(fullOrder);
+              if (fullOrder.users) {
+                const decUser = this.decryptUser(fullOrder.users);
+                this.mailService.sendOrderConfirmation(decUser, fullOrder).catch(e => this.logger.error("Final Payment Mail Error", e));
+              }
+            }
+          } catch (e) {
+            this.logger.error("Post final-payment notification error", e);
+          }
+        });
+      }
 
       return updatedOrder;
     });
@@ -1694,6 +1843,7 @@ export class OrdersService {
               where: { item_id: promoItem.item_id },
               data: { sold: { decrement: item.quantity } }
             });
+            (item as any)._was_flash_sale = true;
             this.logger.log(`[Cancel] Restored ${item.quantity} quota to Flash Sale Item #${promoItem.item_id}`);
           }
 
@@ -1723,15 +1873,63 @@ export class OrdersService {
         }
 
         if (cart) {
-          await tx.cart_items.createMany({
-            data: order.order_items.map(item => ({
-              cart_id: cart!.cart_id,
-              variant_id: item.variant_id,
-              quantity: item.quantity,
-              livestream_id: item.livestream_id,
-              giveaway_claim_id: item.giveaway_claim_id // Restore prize status
-            }))
-          });
+          // GROUP ITEMS TO PREVENT CART CLUTTER
+          const mergedItems = new Map<string, any>();
+          
+          for (const item of order.order_items) {
+            if (item.giveaway_claim_id) {
+              // Prizes are strictly 1 quantity each row
+              await tx.cart_items.create({
+                data: {
+                  cart_id: cart.cart_id,
+                  variant_id: item.variant_id,
+                  quantity: item.quantity,
+                  livestream_id: item.livestream_id,
+                  giveaway_claim_id: item.giveaway_claim_id,
+                  payment_option: 'FULL_PAYMENT'
+                }
+              });
+            } else {
+              // Note: payment_option might be stored on order_items depending on schema, if not rely on order level.
+              // We'll safely merge by variant, livestream, and RETAIL flash sale status.
+              const isFs = (item as any)._was_flash_sale || false;
+              const key = `${item.variant_id}-${item.livestream_id || 'null'}-${isFs}`;
+              if (mergedItems.has(key)) {
+                mergedItems.get(key).quantity += item.quantity;
+              } else {
+                mergedItems.set(key, { ...item, _is_flash_sale: isFs });
+              }
+            }
+          }
+
+          for (const v of mergedItems.values()) {
+            const existingInCart = await tx.cart_items.findFirst({
+               where: {
+                   cart_id: cart.cart_id,
+                   variant_id: v.variant_id,
+                   livestream_id: v.livestream_id,
+                   is_flash_sale: v._is_flash_sale,
+                   deleted_at: null
+               }
+            });
+
+            if (existingInCart) {
+               await tx.cart_items.update({
+                   where: { item_id: existingInCart.item_id },
+                   data: { quantity: { increment: v.quantity } }
+               });
+            } else {
+               await tx.cart_items.create({
+                   data: {
+                       cart_id: cart.cart_id,
+                       variant_id: v.variant_id,
+                       quantity: v.quantity,
+                       livestream_id: v.livestream_id,
+                       is_flash_sale: v._is_flash_sale
+                   }
+               });
+            }
+          }
         }
       } catch (err) {
         console.error("Failed to restore items to cart", err);
@@ -1859,10 +2057,15 @@ export class OrdersService {
       });
     }
 
-    return this.prisma.orders.update({
+    const updatedOrder = await this.prisma.orders.update({
       where: { order_id: order.order_id },
       data: { status_code: status }
     });
+
+    // Notify Real-time for Defense Presentation (Teammate with Postman -> Presenter machine UI)
+    this.eventsGateway.notifyOrderStatusUpdate(order.order_id, status, updatedOrder);
+
+    return updatedOrder;
   }
 
   async simulateReturnByOrderCode(orderCode: string) {
@@ -1948,6 +2151,9 @@ export class OrdersService {
         this.logger.error(`Failed to sync auction status for order ${order.order_code}:`, err);
       }
     }
+
+    // E. Trigger Real-time Notification
+    this.eventsGateway.notifyOrderStatusUpdate(order.order_id, 'COMPLETED');
 
     return { success: true, message: `Order ${trackingCode} completed and points added.` };
   }
@@ -2066,5 +2272,73 @@ export class OrdersService {
       },
       orderBy: { created_at: 'desc' }
     });
+  }
+
+  // --- WAREHOUSE & BUSINESS KPI DASHBOARD ---
+  async getDashboardKPIs() {
+    const now = new Date();
+    const startOfCurrentMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    
+    const startOfPreviousMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const endOfPreviousMonth = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
+
+    const getStatsForTimeframe = async (start: Date, end?: Date) => {
+      const dateFilter = end ? { gte: start, lte: end } : { gte: start };
+
+      const [
+        packedOrders, totalOrders, totalOnlineOrders, totalLivestreamOrders,
+        onlineOrders, livestreamOrders, preorderContracts, shipments, collectedShipping,
+      ] = await Promise.all([
+        this.prisma.orders.count({ where: { packed_at: dateFilter, deleted_at: null } }),
+        this.prisma.orders.count({ where: { created_at: dateFilter, deleted_at: null } }),
+        this.prisma.orders.count({ where: { channel_code: 'WEB', created_at: dateFilter, deleted_at: null } }),
+        this.prisma.orders.count({ where: { channel_code: 'LIVESTREAM', created_at: dateFilter, deleted_at: null } }),
+        this.prisma.orders.aggregate({ _sum: { paid_amount: true }, where: { channel_code: 'WEB', created_at: dateFilter, deleted_at: null } }),
+        this.prisma.orders.aggregate({ _sum: { paid_amount: true }, where: { channel_code: 'LIVESTREAM', created_at: dateFilter, deleted_at: null } }),
+        this.prisma.preorder_contracts.aggregate({ _sum: { deposit_amount_paid: true }, _count: { contract_id: true }, where: { created_at: dateFilter } }),
+        this.prisma.shipments.aggregate({ _sum: { shipping_fee: true }, where: { created_at: dateFilter } }),
+        this.prisma.orders.aggregate({ _sum: { shipping_fee: true }, where: { created_at: dateFilter, deleted_at: null, shipments: { isNot: null } } }),
+      ]);
+
+      return {
+        packedOrders, totalOrders, totalOnlineOrders, totalLivestreamOrders,
+        onlineRevenue: Number(onlineOrders._sum.paid_amount || 0),
+        livestreamRevenue: Number(livestreamOrders._sum.paid_amount || 0),
+        preorderCount: preorderContracts._count.contract_id,
+        preorderRevenue: Number(preorderContracts._sum.deposit_amount_paid || 0),
+        shippingCollected: Number(collectedShipping._sum.shipping_fee || 0),
+        shippingPaid: Number(shipments._sum.shipping_fee || 0),
+      };
+    };
+
+    const activePreorderContracts = await this.prisma.preorder_contracts.count({
+      where: { status_code: { in: ['WAITING_DEPOSIT', 'DEPOSITED'] } },
+    });
+
+    const currentMonth = await getStatsForTimeframe(startOfCurrentMonth);
+    const previousMonth = await getStatsForTimeframe(startOfPreviousMonth, endOfPreviousMonth);
+
+    const calculateGrowth = (current: number, previous: number) => {
+      if (previous === 0) return current > 0 ? 100 : 0;
+      return Number((((current - previous) / previous) * 100).toFixed(1));
+    };
+
+    return {
+      currentMonth,
+      previousMonth,
+      activePreorderContracts,
+      growth: {
+        totalOrders: calculateGrowth(currentMonth.totalOrders, previousMonth.totalOrders),
+        packedOrders: calculateGrowth(currentMonth.packedOrders, previousMonth.packedOrders),
+        onlineRevenue: calculateGrowth(currentMonth.onlineRevenue, previousMonth.onlineRevenue),
+        livestreamRevenue: calculateGrowth(currentMonth.livestreamRevenue, previousMonth.livestreamRevenue),
+        preorderRevenue: calculateGrowth(currentMonth.preorderRevenue, previousMonth.preorderRevenue),
+        preorderCount: calculateGrowth(currentMonth.preorderCount, previousMonth.preorderCount),
+        shippingMargin: calculateGrowth(
+          currentMonth.shippingCollected - currentMonth.shippingPaid,
+          previousMonth.shippingCollected - previousMonth.shippingPaid
+        )
+      }
+    };
   }
 }
