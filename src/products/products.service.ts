@@ -1012,24 +1012,26 @@ export class ProductsService {
             throw new BadRequestException('Cost price must be less than retail price');
           }
 
-          const existingVariant = await tx.product_variants.findUnique({
-            where: { sku: v.sku },
-          });
+          const variantId = v.variant_id;
+          let existingVariant: any = null;
 
-          if (existingVariant && existingVariant.product_id !== id) {
-            throw new BadRequestException(`SKU ${v.sku} is already in use by another product.`);
+          if (variantId) {
+            existingVariant = await tx.product_variants.findUnique({ where: { variant_id: variantId } });
+          } else if (v.sku) {
+            existingVariant = await tx.product_variants.findUnique({ where: { sku: v.sku } });
           }
 
-          if (existingVariant) {
+          if (existingVariant && (existingVariant.product_id === id)) {
             await tx.product_variants.update({
               where: { variant_id: existingVariant.variant_id },
               data: {
                 option_name: v.option_name,
                 price: v.price,
-                cost_price: v.cost_price !== undefined ? v.cost_price : undefined,
+                sku: v.sku, // Allow SKU update if needed
+                cost_price: v.cost_price ?? existingVariant.cost_price,
                 barcode: v.barcode,
                 description: v.description,
-                media_assets: v.media_assets ? (v.media_assets as any) : undefined, // Update media_assets
+                media_assets: v.media_assets ? (v.media_assets as any) : undefined,
                 weight_g: v.weight_g,
                 length_cm: v.length_cm,
                 width_cm: v.width_cm,
@@ -1037,8 +1039,8 @@ export class ProductsService {
                 scale: v.scale,
                 material: v.material,
                 included_items: v.included_items ? (v.included_items as any) : undefined,
-                stock_available: v.stock_available, // Retail specific
-                stock_defect: v.stock_defect
+                stock_available: v.stock_available !== undefined ? v.stock_available : existingVariant.stock_available,
+                stock_defect: v.stock_defect !== undefined ? v.stock_defect : existingVariant.stock_defect
               },
             });
           } else {

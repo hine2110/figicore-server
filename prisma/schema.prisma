@@ -146,7 +146,8 @@ model employees {
   users                   users                     @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
   inventory_receipts      inventory_receipts[]
   leave_requests          leave_requests[]
-  orders                  orders[]
+  orders                  orders[]                  @relation("OrderCreator")
+  packed_orders           orders[]                  @relation("OrderPacker")
   payroll_disputes        payroll_disputes[]
   approved_payrolls       payrolls[]                @relation("PayrollApprover")
   reviewed_payrolls       payrolls[]                @relation("PayrollReviewer")
@@ -289,6 +290,7 @@ model orders {
   payment_ref_code      String?                @db.VarChar(50)
   status_code           String?                @default("PENDING") @db.VarChar(50)
   packing_video_urls    Json?
+  packed_by_staff_id    Int?
   packed_at             DateTime?              @db.Timestamp(6)
   note                  String?
   cash_received         Decimal?               @db.Decimal(15, 2)
@@ -299,7 +301,8 @@ model orders {
   feedbacks             feedbacks[]
   order_items           order_items[]
   order_status_history  order_status_history[]
-  employees             employees?             @relation(fields: [created_by_staff_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  employees             employees?             @relation("OrderCreator", fields: [created_by_staff_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  packer                employees?             @relation("OrderPacker", fields: [packed_by_staff_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
   promotions            promotions?            @relation("DiscountPromotionRel", fields: [promotion_id], references: [promotion_id], onDelete: NoAction, onUpdate: NoAction)
   pos_sessions          pos_sessions?          @relation(fields: [session_id], references: [session_id], onDelete: NoAction, onUpdate: NoAction)
   addresses             addresses?             @relation(fields: [shipping_address_id], references: [address_id], onDelete: NoAction, onUpdate: NoAction)
