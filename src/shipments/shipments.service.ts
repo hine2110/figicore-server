@@ -178,6 +178,7 @@ export class ShipmentsService {
             status_code: 'PACKED', // Updated status as requested
             original_shipping_fee: Number(ghnData.total_fee), // Sync exact cost
             packed_at: new Date(),
+            packed_by_staff_id: staffId, // SAVED STAFF ID
             packing_video_urls: videoUrl ? JSON.stringify([videoUrl]) : undefined,
           }
         });
