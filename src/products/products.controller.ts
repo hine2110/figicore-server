@@ -1,4 +1,5 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, Query } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, Query, UseGuards } from '@nestjs/common';
+import { AuthGuard } from '@nestjs/passport';
 import { ProductsService } from './products.service';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
@@ -73,10 +74,20 @@ export class ProductsController {
     return this.productsService.approveBlindbox(+id);
   }
 
+  // ⚠️ PREORDER: Gia hạn thời gian đặt cọc (Warehouse Staff only)
+  // MUST be placed BEFORE :id routes to avoid routing conflicts
+  @Patch('preorder/:variantId/extend-booking')
+  @UseGuards(AuthGuard('jwt'))
+  extendPreorderBooking(@Param('variantId') variantId: string) {
+    return this.productsService.extendPreorderBooking(+variantId);
+  }
+
+
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.productsService.findOne(+id);
   }
+
 
   @Get(':id/similar')
   findSimilar(@Param('id') id: string) {
