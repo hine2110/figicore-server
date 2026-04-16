@@ -21,11 +21,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy the package.json and package-lock.json
 COPY package*.json ./
 
+# Copy Prisma schema early so Prisma Client generation (postinstall) has it.
+COPY prisma/schema.prisma ./prisma/schema.prisma
 # Install dependencies
 RUN npm install
 
 # Copy the rest of the application code
 COPY . .
+
+# Ensure Prisma Client is generated from the current schema inside the image.
+RUN npx prisma generate
 
 # Build the application
 RUN npm run build
