@@ -110,7 +110,7 @@ export class GhnService {
         }
     }
 
-    async calculateRealFee(params: { to_district_id: number; to_ward_code: string; weight: number; insurance_value: number }) {
+    async calculateRealFee(params: { to_district_id: number; to_ward_code: string; weight: number; length?: number; width?: number; height?: number; insurance_value: number }) {
         // 1. Force use of Public API (Not Master Data)
         const url = `https://dev-online-gateway.ghn.vn/shiip/public-api/v2/shipping-order/fee`;
 
@@ -121,9 +121,13 @@ export class GhnService {
             "insurance_value": 0, // <--- KEY: Solution 3 enforces 0
             "coupon": null,
             "from_district_id": 1534, // UPDATE: Correct Warehouse District (Da Nang/Example)
+            "from_ward_code": "40302",
             "to_district_id": params.to_district_id,
             "to_ward_code": params.to_ward_code,
-            "height": 15, "length": 20, "width": 20, "weight": params.weight
+            "height": params.height || 10, 
+            "length": params.length || 10, 
+            "width": params.width || 10, 
+            "weight": params.weight
         };
 
         try {
