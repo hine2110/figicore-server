@@ -53,15 +53,13 @@ export class AddressController {
             insurance_value: body.total_amount
         });
 
-        // 3. Apply Subsidy Logic (Business Rule: Fixed 30k)
-        const customerFee = 30000; // Flat Rate: 30k default (Strict)
-
-        // Policy: Free Ship > 5M is currently DISABLED by request.
-        // if (body.total_amount >= 5000000) { customerFee = 0; }
+        // 3. New Policy: Customer pays real shipping fee, but at least 30,000 VND and rounded UP to nearest 1k
+        const flooredFee = Math.max(30000, realFee);
+        const customerFee = Math.ceil(flooredFee / 1000) * 1000;
 
         // 4. Return BOTH values
-        // 'fee': What the user sees (Subsidized)
-        // 'original_fee': The actual cost (hidden), needed for "Shipping Debt" tracking
+        // 'fee': What the user pays (Floored at 30k & Rounded Up)
+        // 'original_fee': The actual raw cost from GHN
         return {
             fee: customerFee,
             original_fee: realFee

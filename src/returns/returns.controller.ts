@@ -48,8 +48,9 @@ export class ReturnsController {
     @Patch(':id/inspect')
     inspectReturn(
         @Param('id', ParseIntPipe) id: number,
-        @Body() dto: InspectReturnDto
+        @Body() dto: InspectReturnDto,
+        @Req() req
     ) {
-        return this.returnsService.inspectReturn(id, dto);
+        return this.returnsService.inspectReturn(id, dto, req.user.user_id);
     }
 }

@@ -279,6 +279,7 @@ export class OrdersService {
       // 3. Free Shipping Voucher
       let usedFreeShipPromotionId: number | null = null;
       let isVoucherFreeShip = false;
+      let freeShipDiscountCap = 0;
 
       if (freeShipVoucherCode) {
         if (hasOnlyNonRetailItems) {
@@ -300,6 +301,7 @@ export class OrdersService {
           }
           usedFreeShipPromotionId = userFreeShipVoucher.promotion_id;
           isVoucherFreeShip = true;
+          freeShipDiscountCap = Number(userFreeShipVoucher.promotions.max_discount_amount || 0);
         } else {
           throw new BadRequestException("Free shipping voucher invalid or expired.");
         }
@@ -307,6 +309,43 @@ export class OrdersService {
 
 
       const paymentRefCode = `PAY${Date.now()}${Math.floor(Math.random() * 1000)}`;
+
+      // NEW: Calculate GHN Original Shipping Fee for Retail Items before transaction
+      let realGhnFee = 30000;
+      try {
+        const retailItemsList = validatedItems.filter(item => {
+            const tc = item.variant?.products?.type_code;
+            return tc !== 'BLINDBOX' && tc !== 'PREORDER' && !item.variant?.product_preorder_configs;
+        });
+        
+        let retailWeight = 0;
+        let maxLength = 0;
+        let maxWidth = 0;
+        let totalHeight = 0;
+
+        for (const item of retailItemsList) {
+            const qty = Number(item.quantity) || 1;
+            retailWeight += (item.variant?.weight_g || 200) * qty;
+            maxLength = Math.max(maxLength, item.variant?.length_cm || 10);
+            maxWidth = Math.max(maxWidth, item.variant?.width_cm || 10);
+            totalHeight += (item.variant?.height_cm || 10) * qty;
+        }
+
+        if (retailWeight > 0) {
+           realGhnFee = await this.ghnService.calculateRealFee({
+              to_district_id: address.district_id,
+              to_ward_code: address.ward_code,
+              weight: retailWeight,
+              length: maxLength,
+              width: maxWidth,
+              height: totalHeight,
+              insurance_value: 0
+           });
+           this.logger.log(`Calculated real GHN fee for checkout: ${realGhnFee} VND`);
+        }
+      } catch (err) {
+         this.logger.warn("Failed to calculate real GHN shipping fee inside create()", err);
+      }
 
       // 4. BIG TRANSACTION: Separation & Creation
       const createdOrders = await this.prisma.$transaction(async (tx) => {
@@ -605,8 +644,18 @@ export class OrdersService {
             }
           }
 
-          let customerShippingFee = 30000;
-          if (isVoucherFreeShip) customerShippingFee = 0;
+          // BUSINESS LOGIC: Calculate customer fee with 30,000đ floor and rounding up to nearest 1,000đ
+          const realFeeAtLeast30k = Math.max(30000, realGhnFee);
+          const roundedCustomerFee = Math.ceil(realFeeAtLeast30k / 1000) * 1000;
+          
+          let customerShippingFee = roundedCustomerFee;
+          if (isVoucherFreeShip) {
+            // APPLY DISCOUNT CAP: If cap is > 0, subtract cap from fee (capped by total fee).
+            const discountAmount = freeShipDiscountCap > 0 
+              ? Math.min(roundedCustomerFee, freeShipDiscountCap) 
+              : roundedCustomerFee;
+            customerShippingFee = roundedCustomerFee - discountAmount;
+          }
 
           // FAIRNESS: Shorter deadline for Flash Sales (5 mins) vs Retail (15 mins)
           const effectiveDeadline = new Date();
@@ -623,7 +672,7 @@ export class OrdersService {
               total_amount: rtFinalTotal,
               discount_amount: orderVoucherDiscountAmount,
               shipping_fee: customerShippingFee,
-              original_shipping_fee: 30000,
+              original_shipping_fee: realGhnFee, // Store raw GHN fee for accounting transparency
               payment_method_code,
               payment_ref_code: paymentRefCode,
               status_code: 'PENDING_PAYMENT',
@@ -1423,10 +1472,42 @@ export class OrdersService {
     }
   }
 
-  async findAll(params?: { status?: string }) {
-    const { status } = params || {};
+  async findAll(params?: { status?: string, startDate?: string, endDate?: string }) {
+    const { status, startDate, endDate } = params || {};
+    
+    let dateFilter: any = undefined;
+    if (startDate || endDate) {
+      dateFilter = {};
+      if (startDate) {
+        const start = new Date(startDate);
+        start.setHours(0, 0, 0, 0);
+        dateFilter.gte = start;
+      }
+      if (endDate) {
+        const end = new Date(endDate);
+        end.setHours(23, 59, 59, 999);
+        dateFilter.lte = end;
+      }
+    }
+
+    const where: any = { deleted_at: null };
+    if (status && status !== 'PACKED') {
+      where.status_code = status;
+    }
+
+    if (dateFilter) {
+      // If filtering for PACKED history, find all orders that HAVE BEEN packed in that range
+      if (status === 'PACKED') {
+        where.packed_at = dateFilter;
+        // Optimization: only search for statuses that imply packing happened
+        where.status_code = { in: ['PACKED', 'SHIPPING', 'DELIVERED', 'COMPLETED', 'RETURNING', 'RETURNED'] };
+      } else {
+        where.created_at = dateFilter;
+      }
+    }
+
     const orders = await this.prisma.orders.findMany({
-      where: status ? { status_code: status } : {},
+      where,
       orderBy: { created_at: 'asc' }, // FIFO: Oldest First
       include: {
         order_items: {
@@ -1444,6 +1525,11 @@ export class OrdersService {
           include: { users: { select: { full_name: true, avatar_url: true } } }
         },
         shipments: true,
+        return_requests: {
+          include: {
+            processor: { include: { users: { select: { full_name: true } } } }
+          }
+        }
       }
     });
 
@@ -1585,6 +1671,34 @@ export class OrdersService {
   async createFinalPaymentOrder(userId: number, contractId: number, data: { shipping_address_id: number, payment_method_code: string }) {
     const { shipping_address_id, payment_method_code } = data;
 
+    let realGhnFee = 30000;
+    try {
+      const addressDb = await this.prisma.addresses.findUnique({ where: { address_id: shipping_address_id } });
+      const contractDb = await this.prisma.preorder_contracts.findUnique({
+        where: { contract_id: contractId },
+        include: { product_variants: true }
+      });
+      if (addressDb && contractDb) {
+        const decAddr = this.decryptAddress(addressDb);
+        const qty = contractDb.quantity || 1;
+        const calcWeight = (contractDb.product_variants?.weight_g || 200) * qty;
+        const l = contractDb.product_variants?.length_cm || 10;
+        const w = contractDb.product_variants?.width_cm || 10;
+        const h = (contractDb.product_variants?.height_cm || 10) * qty;
+        realGhnFee = await this.ghnService.calculateRealFee({
+          to_district_id: decAddr.district_id,
+          to_ward_code: decAddr.ward_code,
+          weight: calcWeight,
+          length: l,
+          width: w,
+          height: h,
+          insurance_value: 0
+        });
+      }
+    } catch (err) {
+      this.logger.warn("Failed to calculate real GHN shipping fee inside createFinalPaymentOrder()", err);
+    }
+
     return this.prisma.$transaction(async (tx) => {
       // 1. Fetch Contract & Verify Status
       const contract = await tx.preorder_contracts.findFirst({
@@ -1616,8 +1730,10 @@ export class OrdersService {
       if (!config) throw new BadRequestException("Pre-order config missing for variant");
 
       const fullPrice = Number(config.full_price);
-      const shippingFee = 30000;
-      const totalAmount = (fullPrice * contract.quantity) + shippingFee;
+      // Floor the shipping fee at 30,000đ and round up to nearest 1,000đ
+      const flooredFee = Math.max(30000, realGhnFee);
+      const roundedFee = Math.ceil(flooredFee / 1000) * 1000;
+      const totalAmount = (fullPrice * contract.quantity) + roundedFee;
 
       let newStatus = 'PROCESSING';
       let additionalPaid = 0;
@@ -1665,7 +1781,8 @@ export class OrdersService {
         data: {
           status_code: newStatus,
           total_amount: totalAmount,
-          shipping_fee: shippingFee,
+          shipping_fee: roundedFee,
+          original_shipping_fee: realGhnFee,
           shipping_address_id,
           payment_method_code,
           paid_amount: { increment: additionalPaid },
@@ -1993,7 +2110,12 @@ export class OrdersService {
 
   async update(id: number, updateOrderDto: UpdateOrderDto) {
     const order = await this.prisma.orders.findUnique({
-      where: { order_id: id }
+      where: { order_id: id },
+      include: {
+        order_items: {
+          include: { product_variants: true }
+        }
+      }
     });
 
     if (!order) {
@@ -2004,13 +2126,48 @@ export class OrdersService {
       throw new BadRequestException(`Cannot update order in status: ${order.status_code}`);
     }
 
+    let realGhnFee = Number(order.original_shipping_fee) || 30000;
+    if (updateOrderDto.shipping_address_id && updateOrderDto.shipping_address_id !== order.shipping_address_id) {
+       try {
+           const newAddress = await this.prisma.addresses.findUnique({where: {address_id: updateOrderDto.shipping_address_id}});
+           if (newAddress) {
+               const decryptedAddress = this.decryptAddress(newAddress);
+               // Only calculate retail weights here since it's a PENDING_PAYMENT order (usually retail/auction)
+               let totalWeight = 0;
+               let maxLength = 0;
+               let maxWidth = 0;
+               let totalHeight = 0;
+               for (const item of order.order_items) {
+                   const qty = item.quantity || 1;
+                   totalWeight += (item.product_variants?.weight_g || 200) * qty;
+                   maxLength = Math.max(maxLength, item.product_variants?.length_cm || 10);
+                   maxWidth = Math.max(maxWidth, item.product_variants?.width_cm || 10);
+                   totalHeight += (item.product_variants?.height_cm || 10) * qty;
+               }
+
+               const newFee = await this.ghnService.calculateRealFee({
+                   to_district_id: decryptedAddress.district_id,
+                   to_ward_code: decryptedAddress.ward_code,
+                   weight: totalWeight,
+                   length: maxLength,
+                   width: maxWidth,
+                   height: totalHeight,
+                   insurance_value: 0
+               });
+               if (newFee) realGhnFee = newFee;
+           }
+       } catch (err) {
+           this.logger.warn("Failed to recalculate GHN fee on order address update", err);
+       }
+    }
+
     return this.prisma.orders.update({
       where: { order_id: id },
       data: {
         shipping_address_id: updateOrderDto.shipping_address_id,
         payment_method_code: updateOrderDto.payment_method_code,
-        shipping_fee: updateOrderDto.shipping_fee, // Allow updating fee if address changes
-        original_shipping_fee: updateOrderDto.original_shipping_fee
+        shipping_fee: Math.ceil(Math.max(30000, realGhnFee) / 1000) * 1000, 
+        original_shipping_fee: realGhnFee
       }
     });
   }
@@ -2340,5 +2497,33 @@ export class OrdersService {
         )
       }
     };
+  }
+
+  async getWarehouseStats(startDate: string, endDate: string) {
+    const start = new Date(startDate);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(endDate);
+    end.setHours(23, 59, 59, 999);
+
+    const [pending, packed, delivered, returned] = await Promise.all([
+      this.prisma.orders.count({
+        where: { status_code: 'PROCESSING', created_at: { gte: start, lte: end }, deleted_at: null }
+      }),
+      this.prisma.orders.count({
+        where: { status_code: 'PACKED', packed_at: { gte: start, lte: end }, deleted_at: null }
+      }),
+      this.prisma.orders.count({
+        where: { status_code: 'COMPLETED', updated_at: { gte: start, lte: end }, deleted_at: null }
+      }),
+      this.prisma.orders.count({
+        where: { 
+          status_code: { in: ['RETURNED', 'RETURNING'] }, 
+          updated_at: { gte: start, lte: end }, 
+          deleted_at: null 
+        }
+      })
+    ]);
+
+    return { pending, packed, delivered, returned };
   }
 }
