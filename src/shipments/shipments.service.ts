@@ -19,7 +19,7 @@ export class ShipmentsService {
     private encryptionService: EncryptionService
   ) { }
 
-  async calculateOrderWeight(orderId: number): Promise<number> {
+  async calculatePackageDimensions(orderId: number): Promise<{ weight: number, length: number, width: number, height: number }> {
     const orderItems = await this.prisma.order_items.findMany({
       where: { order_id: orderId },
       include: {
@@ -28,28 +28,45 @@ export class ShipmentsService {
     });
 
     let totalWeight = 0;
+    let maxLength = 0;
+    let maxWidth = 0;
+    let totalHeight = 0;
 
     for (const item of orderItems) {
       let weight = item.product_variants.weight_g || 200; // Default 200g if missing
+      let length = item.product_variants.length_cm || 10;
+      let width = item.product_variants.width_cm || 10;
+      let height = item.product_variants.height_cm || 10;
 
       // If Blindbox that has been allocated (resolved)
       if (item.allocated_product_id) {
-        // Fetch the FIRST variant of the resolved product to get its weight
+        // Fetch the FIRST variant of the resolved product to get its weight/size
         // Assumption: All variants in a product share similar weight, or we pick the first one
         const resolvedVariant = await this.prisma.product_variants.findFirst({
           where: { product_id: item.allocated_product_id },
-          select: { weight_g: true }
+          select: { weight_g: true, length_cm: true, width_cm: true, height_cm: true }
         });
 
         if (resolvedVariant) {
           weight = resolvedVariant.weight_g;
+          length = resolvedVariant.length_cm;
+          width = resolvedVariant.width_cm;
+          height = resolvedVariant.height_cm;
         }
       }
 
       totalWeight += weight * item.quantity;
+      maxLength = Math.max(maxLength, length);
+      maxWidth = Math.max(maxWidth, width);
+      totalHeight += height * item.quantity;
     }
 
-    return totalWeight;
+    return {
+      weight: totalWeight,
+      length: maxLength || 10,
+      width: maxWidth || 10,
+      height: totalHeight || 10
+    };
   }
 
   async createShipment(orderId: number, staffId: number, videoUrl?: string) {
@@ -72,8 +89,8 @@ export class ShipmentsService {
     if (!order.addresses) throw new BadRequestException('Order does not have a shipping address');
 
     // 2. Calculate Data
-    // Logic: calculateOrderWeight iterates through items effectively
-    const weight = await this.calculateOrderWeight(orderId);
+    // Logic: Calculate dynamic real sizes from database items
+    const pkg = await this.calculatePackageDimensions(orderId);
 
     // Map items for GHN
     const items = order.order_items.map(item => {
@@ -126,10 +143,10 @@ export class ShipmentsService {
 
       cod_amount: codAmount,
       insurance_value: 0, // Solution 3: Opt-out of GHN Insurance entirely
-      weight: weight, // Total Weight Calculated
-      length: 10, // Default Dimensions
-      width: 10,
-      height: 10,
+      weight: pkg.weight, // Total Weight Calculated
+      length: pkg.length, // Dynamic Max Length
+      width: pkg.width,
+      height: pkg.height,
 
       service_type_id: 2, // Standard Express
       items: items

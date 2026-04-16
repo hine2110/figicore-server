@@ -32,6 +32,7 @@ export class CreateOrderDto {
     @IsNotEmpty()
     payment_method_code: string;
 
+    @IsOptional()
     @IsNumber()
     shipping_fee: number;
 

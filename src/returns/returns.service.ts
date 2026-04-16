@@ -139,7 +139,7 @@ export class ReturnsService {
     }
 
     // 4. Warehouse Manual Inspection & Wallet Refund
-    async inspectReturn(returnId: number, dto: InspectReturnDto) {
+    async inspectReturn(returnId: number, dto: InspectReturnDto, staffId: number) {
         const returnReq = await this.prisma.return_requests.findUnique({
             where: { return_id: returnId },
             include: {
@@ -201,7 +201,7 @@ export class ReturnsService {
             // Mark Return Request as Completed
             const completedRequest = await tx.return_requests.update({
                 where: { return_id: returnId },
-                data: { status_code: 'COMPLETED' }
+                data: { status_code: 'COMPLETED', processed_by_staff_id: staffId }
             });
 
             // Revert Order Status completely
