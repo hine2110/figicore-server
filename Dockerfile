@@ -11,6 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     make \
     g++ \
+    openssl \
     libcairo2-dev \
     libpango1.0-dev \
     libjpeg62-turbo-dev \
@@ -42,6 +43,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     tzdata \
+    openssl \
     libcairo2 \
     libpango-1.0-0 \
     libjpeg62-turbo \
