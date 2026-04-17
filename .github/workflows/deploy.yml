@@ -27,12 +27,12 @@ jobs:
           chmod +x build.sh
           sh ./build.sh
 
-      # - name: SSH Deploy to Server
-      #   uses: appleboy/ssh-action@v1.0.3
-      #   with:
-      #     host: ${{ secrets.SSH_HOST }}
-      #     username: ${{ secrets.SSH_USER }}
-      #     password: ${{ secrets.SSH_PASSWORD }}
-      #     script: |
-      #       cd repo/dev/rice-warehouse-api/
-      #       sh restart.sh
+      - name: SSH Deploy to Server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          password: ${{ secrets.SSH_PASSWORD }}
+          script: |
+            cd repo/figicore/figicore-server/
+            sh restart.sh
