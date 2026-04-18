@@ -1,12 +1,31 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, Req } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, Req, Query } from '@nestjs/common';
 import { PromotionsService } from './promotions.service';
+import { WeeklyVoucherCronService } from '../cron/weekly-voucher-cron.service';
 import { CreatePromotionDto } from './dto/create-promotion.dto';
 import { UpdatePromotionDto } from './dto/update-promotion.dto';
 import { AuthGuard } from '@nestjs/passport';
 
 @Controller('promotions')
 export class PromotionsController {
-  constructor(private readonly promotionsService: PromotionsService) {}
+  constructor(
+    private readonly promotionsService: PromotionsService,
+    private readonly weeklyVoucherCronService: WeeklyVoucherCronService,
+  ) {}
+
+  // --- Dev Tools ---
+  
+  @Post('dev/trigger-weekly-voucher')
+  triggerWeeklyVouchers() {
+    return this.weeklyVoucherCronService.triggerManually();
+  }
+
+  // --- Support ---
+
+  @UseGuards(AuthGuard('jwt'))
+  @Post('apology')
+  sendApologyVoucher(@Body('email') email: string) {
+    return this.promotionsService.createApologyVoucher(email);
+  }
 
   // --- Customer APIs ---
 
@@ -36,8 +55,15 @@ export class PromotionsController {
   }
 
   @Get()
-  findAll() {
-    return this.promotionsService.findAll();
+  findAll(
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+    @Query('search') search?: string,
+    @Query('type') type?: string,
+    @Query('status') status?: string,
+    @Query('rank') rank?: string,
+  ) {
+    return this.promotionsService.findAll({ page, limit, search, type, status, rank });
   }
 
   @Get(':id')
