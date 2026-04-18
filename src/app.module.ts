@@ -50,6 +50,7 @@ import { PayrollDisputesModule } from './payroll-disputes/payroll-disputes.modul
 import { LivestreamsModule } from './livestreams/livestreams.module';
 import { InventoryAnalyticsModule } from './inventory-analytics/inventory-analytics.module';
 import { BirthdayCronModule } from './cron/birthday-cron.module';
+import { ShiftCronModule } from './cron/shift-cron.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 
 
@@ -106,6 +107,7 @@ import { DashboardModule } from './dashboard/dashboard.module';
     LivestreamsModule,
     InventoryAnalyticsModule,
     BirthdayCronModule,
+    ShiftCronModule,
     DashboardModule,
   ],
 

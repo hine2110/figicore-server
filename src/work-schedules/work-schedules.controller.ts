@@ -31,6 +31,11 @@ export class WorkSchedulesController {
         return this.workSchedulesService.clone(cloneWorkScheduleDto);
     }
 
+    @Patch(':id/status')
+    updateStatus(@Param('id', ParseIntPipe) id: number, @Body('status_code') status_code: string) {
+        return this.workSchedulesService.updateStatus(id, status_code);
+    }
+
     @Patch(':id')
     update(@Param('id', ParseIntPipe) id: number, @Body() updateWorkScheduleDto: UpdateWorkScheduleDto) {
         return this.workSchedulesService.update(id, updateWorkScheduleDto);

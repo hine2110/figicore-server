@@ -17,8 +17,38 @@ dayjs.tz.setDefault('Asia/Ho_Chi_Minh');
 export class WorkSchedulesService {
     constructor(private readonly prisma: PrismaService) { }
 
+    private checkManagerAllowedToModify(targetDateInput: Date | string) {
+        const targetDate = dayjs.tz(targetDateInput, 'Asia/Ho_Chi_Minh').toDate();
+        const today = dayjs.tz(new Date(), 'Asia/Ho_Chi_Minh').toDate();
+
+        // Get Monday of target week
+        const targetDay = targetDate.getDay();
+        const targetDiff = targetDate.getDate() - targetDay + (targetDay === 0 ? -6 : 1);
+        const targetMonday = new Date(targetDate.setDate(targetDiff)).setHours(0, 0, 0, 0);
+
+        // Get Monday of current week
+        const todayDay = today.getDay();
+        const todayDiff = today.getDate() - todayDay + (todayDay === 0 ? -6 : 1);
+        const currentMonday = new Date(today.setDate(todayDiff)).setHours(0, 0, 0, 0);
+
+        // If editing a future week
+        if (targetMonday > currentMonday) {
+            // Check what day today is in Vietnam Time
+            // dayjs().day() returns 0 for Sun, 1 for Mon, ..., 6 for Sat
+            const currentVnDay = dayjs.tz(new Date(), 'Asia/Ho_Chi_Minh').day();
+            
+            // If today is Mon (1) to Fri (5), NOT allowed. Registration is active.
+            // Allowed ONLY on Sat (6) or Sun (0).
+            if (currentVnDay >= 1 && currentVnDay <= 5) {
+                throw new BadRequestException('Chưa hết hạn đăng ký lịch của nhân viên (từ 00:00 Thứ 7 mới được phép duyệt/xếp lịch cho tuần sau).');
+            }
+        }
+    }
+
     async create(createWorkScheduleDto: CreateWorkScheduleDto) {
         const { user_id, date, shift_code } = createWorkScheduleDto;
+
+        this.checkManagerAllowedToModify(date);
 
         // 1. Define Standard Shift Times (Server Enforcement)
         const shiftTimes: Record<string, { start: number; end: number }> = {
@@ -87,11 +117,15 @@ export class WorkSchedulesService {
         });
     }
 
-    async createBulk(dtos: CreateWorkScheduleDto[]) {
+    async createBulk(createWorkScheduleDtos: CreateWorkScheduleDto[]) {
+        for (const dto of createWorkScheduleDtos) {
+            this.checkManagerAllowedToModify(dto.date);
+        }
+
         const results: any[] = [];
         const errors: { user_id: number; date: string; error: any }[] = [];
 
-        for (const dto of dtos) {
+        for (const dto of createWorkScheduleDtos) {
             try {
                 // Tận dụng hàm create lẻ để giữ nguyên logic kiểm tra trùng lặp và validate
                 const res = await this.create(dto);
@@ -117,6 +151,9 @@ export class WorkSchedulesService {
 
     async clone(cloneWorkScheduleDto: CloneWorkScheduleDto) {
         const { source_date, target_date } = cloneWorkScheduleDto;
+
+        this.checkManagerAllowedToModify(target_date);
+
         const source = new Date(source_date);
         const target = new Date(target_date);
 
@@ -228,6 +265,12 @@ export class WorkSchedulesService {
 
         const { user_id, date, shift_code, expected_start, expected_end } = updateWorkScheduleDto;
 
+        if (date) {
+            this.checkManagerAllowedToModify(date);
+        } else {
+            this.checkManagerAllowedToModify(existingSchedule.date);
+        }
+
         // 2. Conflict Check if key fields are updated
         if (user_id || date || shift_code) {
             const checkUserId = user_id ?? existingSchedule.user_id;
@@ -270,6 +313,39 @@ export class WorkSchedulesService {
         return this.prisma.work_schedules.update({
             where: { schedule_id: id },
             data: dataToUpdate,
+        });
+    }
+
+    async updateStatus(id: number, status_code: string) {
+        const existingSchedule = await this.prisma.work_schedules.findFirst({
+            where: {
+                schedule_id: id,
+                deleted_at: null,
+            },
+        });
+
+        if (!existingSchedule) {
+            throw new Error(`Work schedule with ID ${id} not found`);
+        }
+
+        this.checkManagerAllowedToModify(existingSchedule.date);
+
+        if (status_code === 'REJECTED') {
+            return this.prisma.work_schedules.update({
+                where: { schedule_id: id },
+                data: {
+                    status_code,
+                    deleted_at: new Date(),
+                },
+            });
+        }
+
+        return this.prisma.work_schedules.update({
+            where: { schedule_id: id },
+            data: {
+                status_code,
+                updated_at: new Date(),
+            },
         });
     }
 
