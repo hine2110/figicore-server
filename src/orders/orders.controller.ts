@@ -98,8 +98,14 @@ export class OrdersController {
     return this.ordersService.getContractDetails(+id, req.user.user_id);
   }
 
+  @Get('warehouse-stats')
+  @UseGuards(AuthGuard('jwt'))
+  getWarehouseStats(@Query() query: { startDate: string, endDate: string }) {
+    return this.ordersService.getWarehouseStats(query.startDate, query.endDate);
+  }
+
   @Get()
-  findAll(@Query() query: { status?: string }) {
+  findAll(@Query() query: { status?: string, startDate?: string, endDate?: string }) {
     return this.ordersService.findAll(query);
   }
 

@@ -3,6 +3,7 @@ import { SystemService } from './system.service';
 import { UpdateOpexDto } from './dto/update-opex.dto';
 import { CreateBannerDto } from './dto/create-banner.dto';
 import { UpdateBannerDto } from './dto/update-banner.dto';
+import { UpdateWeeklyVoucherConfigDto } from './dto/weekly-voucher-config.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -79,6 +80,26 @@ export class SystemController {
   @Roles('SUPER_ADMIN', 'MANAGER')
   async toggleBanner(@Param('id', ParseIntPipe) id: number) {
     const result = await this.systemService.toggleBannerStatus(id);
+    return { success: true, data: result };
+  }
+
+  // --- Weekly Voucher Config APIs ---
+
+  @Get('weekly-voucher')
+  @UseGuards(JwtAuthGuard)
+  async getWeeklyVoucherConfig() {
+    const result = await this.systemService.getWeeklyVoucherConfig();
+    return { success: true, data: result };
+  }
+
+  @Patch('weekly-voucher')
+  @UseGuards(JwtAuthGuard)
+  async updateWeeklyVoucherConfig(
+    @Body() dto: UpdateWeeklyVoucherConfigDto,
+    @Request() req: any,
+  ) {
+    const userId = req.user.userId;
+    const result = await this.systemService.updateWeeklyVoucherConfig(dto, userId);
     return { success: true, data: result };
   }
 }
