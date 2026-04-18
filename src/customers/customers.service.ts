@@ -57,8 +57,8 @@ export class CustomersService {
       return {
         user_id: decrypted.user_id,
         full_name: decrypted.full_name,
-        email,
-        phone,
+        email: decrypted.email,
+        phone: decrypted.phone,
         status_code: decrypted.status_code,
         avatar_url: decrypted.avatar_url,
         loyalty_points: u.customers?.loyalty_points ?? 0,

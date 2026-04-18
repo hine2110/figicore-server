@@ -52,7 +52,7 @@ export class AuthController {
     const token = loginResult.access_token;
 
     // 3. Redirect to Frontend
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const frontendUrl = process.env.FRONTEND_URL || 'https://figicore.com';
     return res.redirect(`${frontendUrl}/auth/success?token=${token}`);
   }
 

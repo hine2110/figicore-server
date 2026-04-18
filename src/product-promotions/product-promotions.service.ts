@@ -129,22 +129,65 @@ export class ProductPromotionsService {
     return promo;
   }
 
-  async findAll() {
-    return this.prisma.product_promotions.findMany({
-      orderBy: { created_at: 'desc' },
-      include: {
-        _count: {
-          select: { product_variants: true }
-        },
-        promotion_items: {
-          include: {
-            product_variants: {
-              select: { price: true }
+  async findAll(query: {
+    page?: number;
+    limit?: number;
+    search?: string;
+    status?: string;
+  }) {
+    const page = Number(query.page || 1);
+    const limit = Number(query.limit || 10);
+    const skip = (page - 1) * limit;
+
+    const where: any = { deleted_at: null };
+
+    if (query.search) {
+      where.name = { contains: query.search, mode: 'insensitive' };
+    }
+
+    if (query.status && query.status !== 'ALL') {
+      const now = new Date();
+      if (query.status === 'EXPIRED') {
+        where.OR = [
+          { is_active: false },
+          { end_date: { lt: now } }
+        ];
+      } else if (query.status === 'FLASH_SALE') {
+        where.is_flash_sale = true;
+        where.is_active = true;
+      } else {
+        // Assume ACTIVE/PUBLIC
+        where.is_active = true;
+        where.OR = [
+          { end_date: null },
+          { end_date: { gt: now } }
+        ];
+      }
+    }
+
+    const [data, total] = await Promise.all([
+      this.prisma.product_promotions.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { created_at: 'desc' },
+        include: {
+          _count: {
+            select: { product_variants: true }
+          },
+          promotion_items: {
+            include: {
+              product_variants: {
+                select: { price: true }
+              }
             }
           }
         }
-      }
-    });
+      }),
+      this.prisma.product_promotions.count({ where }),
+    ]);
+
+    return { data, total };
   }
 
   /** Public: returns currently-active Flash Sale items for the Storefront. */
