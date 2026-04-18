@@ -1508,8 +1508,13 @@ export class OrdersService {
 
     const orders = await this.prisma.orders.findMany({
       where,
-      orderBy: { created_at: 'asc' }, // FIFO: Oldest First
+      orderBy: { created_at: 'desc' }, // Latest First for Admin
       include: {
+        users: {
+          select: {
+            full_name: true
+          }
+        },
         order_items: {
           include: {
             product_variants: {
@@ -1588,7 +1593,8 @@ export class OrdersService {
           }
         },
         addresses: true, // To show address
-        shipments: true // To show tracking info
+        shipments: true, // To show tracking info
+        users: true, // NEW: Include customer info for administration
       }
     });
 
@@ -1611,7 +1617,8 @@ export class OrdersService {
       await this.logPiiAccess(requestingUserId, order.user_id, ['order_address'], user.ip);
     }
 
-    // Decrypt Address
+    // Decrypt User & Address
+    if (order.users) order.users = this.decryptUser(order.users);
     order.addresses = this.decryptAddress(order.addresses) as any;
 
     if (hasUnopened && order.status_code !== 'COMPLETED' && !isStaff) {
@@ -2114,7 +2121,8 @@ export class OrdersService {
       include: {
         order_items: {
           include: { product_variants: true }
-        }
+        },
+        shipping_promotions: true
       }
     });
 
@@ -2161,12 +2169,21 @@ export class OrdersService {
        }
     }
 
+    const roundedFee = Math.ceil(Math.max(30000, realGhnFee) / 1000) * 1000;
+    let finalShippingFee = roundedFee;
+
+    if (order.shipping_promotions) {
+        const discountCap = Number(order.shipping_promotions.max_discount_amount) || 0;
+        const discount = discountCap > 0 ? Math.min(discountCap, roundedFee) : roundedFee;
+        finalShippingFee = roundedFee - discount;
+    }
+
     return this.prisma.orders.update({
       where: { order_id: id },
       data: {
         shipping_address_id: updateOrderDto.shipping_address_id,
         payment_method_code: updateOrderDto.payment_method_code,
-        shipping_fee: Math.ceil(Math.max(30000, realGhnFee) / 1000) * 1000, 
+        shipping_fee: finalShippingFee, 
         original_shipping_fee: realGhnFee
       }
     });
