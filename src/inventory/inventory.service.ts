@@ -299,7 +299,7 @@ export class InventoryService {
         console.log(`[Notification] Sending email to User ${contract.user_id} (${user?.email})`);
 
         if (user && user.email) {
-          const paymentLink = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/customer/preorders/${contract.contract_id}/pay`;
+          const paymentLink = `${process.env.FRONTEND_URL || 'https://figicore.com'}/customer/preorders/${contract.contract_id}/pay`;
 
           // Run async without awaiting to not block transaction (or await if critical)
           // Ideally outside transaction, but here we are deep in logic. 
