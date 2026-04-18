@@ -1427,8 +1427,13 @@ export class OrdersService {
     const { status } = params || {};
     const orders = await this.prisma.orders.findMany({
       where: status ? { status_code: status } : {},
-      orderBy: { created_at: 'asc' }, // FIFO: Oldest First
+      orderBy: { created_at: 'desc' }, // Latest First for Admin
       include: {
+        users: {
+          select: {
+            full_name: true
+          }
+        },
         order_items: {
           include: {
             product_variants: {
@@ -1502,7 +1507,8 @@ export class OrdersService {
           }
         },
         addresses: true, // To show address
-        shipments: true // To show tracking info
+        shipments: true, // To show tracking info
+        users: true, // NEW: Include customer info for administration
       }
     });
 
@@ -1525,7 +1531,8 @@ export class OrdersService {
       await this.logPiiAccess(requestingUserId, order.user_id, ['order_address'], user.ip);
     }
 
-    // Decrypt Address
+    // Decrypt User & Address
+    if (order.users) order.users = this.decryptUser(order.users);
     order.addresses = this.decryptAddress(order.addresses) as any;
 
     if (hasUnopened && order.status_code !== 'COMPLETED' && !isStaff) {

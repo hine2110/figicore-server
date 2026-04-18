@@ -502,7 +502,7 @@ export class PosService {
 
     return {
       success: true,
-      data: this.decryptPii(session, true),
+      data: this.decryptPii(session, false),
     };
   }
 }
