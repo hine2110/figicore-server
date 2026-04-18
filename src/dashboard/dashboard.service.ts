@@ -1,11 +1,15 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { EncryptionService } from '../common/encryption.service';
 
 @Injectable()
 export class DashboardService {
   private readonly logger = new Logger(DashboardService.name);
 
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private encryption: EncryptionService,
+  ) {}
 
   async getSummaryStats() {
     try {
@@ -53,9 +57,9 @@ export class DashboardService {
 
   async getRevenueChart() {
     try {
-      // Get the last 7 days revenue
       const data: any[] = [];
       const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+      
       for (let i = 6; i >= 0; i--) {
         const date = new Date();
         date.setDate(date.getDate() - i);
@@ -64,29 +68,45 @@ export class DashboardService {
         const nextDate = new Date(date);
         nextDate.setDate(date.getDate() + 1);
 
-        const agg = await this.prisma.orders.aggregate({
-          _sum: { total_amount: true },
+        // Fetch all successful orders for this day
+        const dailyOrders = await this.prisma.orders.findMany({
           where: {
             created_at: {
               gte: date,
               lt: nextDate,
             },
             status_code: { notIn: ['CANCELLED', 'RETURNED'] },
+          },
+          select: {
+            total_amount: true,
+            channel_code: true
           }
         });
 
-        // Base revenue: use real DB value or mock fallback (15M–45M VND)
-        let base = Number(agg._sum.total_amount);
-        if (!base) base = Math.floor(Math.random() * (45000000 - 15000000) + 15000000);
+        // Initialize category totals
+        const dayData: any = {
+          name: days[date.getDay()],
+          retail: 0,
+          livestream: 0,
+          preorder: 0,
+          blindbox: 0,
+          auction: 0
+        };
 
-        const r = () => 1 + (Math.random() * 0.1 - 0.05); // ±5% noise
-        const retail     = Math.floor(base * 0.35 * r());
-        const livestream = Math.floor(base * 0.28 * r());
-        const preorder   = Math.floor(base * 0.18 * r());
-        const blindbox   = Math.floor(base * 0.10 * r());
-        const auction    = Math.max(0, base - retail - livestream - preorder - blindbox);
+        // Sum up real data from DB
+        dailyOrders.forEach(order => {
+          const channel = (order.channel_code || '').toLowerCase();
+          const amount = Number(order.total_amount) || 0;
 
-        data.push({ name: days[date.getDay()], retail, blindbox, preorder, auction, livestream });
+          if (channel.includes('retail') || channel.includes('pos')) dayData.retail += amount;
+          else if (channel.includes('livestream')) dayData.livestream += amount;
+          else if (channel.includes('preorder')) dayData.preorder += amount;
+          else if (channel.includes('blindbox')) dayData.blindbox += amount;
+          else if (channel.includes('auction')) dayData.auction += amount;
+          else dayData.retail += amount; // fallback for others to retail
+        });
+
+        data.push(dayData);
       }
       return data;
     } catch (error) {
@@ -112,9 +132,12 @@ export class DashboardService {
 
       return activeUsers.map(u => {
         const lastLog = u.user_login_logs[0];
+        // Decrypt email if it's encrypted
+        const decryptedEmail = u.email ? this.encryption.decrypt(u.email) : 'N/A';
+
         return {
           user: u.full_name || 'Unknown',
-          email: u.email || 'N/A',
+          email: decryptedEmail,
           role: u.role_code || 'N/A',
           ip: lastLog?.ip_address || 'Chưa rõ',
           login_time: lastLog?.login_time
