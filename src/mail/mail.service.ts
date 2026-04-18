@@ -55,7 +55,7 @@ export class MailService {
           orderCode: order.order_code || order.order_id,
           formattedTotal: this.formatCurrency(Number(order.total_amount)),
           items: items,
-          url: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/customer/profile?tab=orders`
+          url: `${process.env.FRONTEND_URL || 'https://figicore.com'}/customer/profile?tab=orders`
         },
       });
       console.log(`[MailService] Order confirmation sent to ${toEmail}`);
@@ -112,7 +112,7 @@ export class MailService {
           name: decUser.full_name,
           orderCode: order.order_code || order.order_id,
           earnedPoints: earnedPoints,
-          url: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/customer/profile?tab=orders`
+          url: `${process.env.FRONTEND_URL || 'https://figicore.com'}/customer/profile?tab=orders`
         },
       });
       console.log(`[MailService] Delivery success email sent to ${toEmail}`);
@@ -167,7 +167,7 @@ export class MailService {
 
   async sendVerificationEmail(email: string, token: string) {
     const toEmail = this.decryptEmail(email);
-    const url = `http://localhost:3000/auth/verify?token=${token}`;
+    const url = `${process.env.FRONTEND_URL || 'https://figicore.com'}/auth/verify?token=${token}`;
 
     await this.mailerService.sendMail({
       to: toEmail,
@@ -184,7 +184,7 @@ export class MailService {
   async sendEmployeeActivation(to: string, tempPass: string, token: string, name: string) {
     const toEmail = this.decryptEmail(to);
     const toName = this.decryptEmail(name);
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const frontendUrl = process.env.FRONTEND_URL || 'https://figicore.com';
     const activationLink = `${frontendUrl}/auth/activate?token=${token}`;
 
     await this.mailerService.sendMail({
@@ -200,7 +200,7 @@ export class MailService {
                         <p style="margin: 5px 0;"><strong>Email:</strong> ${toEmail}</p>
                         <p style="margin: 5px 0;"><strong>Temporary Password:</strong> <span style="font-family: monospace; font-size: 16px; background: #eee; padding: 2px 6px; border-radius: 4px;">${tempPass}</span></p>
                     </div>
-203: 
+                    
                     <p>Please click the button below to change your password and activate your account:</p>
                     
                     <div style="text-align: center; margin: 30px 0;">
@@ -383,7 +383,7 @@ export class MailService {
     const toEmail = this.decryptEmail(user.email);
     const toName = this.decryptEmail(user.full_name);
     try {
-      const frontendUrl = this.configService.get('FRONTEND_URL', 'http://localhost:5173');
+      const frontendUrl = this.configService.get('FRONTEND_URL', 'https://figicore.com');
       const collectUrl = `${frontendUrl}/customer/vouchers/collect/${promotion.promotion_id}`;
 
       const rankBadge = promotion.apply_rank_code
@@ -541,7 +541,7 @@ export class MailService {
     const toEmail = user.email; // Already decrypted by caller
     const toName = user.full_name;
     try {
-      const frontendUrl = this.configService.get('FRONTEND_URL', 'http://localhost:5173');
+      const frontendUrl = this.configService.get('FRONTEND_URL', 'https://figicore.com');
       const collectUrl = `${frontendUrl}/customer/home`;
 
       // Màu sắc badge theo rank
@@ -658,7 +658,7 @@ export class MailService {
     const toEmail = user.email; // Already decrypted
     const toName = user.full_name;
     try {
-      const frontendUrl = this.configService.get('FRONTEND_URL', 'http://localhost:5173');
+      const frontendUrl = this.configService.get('FRONTEND_URL', 'https://figicore.com');
       const walletUrl = `${frontendUrl}/customer/home`;
 
       await this.mailerService.sendMail({
