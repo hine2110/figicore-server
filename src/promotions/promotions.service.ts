@@ -89,10 +89,62 @@ export class PromotionsService {
     this.logger.log(`[EmailDispatch] Completed for promotion #${promotion.promotion_id}`);
   }
 
-  async findAll() {
-    return this.prisma.promotions.findMany({
-      orderBy: { created_at: 'desc' },
-    });
+  async findAll(query: {
+    page?: number;
+    limit?: number;
+    search?: string;
+    type?: string;
+    status?: string;
+    rank?: string;
+  }) {
+    const page = Number(query.page || 1);
+    const limit = Number(query.limit || 10);
+    const skip = (page - 1) * limit;
+
+    const where: any = { deleted_at: null };
+
+    if (query.search) {
+      where.code = { contains: query.search, mode: 'insensitive' };
+    }
+
+    if (query.type && query.type !== 'ALL') {
+      where.discount_type = query.type;
+    }
+
+    if (query.rank && query.rank !== 'ALL') {
+      where.apply_rank_code = query.rank;
+    }
+
+    if (query.status && query.status !== 'ALL') {
+      const now = new Date();
+      if (query.status === 'PUBLIC') {
+        where.is_public = true;
+        where.is_active = true;
+        where.OR = [
+          { end_date: null },
+          { end_date: { gt: now } }
+        ];
+      } else if (query.status === 'EXPIRED') {
+        where.OR = [
+          { is_active: false },
+          { end_date: { lt: now } }
+        ];
+      } else if (query.status === 'HIDDEN') {
+        where.is_public = false;
+      }
+    }
+
+    const [data, total] = await Promise.all([
+      this.prisma.promotions.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { created_at: 'desc' },
+      }),
+      this.prisma.promotions.count({ where }),
+    ]);
+
+    return { data, total };
   }
 
   async findOne(id: number) {
@@ -394,5 +446,74 @@ export class PromotionsService {
         `[AutoExpire] Marked ${ids.length} promotions as inactive. Codes: [${codes}]`
       );
     }
+  }
+
+  // ─── Apology Voucher ──────────────────────────────────────────────────
+
+  async createApologyVoucher(email: string) {
+    if (!email) {
+      throw new BadRequestException('Email is required');
+    }
+
+    const encryptedEmail = this.encryption.encryptDeterministic(email);
+    const user = await this.prisma.users.findUnique({
+      where: { email: encryptedEmail },
+      include: { customers: true },
+    });
+
+    if (!user) {
+      throw new NotFoundException('Account with this email not found.');
+    }
+
+    if (!user.customers) {
+      throw new BadRequestException('This email does not belong to a customer account.');
+    }
+
+    const shortId = Math.random().toString(36).substring(2, 6).toUpperCase();
+    const code = `APOLOGY-${shortId}${user.user_id}`;
+    
+    const now = new Date();
+    const expiry = new Date();
+    expiry.setDate(expiry.getDate() + 30); // 30 days validity
+
+    return await this.prisma.$transaction(async (tx) => {
+      // 1. Target Create Promotion (is_public = false)
+      const promotion = await tx.promotions.create({
+        data: {
+          code,
+          discount_type: 'PERCENTAGE',
+          discount_value: 15, // 15% off
+          max_discount_amount: 150000, // Capped at 150.000 VNĐ
+          min_order_value: 0,
+          is_public: false,
+          is_active: true,
+          max_quantity: 1,
+          collected_quantity: 1, // Already marked as collected
+          start_date: now,
+          end_date: expiry,
+        },
+      });
+
+      // 2. Put straight into customer's wallet
+      await tx.user_vouchers.create({
+        data: {
+          user_id: user.user_id,
+          promotion_id: promotion.promotion_id,
+        },
+      });
+
+      // 3. Send email asynchronously (fire & forget)
+      const decryptedName = user.full_name ? this.encryption.decrypt(user.full_name) : 'Customer';
+      this.mailService.sendApologyEmail(
+        { email, full_name: decryptedName },
+        promotion
+      ).catch((err) => console.error('[Apology Voucher]', err));
+
+      return {
+        success: true,
+        message: 'Apology voucher sent successfully.',
+        data: promotion
+      };
+    });
   }
 }
