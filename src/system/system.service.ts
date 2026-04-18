@@ -1,6 +1,8 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { UpdateOpexDto } from './dto/update-opex.dto';
+import { CreateBannerDto } from './dto/create-banner.dto';
+import { UpdateBannerDto } from './dto/update-banner.dto';
 import { UpdateWeeklyVoucherConfigDto } from './dto/weekly-voucher-config.dto';
 
 @Injectable()
@@ -79,6 +81,48 @@ export class SystemService {
 
       this.logger.log(`OPEX Config updated by User #${userId}. Total: ${total}%`);
       return newSetting.value;
+    });
+  }
+
+  // --- BANNER MANAGEMENT ---
+
+  async getBanners(onlyActive = true) {
+    return await this.prisma.system_banners.findMany({
+      where: onlyActive ? { is_active: true } : {},
+      orderBy: { sort_order: 'asc' },
+    });
+  }
+
+  async createBanner(dto: CreateBannerDto) {
+    return await this.prisma.system_banners.create({
+      data: dto,
+    });
+  }
+
+  async updateBanner(id: number, dto: UpdateBannerDto) {
+    return await this.prisma.system_banners.update({
+      where: { banner_id: id },
+      data: dto,
+    });
+  }
+
+  async deleteBanner(id: number) {
+    return await this.prisma.system_banners.delete({
+      where: { banner_id: id },
+    });
+  }
+
+  async toggleBannerStatus(id: number) {
+    const banner = await this.prisma.system_banners.findUnique({
+      where: { banner_id: id },
+      select: { is_active: true },
+    });
+
+    if (!banner) throw new BadRequestException('Banner không tồn tại');
+
+    return await this.prisma.system_banners.update({
+      where: { banner_id: id },
+      data: { is_active: !banner.is_active },
     });
   }
 
