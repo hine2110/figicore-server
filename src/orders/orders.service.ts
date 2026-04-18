@@ -2114,7 +2114,8 @@ export class OrdersService {
       include: {
         order_items: {
           include: { product_variants: true }
-        }
+        },
+        shipping_promotions: true
       }
     });
 
@@ -2161,12 +2162,21 @@ export class OrdersService {
        }
     }
 
+    const roundedFee = Math.ceil(Math.max(30000, realGhnFee) / 1000) * 1000;
+    let finalShippingFee = roundedFee;
+
+    if (order.shipping_promotions) {
+        const discountCap = Number(order.shipping_promotions.max_discount_amount) || 0;
+        const discount = discountCap > 0 ? Math.min(discountCap, roundedFee) : roundedFee;
+        finalShippingFee = roundedFee - discount;
+    }
+
     return this.prisma.orders.update({
       where: { order_id: id },
       data: {
         shipping_address_id: updateOrderDto.shipping_address_id,
         payment_method_code: updateOrderDto.payment_method_code,
-        shipping_fee: Math.ceil(Math.max(30000, realGhnFee) / 1000) * 1000, 
+        shipping_fee: finalShippingFee, 
         original_shipping_fee: realGhnFee
       }
     });
