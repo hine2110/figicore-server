@@ -2,10 +2,14 @@ import { Injectable, BadRequestException, ForbiddenException } from '@nestjs/com
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateLeaveRequestDto } from './dto/create-leave-request.dto';
 import { UpdateLeaveStatusDto } from './dto/update-leave-status.dto';
+import { EncryptionService } from '../common/encryption.service';
 
 @Injectable()
 export class LeaveRequestsService {
-    constructor(private prisma: PrismaService) { }
+    constructor(
+        private prisma: PrismaService,
+        private encryption: EncryptionService
+    ) { }
 
     async create(userId: number, dto: CreateLeaveRequestDto) {
         // --- LUẬT MỚI: KIỂM TRA THỜI GIAN BÁO TRƯỚC ---
@@ -205,7 +209,7 @@ export class LeaveRequestsService {
             whereClause.status_code = status;
         }
 
-        return this.prisma.leave_requests.findMany({
+        const leaves = await this.prisma.leave_requests.findMany({
             where: whereClause, // Nạp điều kiện lọc vào đây
             include: {
                 employees: {
@@ -221,6 +225,20 @@ export class LeaveRequestsService {
                 }
             },
             orderBy: { created_at: 'desc' },
+        });
+
+        // Giải mã Email và Số điện thoại nhân viên
+        return leaves.map(req => {
+            const user = req.employees?.users;
+            if (user) {
+                if (user.email) {
+                    user.email = this.encryption.decrypt(user.email);
+                }
+                if (user.phone) {
+                    user.phone = this.encryption.decrypt(user.phone);
+                }
+            }
+            return req;
         });
     }
     async updateStatus(id: number, dto: UpdateLeaveStatusDto) {
