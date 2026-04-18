@@ -457,7 +457,7 @@ export class MailService {
     const toEmail = this.decryptEmail(email);
     const toName = this.decryptEmail(fullName);
     try {
-      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+      const frontendUrl = process.env.FRONTEND_URL || 'https://figicore.com';
       const walletUrl = `${frontendUrl}/customer/profile?tab=vouchers`;
 
       const formattedExpiry = new Intl.DateTimeFormat('en-US', {
