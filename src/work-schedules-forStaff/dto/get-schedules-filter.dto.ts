@@ -9,4 +9,8 @@ export class GetSchedulesFilterDto {
     @IsOptional()
     @IsString()
     to?: string;
+
+    @IsOptional()
+    @IsString()
+    include_pending?: string;
 }

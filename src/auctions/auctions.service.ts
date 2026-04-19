@@ -888,7 +888,7 @@ export class AuctionsService {
         });
 
         // Notify Top 2 with their own bid price
-        const paymentLink = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/customer/cart`;
+        const paymentLink = `${process.env.FRONTEND_URL || 'https://figicore.com'}/customer/cart`;
         
         await this.mailService.sendAuctionStandbyWinEmail(
           standby.users,
@@ -1033,7 +1033,7 @@ export class AuctionsService {
         });
 
         // Notifications
-        const paymentLink = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/customer/cart`;
+        const paymentLink = `${process.env.FRONTEND_URL || 'https://figicore.com'}/customer/cart`;
         
         await this.mailService.sendAuctionStandbyWinEmail(
           standby.users,
