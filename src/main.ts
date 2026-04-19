@@ -16,9 +16,12 @@ async function bootstrap() {
       'http://localhost:3000',
       'https://figicore.com',
       'https://www.figicore.com',
+      'https://api.figicore.com',
+      'https://app.figicore.com',
     ],
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     credentials: true,
+    allowedHeaders: 'Content-Type,Accept,Authorization,X-Requested-With',
   });
 
   // Increase payload limit for video uploads
