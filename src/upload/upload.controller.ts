@@ -31,7 +31,7 @@ export class UploadController {
             throw new BadRequestException('File is required');
         }
         // Construct public URL
-        const backendUrl = process.env.BACKEND_URL || 'http://localhost:3000'; // Fallback or use request host
+        const backendUrl = process.env.BACKEND_URL || 'https://api.figicore.com'; // Fallback or use request host
         return {
             url: `${backendUrl}/uploads/avatars/${file.filename}`,
         };

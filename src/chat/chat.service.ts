@@ -142,7 +142,7 @@ export class ChatService {
             const resolveUrl = (url: string) => {
               if (!url) return '';
               if (url.startsWith('http')) return url;
-              const baseUrl = this.configService.get<string>('BASE_URL') || 'http://localhost:3000';
+              const baseUrl = this.configService.get<string>('BASE_URL') || 'https://api.figicore.com';
               return `${baseUrl.replace(/\/$/, '')}${url.startsWith('/') ? '' : '/'}${url}`;
             };
 
