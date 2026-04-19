@@ -41,4 +41,23 @@ export class UploadService {
             stream.pipe(uploadStream);
         });
     }
+
+    getSignature(folder: string = 'figicore_shipments') {
+        const timestamp = Math.round(new Date().getTime() / 1000);
+        const signature = cloudinary.utils.api_sign_request(
+            {
+                timestamp: timestamp,
+                folder: folder,
+            },
+            process.env.CLOUDINARY_API_SECRET!,
+        );
+
+        return {
+            signature,
+            timestamp,
+            cloudName: process.env.CLOUDINARY_CLOUD_NAME!,
+            apiKey: process.env.CLOUDINARY_API_KEY!,
+            folder,
+        };
+    }
 }
