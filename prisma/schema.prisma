@@ -158,6 +158,7 @@ model employees {
   reviewed_corrections    timesheet_corrections[]   @relation("CorrectionReviewer")
   timesheet_corrections   timesheet_corrections[]   @relation("CorrectionRequester")
   work_schedules          work_schedules[]
+  returned_orders         return_requests[]         @relation("ReturnProcessor")
 }
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
@@ -581,13 +582,15 @@ model return_requests {
   unbox_video_url   String?
   defect_image_urls String?
   status_code       String?        @default("PENDING") @db.VarChar(50)
-  admin_note        String?
-  created_at        DateTime?      @default(now()) @db.Timestamp(6)
-  updated_at        DateTime?      @default(now()) @db.Timestamp(6)
-  deleted_at        DateTime?      @db.Timestamp(6)
-  return_items      return_items[]
-  orders            orders         @relation(fields: [order_id], references: [order_id], onDelete: NoAction, onUpdate: NoAction)
-  users             users          @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  processed_by_staff_id Int?
+  admin_note             String?
+  created_at             DateTime?      @default(now()) @db.Timestamp(6)
+  updated_at             DateTime?      @default(now()) @db.Timestamp(6)
+  deleted_at             DateTime?      @db.Timestamp(6)
+  return_items           return_items[]
+  orders                 orders         @relation(fields: [order_id], references: [order_id], onDelete: NoAction, onUpdate: NoAction)
+  users                  users          @relation(fields: [user_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+  processor             employees?     @relation("ReturnProcessor", fields: [processed_by_staff_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model series {
@@ -851,6 +854,7 @@ model work_schedules {
   user_id        Int
   date           DateTime     @db.Date
   shift_code     String       @db.VarChar(20)
+  status_code    String?      @default("PUBLISHED") @db.VarChar(50)
   expected_start DateTime?    @db.Timestamp(6)
   expected_end   DateTime?    @db.Timestamp(6)
   created_at     DateTime?    @default(now()) @db.Timestamp(6)

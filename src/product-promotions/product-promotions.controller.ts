@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, ParseIntPipe, Post, Patch, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, ParseIntPipe, Post, Patch, UseGuards, Query } from '@nestjs/common';
 import { ProductPromotionsService } from './product-promotions.service';
 import { CreateProductPromotionDto } from './dto/create-product-promotion.dto';
 import { UpdateProductPromotionDto } from './dto/update-product-promotion.dto';
@@ -26,8 +26,13 @@ export class ProductPromotionsController {
   @Get()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('MANAGER', 'ADMIN')
-  findAll() {
-    return this.service.findAll();
+  findAll(
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+    @Query('search') search?: string,
+    @Query('status') status?: string,
+  ) {
+    return this.service.findAll({ page, limit, search, status });
   }
 
   @Get(':id')
