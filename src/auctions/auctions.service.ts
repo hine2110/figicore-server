@@ -5,6 +5,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AuctionsGateway } from './auctions.gateway';
 import { NotificationsService } from '../notifications/notifications.service';
 import { MailService } from '../mail/mail.service';
+import { EncryptionService } from '../common/encryption.service';
 
 @Injectable()
 export class AuctionsService {
@@ -14,8 +15,17 @@ export class AuctionsService {
     private prisma: PrismaService,
     @Inject(forwardRef(() => AuctionsGateway)) private auctionsGateway: AuctionsGateway,
     private notificationsService: NotificationsService,
-    private mailService: MailService
+    private mailService: MailService,
+    private encryption: EncryptionService
   ) { }
+
+  private decryptUser(user: any) {
+    if (!user) return null;
+    const decrypted = { ...user };
+    if (decrypted.email) decrypted.email = this.encryption.decrypt(decrypted.email);
+    if (decrypted.phone) decrypted.phone = this.encryption.decrypt(decrypted.phone);
+    return decrypted;
+  }
 
   async create(createAuctionDto: CreateAuctionDto) {
     // 1. Verify that the product variant exists and belongs to an AUCTION product type
@@ -97,7 +107,7 @@ export class AuctionsService {
   }
 
   async findOne(id: number) {
-    return this.prisma.auctions.findUnique({
+    const auction = await this.prisma.auctions.findUnique({
       where: { auction_id: id },
       include: {
         product_variants: {
@@ -108,11 +118,34 @@ export class AuctionsService {
           include: { users: { select: { full_name: true, email: true } } }
         },
         auction_bids: {
-          include: { users: { select: { full_name: true, email: true } } },
+          include: { users: { select: { user_id: true, full_name: true, email: true } } },
           orderBy: { bid_amount: 'desc' }
         }
       }
     });
+
+    if (!auction) return null;
+
+    // Decrypt all user data
+    if (auction.users) {
+      auction.users = this.decryptUser(auction.users) as any;
+    }
+
+    if (auction.auction_participants) {
+      auction.auction_participants = auction.auction_participants.map(p => ({
+        ...p,
+        users: this.decryptUser(p.users) as any
+      }));
+    }
+
+    if (auction.auction_bids) {
+      auction.auction_bids = auction.auction_bids.map(b => ({
+        ...b,
+        users: this.decryptUser(b.users) as any
+      }));
+    }
+
+    return auction;
   }
 
   async update(id: number, updateAuctionDto: UpdateAuctionDto) {
@@ -234,6 +267,11 @@ export class AuctionsService {
           }
         }
       });
+
+      // Decrypt PII before returning/broadcasting
+      if (participant.users) {
+        participant.users = this.decryptUser(participant.users) as any;
+      }
 
       return {
         success: true,
@@ -850,7 +888,7 @@ export class AuctionsService {
         });
 
         // Notify Top 2 with their own bid price
-        const paymentLink = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/customer/cart`;
+        const paymentLink = `${process.env.FRONTEND_URL || 'https://figicore.com'}/customer/cart`;
         
         await this.mailService.sendAuctionStandbyWinEmail(
           standby.users,
@@ -995,7 +1033,7 @@ export class AuctionsService {
         });
 
         // Notifications
-        const paymentLink = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/customer/cart`;
+        const paymentLink = `${process.env.FRONTEND_URL || 'https://figicore.com'}/customer/cart`;
         
         await this.mailService.sendAuctionStandbyWinEmail(
           standby.users,

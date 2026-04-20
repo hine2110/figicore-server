@@ -32,38 +32,35 @@ export class ChatService {
 
     try {
       const systemPrompt = `
-        Bạn là "FigiCore Specialist" - Chuyên gia tư vấn và bán hàng cao cấp, nhiệt tình của FigiCore.
-        FigiCore là nền tảng hàng đầu về mô hình sưu tầm (Figures), Art toys, Blindbox và các sản phẩm Gundam/Gunpla.
+        <CONTEXT>
+        Bạn là "FigiCore Specialist" - Chuyên gia tư vấn của FigiCore.
+        FigiCore chuyên: Figures, Art toys, Blindbox, Gundam/Gunpla.
+        </CONTEXT>
 
-        VAI TRÒ:
-        - Bạn là trợ lý thông minh, thân thiện của FigiCore.
-        - Nhiệm vụ là giúp khách hàng tìm hiểu, tư vấn sản phẩm, kiểm tra đơn hàng và giải đáp các câu hỏi liên quan đến FigiCore.
+        <STRICT_RULES>
+        1. CHỈ sử dụng dữ liệu trong thẻ <DATA>.
+        2. TUYỆT ĐỐI KHÔNG tự bịa ra sản phẩm, giá cả, hoặc mã đơn hàng.
+        3. TUYỆT ĐỐI KHÔNG tự bịa ra đường dẫn ảnh (URL). Chỉ hiển thị ảnh nếu URL bắt đầu bằng "http".
+        4. KHÔNG nhận vơ: Nếu khách hỏi mẫu A mà trong <DATA> chỉ có mẫu B, hãy báo rõ mẫu A chưa có sẵn.
+        </STRICT_RULES>
 
-        QUY TẮC VỀ PHẠM VI:
-        - LUÔN trả lời các câu hỏi "mở đầu" tự nhiên của khách hàng như: "bạn có thể làm gì?", "hỗ trợ tôi", "chào", "hello", "hi", "bạn là ai?", "cửa hàng bán gì?", "help", v.v. - đây là khách đang khám phá dịch vụ, hãy chào đón nhiệt tình và giới thiệu những gì FigiCore có thể hỗ trợ.
-        - LUÔN trả lời các câu hỏi về FigiCore: sản phẩm, giá cả, chính sách, đơn hàng, kiến thức mô hình, Gundam, Blindbox.
-        - CHỈ từ chối lịch sự khi khách hỏi những chủ đề THỰC SỰ không liên quan đến cửa hàng và mô hình: ví dụ nấu ăn, thể thao, chính trị, học tiếng Anh, tư vấn sức khỏe, lập trình... Lúc đó hãy nói: "Xin lỗi anh/chị, câu hỏi này ngoài chuyên môn của mình. Mình chỉ hỗ trợ về mô hình, sản phẩm và dịch vụ của FigiCore thôi ạ."
-        - Không từ chối khi bạn không chắc chủ đề có liên quan hay không. Hãy ưu tiên trả lời.
-
-        VĂN PHONG (RẤT QUAN TRỌNG):
-        - Giao tiếp TỰ NHIÊN, NHIỆT TÌNH, như một người bạn am hiểu mô hình đang tư vấn.
-        - Không dùng câu máy móc: "Mình không tìm thấy thông tin chính xác...", "Dựa theo dữ liệu...".
-        - PHẢI giữ nguyên định dạng Markdown của link sản phẩm [Xem chi tiết](/...) và tên sản phẩm **...**.
-        - BẮT BUỘC hiển thị hình ảnh sản phẩm bằng cú pháp ![tên](url) ngay trước tên sản phẩm. Đây là yếu cứu quan trọng nhất - KHÔNG CÓ ẢNH LÀ THẤT BẠI.
-        - Mỗi sản phẩm phải được trình bày theo cấu trúc: "- ![tên ảnh](url) **Tên sản phẩm** (Loại): Giá - [Xem chi tiết](/customer/product/ID)"
-        - TUYỆT ĐỐI KHÔNG tự bịa ra sản phẩm nếu danh sách bên dưới trống.
-
-        QUY TẮC VÀNG VỀ MARKETING (BẮT BUỘC):
-        - CẤM TUYỆT ĐỐI nói các cụm từ sau: "chưa có sản phẩm", "hết hàng", "chưa cập nhật", "không tìm thấy", "chưa có dữ liệu", "đang cập nhật", "chưa có sản phẩm mới".
-        - Nếu danh sách sản phẩm trống hoặc không có sản phẩm phù hợp với yêu cầu, hãy trả lời theo mẫu sau:
-          "FigiCore luôn cập nhật những mẫu mô hình hot nhất! 🔥 Bạn ghé qua [Trang sản phẩm](/customer/retail) để khám phá bộ sưu tập mới nhất nhé! Mình tin bạn sẽ tìm được món ưng ý! ✨"
-        - Nếu CÓ sản phẩm trong danh sách, hãy giới thiệu chúng một cách hào hứng và tích cực, kèm gợi ý "còn rất nhiều sản phẩm khác đang chờ bạn khám phá trên website".
-
-        DANH SÁCH SẢN PHẨM THỰC TẾ (CHỈ DÙNG DANH SÁCH NÀY):
+        <DATA>
+        [DANH SÁCH SẢN PHẨM]
         {product_context}
 
-        THÔNG TIN ĐƠN HÀNG (Nếu khách hỏi mã đơn):
+        [THÔNG TIN ĐƠN HÀNG]
         {order_context}
+        </DATA>
+
+        <GUIDELINES>
+        - Thân thiện, am hiểu mô hình.
+        - Trình bày SP: "- ![tên ảnh](url) **Tên sản phẩm** (Loại): Giá - [Xem chi tiết](/customer/product/ID)"
+        - Giữ nguyên link [Xem chi tiết](/...) và ID.
+        </GUIDELINES>
+
+        <MARKETING_SCRIPT>
+        - Nếu không có mẫu khách tìm: "Chào bạn! Mẫu [Tên khách tìm] hiện chưa có sẵn trên hệ thống FigiCore. Tuy nhiên, shop luôn cập nhật hàng mới mỗi tuần! Bạn tham khảo các mẫu HOT đang sẵn hàng sau đây nhé:"
+        </MARKETING_SCRIPT>
       `;
 
       // 1. Detect Search Intent and Extract Parameters
@@ -121,12 +118,14 @@ export class ChatService {
         });
       }
 
-      // If no filtered results, fall back to newest
+      // If no filtered results, fall back to newest recommendations
+      let isFallback = false;
       let displayProducts = Array.isArray(matchedProducts) && matchedProducts.length > 0 ? matchedProducts.slice(0, 10) : [];
       if (displayProducts.length === 0) {
         const fallbackResult = await this.productsService.findAll({ sort: 'newest' } as any) as any;
         const fallback = fallbackResult?.data || fallbackResult || [];
         displayProducts = Array.isArray(fallback) ? fallback.slice(0, 10) : [];
+        isFallback = true;
       }
 
       const formatPrice = (price: any) => {
@@ -134,54 +133,60 @@ export class ChatService {
         return new Intl.NumberFormat('vi-VN').format(Number(price)) + 'đ';
       };
 
-      const productContext = displayProducts.length > 0 
-        ? displayProducts.map(p => {
-            let firstImageUrl = '';
-            
-            // --- IMPROVED IMAGE EXTRACTION ---
-            const resolveUrl = (url: string) => {
-              if (!url) return '';
-              if (url.startsWith('http')) return url;
-              const baseUrl = this.configService.get<string>('BASE_URL') || 'http://localhost:3000';
-              return `${baseUrl.replace(/\/$/, '')}${url.startsWith('/') ? '' : '/'}${url}`;
-            };
+      const productContextPrefix = isFallback
+        ? "--- HIỆN KHÔNG TÌM THẤY SẢN PHẨM KHÁCH YÊU CẦU. Đây là danh sách các sản phẩm HOT khác để gợi ý: ---\n"
+        : "--- ĐÂY LÀ CÁC SẢN PHẨM TÌM THẤY PHÙ HỢP VỚI CÂU HỎI: ---\n";
 
-            if (p.thumbnail) {
-              const thumb = typeof p.thumbnail === 'string' ? p.thumbnail : (p.thumbnail?.url || '');
-              firstImageUrl = resolveUrl(thumb);
-            } 
-            
-            if (!firstImageUrl && p.media_urls) {
-               try {
-                 const media = typeof p.media_urls === 'string' ? JSON.parse(p.media_urls) : p.media_urls;
-                 const mediaArray = Array.isArray(media) ? media : (media.images || []);
-                 if (mediaArray.length > 0) {
-                    const m = mediaArray[0];
-                    const url = typeof m === 'string' ? m : (m?.url || '');
-                    firstImageUrl = resolveUrl(url);
-                 }
-               } catch(e) {}
-            }
+      const productContext = displayProducts.length > 0
+        ? productContextPrefix + displayProducts.map(p => {
+          let firstImageUrl = '';
 
-            if (!firstImageUrl && p.product_variants?.[0]?.media_assets) {
-               try {
-                 const vMedia = p.product_variants[0].media_assets;
-                 const assets = typeof vMedia === 'string' ? JSON.parse(vMedia) : vMedia;
-                 if (Array.isArray(assets) && assets.length > 0) {
-                    const a = assets[0];
-                    const url = typeof a === 'string' ? a : (a?.url || '');
-                    firstImageUrl = resolveUrl(url);
-                 }
-               } catch(e) {}
-            }
-            // ---------------------------------
+          // --- IMPROVED IMAGE EXTRACTION ---
+          const resolveUrl = (url: string) => {
+            if (!url) return '';
+            if (url.startsWith('http')) return url;
+            let baseUrl = this.configService.get<string>('BASE_URL') || 'https://api.figicore.com';
+            // Ensure we don't include /api in the image path since uploads are at root
+            baseUrl = baseUrl.replace(/\/api$/, '').replace(/\/$/, '');
+            return `${baseUrl}${url.startsWith('/') ? '' : '/'}${url}`;
+          };
 
-            const imageMarkdown = firstImageUrl ? `![${p.name || p.product_name}](${firstImageUrl})` : '';
-            const price = p.variants?.[0]?.price ?? p.product_variants?.[0]?.price;
-            
-            // Format each product as a clean markdown item for the AI to replicate
-            return `- ${imageMarkdown} **${p.name || p.product_name}** (${p.type_code || p.product_type}): ${formatPrice(price)} - [Xem chi tiết](/customer/product/${p.product_id})`;
-          }).join('\n\n')
+          if (p.thumbnail) {
+            const thumb = typeof p.thumbnail === 'string' ? p.thumbnail : (p.thumbnail?.url || '');
+            firstImageUrl = resolveUrl(thumb);
+          }
+
+          if (!firstImageUrl && p.media_urls) {
+            try {
+              const media = typeof p.media_urls === 'string' ? JSON.parse(p.media_urls) : p.media_urls;
+              const mediaArray = Array.isArray(media) ? media : (media.images || []);
+              if (mediaArray.length > 0) {
+                const m = mediaArray[0];
+                const url = typeof m === 'string' ? m : (m?.url || '');
+                firstImageUrl = resolveUrl(url);
+              }
+            } catch (e) { }
+          }
+
+          if (!firstImageUrl && p.product_variants?.[0]?.media_assets) {
+            try {
+              const vMedia = p.product_variants[0].media_assets;
+              const assets = typeof vMedia === 'string' ? JSON.parse(vMedia) : vMedia;
+              if (Array.isArray(assets) && assets.length > 0) {
+                const a = assets[0];
+                const url = typeof a === 'string' ? a : (a?.url || '');
+                firstImageUrl = resolveUrl(url);
+              }
+            } catch (e) { }
+          }
+          // ---------------------------------
+
+          const imageMarkdown = firstImageUrl ? `![${p.name || p.product_name}](${firstImageUrl})` : '';
+          const price = p.variants?.[0]?.price ?? p.product_variants?.[0]?.price;
+
+          // Format each product as a clean markdown item for the AI to replicate
+          return `- ${imageMarkdown} **${p.name || p.product_name}** (${p.type_code || p.product_type}): ${formatPrice(price)} - [Xem chi tiết](/customer/product/${p.product_id})`;
+        }).join('\n\n')
         : '--- Danh sách đang được làm mới. Hãy giới thiệu FigiCore như cửa hàng chuyên mô hình sưu tầm cao cấp và mời khách ghé trang chủ để xem bộ sưu tập mới nhất. ---';
 
       // 2. Fetch Order if mentioned (Basic Regex find)
@@ -229,7 +234,7 @@ export class ChatService {
         const response = await this.openai.chat.completions.create({
           model: 'llama-3.1-8b-instant',
           messages: messages as any,
-          temperature: 0.7,
+          temperature: 0.0,
         });
 
         const aiMessage = response.choices[0].message.content;
@@ -237,12 +242,12 @@ export class ChatService {
         return aiMessage;
       } catch (error) {
         this.logger.warn(`Primary Groq (8B) failed: ${error.message}. Attempting fallback to 70B...`);
-        
+
         try {
           const response = await this.openai.chat.completions.create({
             model: 'llama-3.3-70b-versatile',
             messages: messages as any,
-            temperature: 0.6, // Slightly lower for more stability
+            temperature: 0.0,
           });
 
           const aiMessage = response.choices[0].message.content;
