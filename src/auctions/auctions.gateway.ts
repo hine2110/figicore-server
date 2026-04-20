@@ -15,7 +15,8 @@ import { AuctionsService } from './auctions.service';
 
 @WebSocketGateway({
     cors: {
-        origin: '*',
+        origin: ['https://figicore.com', 'https://api.figicore.com', 'http://localhost:5173'],
+        credentials: true
     },
     namespace: '/auction-live',
 })

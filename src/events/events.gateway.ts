@@ -11,7 +11,8 @@ import { Logger } from '@nestjs/common';
 @WebSocketGateway({
     namespace: '/events',
     cors: {
-        origin: '*', // Allow all for Dev, restrict in Prod if needed
+        origin: ['https://figicore.com', 'https://api.figicore.com', 'http://localhost:5173'],
+        credentials: true
     },
 })
 export class EventsGateway
