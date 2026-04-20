@@ -7,9 +7,13 @@ import { RegisterCustomerDto } from './dto/register-customer.dto';
 import { SyncPosOrderDto } from './dto/sync-pos-order.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PosService } from './pos.service';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import { StoreIpGuard } from '../common/guards/store-ip.guard';
+import { Roles } from '../auth/decorators/roles.decorator';
 
 @Controller('pos/orders')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, StoreIpGuard) 
+@Roles('SUPER_ADMIN', 'MANAGER', 'STAFF_POS')
 export class PosOrdersController {
     constructor(
         private readonly posOrdersService: PosOrdersService,
