@@ -15,9 +15,10 @@ import { CartService } from '../cart/cart.service';
 
 @WebSocketGateway({
   cors: {
-    origin: '*',
+    origin: ['https://figicore.com', 'https://api.figicore.com', 'http://localhost:5173'],
+    credentials: true
   },
-  namespace: 'livestream-live',
+  namespace: '/livestream-live',
 })
 export class LivestreamLiveGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
