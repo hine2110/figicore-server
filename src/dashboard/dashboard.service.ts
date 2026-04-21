@@ -1,155 +1,350 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { EncryptionService } from '../common/encryption.service';
 
 @Injectable()
 export class DashboardService {
   private readonly logger = new Logger(DashboardService.name);
 
-  constructor(
-    private prisma: PrismaService,
-    private encryption: EncryptionService,
-  ) {}
+  constructor(private prisma: PrismaService) {}
 
   async getSummaryStats() {
     try {
-      const revenueAgg = await this.prisma.orders.aggregate({
-        _sum: { total_amount: true },
-        where: { status_code: { notIn: ['CANCELLED', 'RETURNED'] } }
-      });
-
-      const activeUsersCount = await this.prisma.users.count({
-        where: { status_code: 'ACTIVE' }
-      });
-
-      // Count KYC and Return Requests
-      const activeReturnsCount = await this.prisma.return_requests.count({
-        where: { status_code: 'PENDING' }
-      });
-      // We will assume pending updates is the status for profile_update_requests
-      const pendingKycCount = await this.prisma.profile_update_requests.count({
-        where: { status_code: 'PENDING' }
-      }).catch(() => 0); // fallback if table structure differs slightly
-
-      const pendingIssues = activeReturnsCount + pendingKycCount;
-
-      const activeAuctions = await this.prisma.auctions.count({
-        where: { status_code: 'ACTIVE' }
-      }).catch(() => 0);
-
-      const activeLivestreams = await this.prisma.livestreams.count({
-        where: { status: 'LIVE' }
-      }).catch(() => 0);
+      const [totalRevenue, totalOrders, totalUsers, totalProducts] = await Promise.all([
+        this.prisma.payment_transactions.aggregate({ _sum: { amount: true } }),
+        this.prisma.orders.count({ where: { status_code: { notIn: ['CANCELLED', 'RETURNED'] } } }),
+        this.prisma.users.count(),
+        this.prisma.products.count()
+      ]);
 
       return {
-        totalRevenue: Number(revenueAgg._sum.total_amount) || 0,
-        activeUsers: activeUsersCount,
-        pendingIssues: pendingIssues,
-        activeAuctions: activeAuctions,
-        activeLivestreams: activeLivestreams,
-        systemHealth: 99.9 // Mock static value for now or calculate based on logs if needed
+        totalRevenue: Number(totalRevenue._sum.amount) || 0,
+        totalOrders,
+        totalUsers,
+        totalProducts
       };
     } catch (error) {
       this.logger.error('Failed to get summary stats', error);
-      throw error;
-    }
-  }
-
-  async getRevenueChart() {
-    try {
-      const data: any[] = [];
-      const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-      
-      for (let i = 6; i >= 0; i--) {
-        const date = new Date();
-        date.setDate(date.getDate() - i);
-        date.setHours(0, 0, 0, 0);
-        
-        const nextDate = new Date(date);
-        nextDate.setDate(date.getDate() + 1);
-
-        // Fetch all successful orders for this day
-        const dailyOrders = await this.prisma.orders.findMany({
-          where: {
-            created_at: {
-              gte: date,
-              lt: nextDate,
-            },
-            status_code: { notIn: ['CANCELLED', 'RETURNED'] },
-          },
-          select: {
-            total_amount: true,
-            channel_code: true
-          }
-        });
-
-        // Initialize category totals
-        const dayData: any = {
-          name: days[date.getDay()],
-          retail: 0,
-          livestream: 0,
-          preorder: 0,
-          blindbox: 0,
-          auction: 0
-        };
-
-        // Sum up real data from DB
-        dailyOrders.forEach(order => {
-          const channel = (order.channel_code || '').toLowerCase();
-          const amount = Number(order.total_amount) || 0;
-
-          if (channel.includes('retail') || channel.includes('pos')) dayData.retail += amount;
-          else if (channel.includes('livestream')) dayData.livestream += amount;
-          else if (channel.includes('preorder')) dayData.preorder += amount;
-          else if (channel.includes('blindbox')) dayData.blindbox += amount;
-          else if (channel.includes('auction')) dayData.auction += amount;
-          else dayData.retail += amount; // fallback for others to retail
-        });
-
-        data.push(dayData);
-      }
-      return data;
-    } catch (error) {
-      this.logger.error('Failed to get chart stats', error);
-      throw error;
+      return { totalRevenue: 0, totalOrders: 0, totalUsers: 0, totalProducts: 0 };
     }
   }
 
   async getRecentActivity() {
     try {
-      // Base truth: users.status_code = 'ACTIVE', same source as the dashboard counter
-      const activeUsers = await this.prisma.users.findMany({
-        where: { status_code: 'ACTIVE' },
-        take: 20,
-        orderBy: { updated_at: 'desc' },
-        include: {
-          user_login_logs: {
-            take: 1,
-            orderBy: { login_time: 'desc' }
-          }
-        }
+      const orders = await this.prisma.orders.findMany({
+        take: 10,
+        orderBy: { created_at: 'desc' },
+        include: { users: { select: { full_name: true, avatar_url: true } } }
       });
 
-      return activeUsers.map(u => {
-        const lastLog = u.user_login_logs[0];
-        // Decrypt email if it's encrypted
-        const decryptedEmail = u.email ? this.encryption.decrypt(u.email) : 'N/A';
-
-        return {
-          user: u.full_name || 'Unknown',
-          email: decryptedEmail,
-          role: u.role_code || 'N/A',
-          ip: lastLog?.ip_address || 'Chưa rõ',
-          login_time: lastLog?.login_time
-            ? new Date(lastLog.login_time).toLocaleString('vi-VN')
-            : 'Chưa rõ',
-          is_suspicious: lastLog?.is_suspicious || false,
-          type: 'security'
-        };
-      });
+      return orders.map(order => ({
+        id: order.order_id,
+        user: order.users?.full_name || 'Guest',
+        avatar: order.users?.avatar_url,
+        action: `Placed order #${order.order_code}`,
+        time: order.created_at,
+        amount: Number(order.total_amount),
+        status: order.status_code,
+        type: 'order'
+      }));
     } catch (error) {
       this.logger.error('Failed to get recent activity', error);
       return [];
     }
+  }
+
+  async getManagerStats(range: string = 'week', customStart?: string, customEnd?: string) {
+    try {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      let startDate: Date;
+      let endDate: Date = new Date();
+
+      if (customStart && customEnd) {
+        startDate = new Date(customStart);
+        startDate.setHours(0, 0, 0, 0);
+        endDate = new Date(customEnd);
+        endDate.setHours(23, 59, 59, 999);
+      } else {
+        startDate = new Date(today);
+        if (range === 'today') {
+          startDate = today;
+        } else if (range === 'week') {
+          startDate = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
+        } else if (range === 'month') {
+          startDate = new Date(today.getFullYear(), today.getMonth(), 1);
+        }
+      }
+
+      const diff = endDate.getTime() - startDate.getTime();
+      const prevStart = new Date(startDate.getTime() - diff);
+      const prevEnd = new Date(startDate.getTime() - 1);
+
+      const [online, offline, prevOnline, prevOffline, activeStaff, lowStockAlerts, revenueTrend] = await Promise.all([
+          this.calculateAnalytics(startDate, endDate, false), // Online
+          this.calculateAnalytics(startDate, endDate, true),  // Offline (POS)
+          this.calculateAnalytics(prevStart, prevEnd, false),
+          this.calculateAnalytics(prevStart, prevEnd, true),
+          this.prisma.timesheets.count({ where: { check_out_at: null, created_at: { gte: today } } }),
+          this.prisma.product_variants.count({ where: { stock_available: { lte: 10 } } }),
+          this.getRevenueChart(startDate, endDate)
+      ]);
+
+      return {
+          online,
+          offline,
+          totalRevenue: online.totalRevenue + offline.totalRevenue,
+          totalOrders: online.totalOrders + offline.totalOrders,
+          prevTotalRevenue: prevOnline.totalRevenue + prevOffline.totalRevenue,
+          activeStaff,
+          lowStockAlerts,
+          revenueTrend
+      };
+    } catch (error) {
+      this.logger.error('Failed to get manager stats', error);
+      throw error;
+    }
+  }
+
+  async getRevenueChart(customStart?: Date, customEnd?: Date) {
+    const data: any[] = [];
+    const start = customStart || new Date(new Date().getTime() - 6 * 24 * 60 * 60 * 1000);
+    const end = customEnd || new Date();
+    const diffTime = Math.abs(end.getTime() - start.getTime());
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) || 1;
+    const step = Math.max(1, Math.ceil(diffDays / 7));
+
+    for (let i = 0; i < diffDays; i += step) {
+      const date = new Date(start);
+      date.setDate(start.getDate() + i);
+      date.setHours(0, 0, 0, 0);
+      const nextDate = new Date(date);
+      nextDate.setDate(date.getDate() + step);
+
+      const [onlineRev, offlineRev] = await Promise.all([
+          this.prisma.orders.aggregate({
+              _sum: { total_amount: true },
+              where: { created_at: { gte: date, lt: nextDate }, channel_code: { not: 'POS' }, status_code: 'DELIVERED' }
+          }),
+          this.prisma.orders.aggregate({
+              _sum: { total_amount: true },
+              where: { created_at: { gte: date, lt: nextDate }, channel_code: 'POS', status_code: 'DELIVERED' }
+          })
+      ]);
+
+      data.push({
+        name: date.toLocaleDateString('en-US', { weekday: 'short' }),
+        online: Number(onlineRev._sum.total_amount) || 0,
+        offline: Number(offlineRev._sum.total_amount) || 0
+      });
+    }
+    return data;
+  }
+
+  async getWarehouseStats(range: string = 'week', customStart?: string, customEnd?: string) {
+    try {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      let startDate: Date;
+      let endDate: Date = new Date();
+
+      if (customStart && customEnd) {
+        startDate = new Date(customStart);
+        startDate.setHours(0, 0, 0, 0);
+        endDate = new Date(customEnd);
+        endDate.setHours(23, 59, 59, 999);
+      } else {
+        startDate = new Date(today);
+        if (range === 'today') {
+          startDate = today;
+        } else if (range === 'week') {
+          startDate = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
+        } else if (range === 'month') {
+          startDate = new Date(today.getFullYear(), today.getMonth(), 1);
+        }
+      }
+
+      const diff = endDate.getTime() - startDate.getTime();
+      const prevStartDate = new Date(startDate.getTime() - diff);
+      const prevEndDate = new Date(startDate.getTime() - 1);
+
+      const [
+        readyToPack,
+        packedCount,
+        deliveredCount,
+        inventoryTrend,
+        currentAnalytics,
+        previousAnalytics,
+        activePreorderContracts,
+        lowStockCount
+      ] = await Promise.all([
+        this.prisma.orders.count({ where: { status_code: 'PROCESSING', channel_code: { not: 'POS' } } }),
+        this.prisma.orders.count({ where: { status_code: 'SHIPPING', channel_code: { not: 'POS' } } }),
+        this.prisma.orders.count({ where: { status_code: 'DELIVERED', created_at: { gte: startDate, lte: endDate }, channel_code: { not: 'POS' } } }),
+        this.getWarehouseChart(startDate, endDate),
+        this.calculateAnalytics(startDate, endDate, false),
+        this.calculateAnalytics(prevStartDate, prevEndDate, false),
+        this.prisma.preorder_contracts.count({ where: { status_code: { notIn: ['CANCELLED', 'COMPLETED'] } } }),
+        this.prisma.product_variants.count({ where: { stock_available: { lte: 10 } } })
+      ]);
+
+      const growth = this.calculateGrowth(currentAnalytics, previousAnalytics);
+
+      return {
+        readyToPack,
+        packedCount,
+        deliveredCount,
+        lowStockAlerts: lowStockCount,
+        inventoryTrend,
+        analytics: {
+            current: currentAnalytics,
+            previous: previousAnalytics,
+            growth,
+            activePreorderContracts
+        }
+      };
+    } catch (error) {
+      this.logger.error('Failed to get warehouse stats', error);
+      throw error;
+    }
+  }
+
+  private async calculateAnalytics(start: Date, end: Date, isPos: boolean) {
+    const channelFilter = isPos ? 'POS' : { not: 'POS' };
+    const whereClause: any = {
+        created_at: { gte: start, lte: end },
+        status_code: 'DELIVERED',
+        channel_code: channelFilter
+    };
+
+    const orders = await this.prisma.orders.findMany({
+        where: whereClause,
+        include: { 
+            order_items: { 
+                include: { 
+                    product_variants: { include: { products: true } } 
+                } 
+            } 
+        }
+    });
+
+    const revenueMap = { RETAIL: 0, LIVESTREAM: 0, PRE_ORDER: 0, BLINDBOX: 0, AUCTION: 0, GIVEAWAY: 0 };
+    let totalRevenue = 0;
+
+    orders.forEach(order => {
+        const amount = Number(order.total_amount);
+        totalRevenue += amount;
+        
+        // POS only sells RETAIL
+        if (isPos) {
+            revenueMap['RETAIL'] += amount;
+            return;
+        }
+
+        const type = order.order_items[0]?.product_variants?.products?.type_code || 'RETAIL';
+        if (revenueMap.hasOwnProperty(type)) {
+            revenueMap[type] += amount;
+        } else {
+            revenueMap['RETAIL'] += amount;
+        }
+    });
+
+    const [
+        retailStats,
+        liveStats,
+        preStats,
+        blindboxStats,
+        auctionStats,
+        giveawayStats
+    ] = await Promise.all([
+        this.countOrderByType(start, end, 'RETAIL', isPos),
+        isPos ? Promise.resolve({ count: 0 }) : this.countOrderByType(start, end, 'LIVESTREAM', isPos),
+        isPos ? Promise.resolve({ count: 0 }) : this.countOrderByType(start, end, 'PRE_ORDER', isPos),
+        isPos ? Promise.resolve({ count: 0 }) : this.countOrderByType(start, end, 'BLINDBOX', isPos),
+        isPos ? Promise.resolve({ count: 0 }) : this.countOrderByType(start, end, 'AUCTION', isPos),
+        isPos ? Promise.resolve({ count: 0 }) : this.countOrderByType(start, end, 'GIVEAWAY', isPos)
+    ]);
+
+    return {
+        totalOrders: orders.length,
+        totalRevenue,
+        counts: {
+            retail: retailStats.count,
+            livestream: liveStats.count,
+            preorder: preStats.count,
+            blindbox: blindboxStats.count,
+            auction: auctionStats.count,
+            giveaway: giveawayStats.count
+        },
+        revenue: {
+            retail: revenueMap.RETAIL,
+            livestream: revenueMap.LIVESTREAM,
+            preorder: revenueMap.PRE_ORDER,
+            blindbox: revenueMap.BLINDBOX,
+            auction: revenueMap.AUCTION,
+            giveaway: revenueMap.GIVEAWAY
+        }
+    };
+  }
+
+  private async countOrderByType(start: Date, end: Date, type: string, isPos: boolean) {
+    const channelFilter = isPos ? 'POS' : { not: 'POS' };
+    const where: any = {
+        created_at: { gte: start, lte: end },
+        status_code: 'DELIVERED',
+        channel_code: channelFilter,
+        order_items: {
+            some: type === 'GIVEAWAY' ? { giveaway_claim_id: { not: null } } : 
+                  type === 'AUCTION' ? { metadata: { path: ['is_auction'], equals: true } } :
+                  { product_variants: { products: { type_code: type } } }
+        }
+    };
+    
+    if (type === 'PRE_ORDER' && !isPos) {
+        const count = await this.prisma.preorder_contracts.count({
+            where: { created_at: { gte: start, lte: end } }
+        });
+        return { count, revenue: 0 };
+    }
+
+    const count = await this.prisma.orders.count({ where });
+    return { count, revenue: 0 };
+  }
+
+  private calculateGrowth(curr: any, prev: any) {
+      const calc = (c: number, p: number) => {
+          if (!p) return c > 0 ? 100 : 0;
+          return Math.round(((c - p) / p) * 100);
+      };
+
+      return {
+          totalOrders: calc(curr.totalOrders, prev.totalOrders),
+          onlineRevenue: calc(curr.totalRevenue, prev.totalRevenue),
+          packedOrders: 0 
+      };
+  }
+
+  async getWarehouseChart(start: Date, end: Date) {
+    const data: any[] = [];
+    const diffTime = Math.abs(end.getTime() - start.getTime());
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) || 1;
+    const step = Math.max(1, Math.ceil(diffDays / 7));
+
+    for (let i = 0; i < diffDays; i += step) {
+      const d = new Date(start);
+      d.setDate(start.getDate() + i);
+      d.setHours(0, 0, 0, 0);
+      const nextD = new Date(d);
+      nextD.setDate(d.getDate() + step);
+
+      const [packed, inbound] = await Promise.all([
+        this.prisma.orders.count({ where: { status_code: 'DELIVERED', created_at: { gte: d, lt: nextD } } }),
+        this.prisma.inventory_logs.count({ where: { change_type_code: 'INBOUND', created_at: { gte: d, lt: nextD } } })
+      ]);
+
+      data.push({ name: d.toLocaleDateString('en-US', { weekday: 'short' }), packed, inbound });
+    }
+    return data;
   }
 }

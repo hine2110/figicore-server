@@ -663,11 +663,11 @@ export class MailService {
 
       await this.mailerService.sendMail({
         to: toEmail,
-        subject: `🙏 A Sincere Apology from FigiCore — A Special Gift Just for You`,
+        subject: `A Sincere Apology from FigiCore — A Special Gift Just for You`,
         html: `
           <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border-radius: 12px; overflow: hidden; border: 1px solid #eaeaea;">
             <div style="background: linear-gradient(135deg, #111 0%, #333 100%); padding: 32px; text-align: center;">
-              <p style="font-size: 40px; margin: 0;">🙇🏻‍♂️</p>
+              <div style="color: #fff; font-size: 12px; font-weight: bold; letter-spacing: 2px; text-transform: uppercase; margin-bottom: 8px; opacity: 0.7;">Customer Service</div>
               <h1 style="color: #fff; margin: 12px 0 4px; font-size: 24px;">Our Sincere Apologies</h1>
               <p style="color: rgba(255,255,255,0.8); margin: 0; font-size: 14px;">
                 Thank you for your patience and for staying with us.
