@@ -319,11 +319,17 @@ export class LivestreamLiveGateway implements OnGatewayConnection, OnGatewayDisc
 
   @SubscribeMessage('cancel_giveaway')
   @UseGuards(WsJwtGuard)
-  async handleCancelGiveaway(client: any, payload: { roomId: string; livestreamId: number; giveawayId: number }) {
+  async handleCancelGiveaway(client: any, payload: { roomId: string; livestreamId: number; giveawayId?: number }) {
+    const gid = payload.giveawayId;
+    if (!gid) {
+      console.error(`[Socket] cancel_giveaway error: giveawayId is missing in payload`, payload);
+      return;
+    }
+    
     this.giveawayStates.delete(payload.roomId);
-    await this.giveawaysService.updateStatus(payload.giveawayId, 'CANCELLED');
-    this.server.to(payload.roomId).emit('giveaway_cancelled', { giveaway_id: payload.giveawayId });
-    console.log(`[Socket] Giveaway ${payload.giveawayId} cancelled in room ${payload.roomId}`);
+    await this.giveawaysService.updateStatus(gid, 'CANCELLED');
+    this.server.to(payload.roomId).emit('giveaway_cancelled', { giveaway_id: gid });
+    console.log(`[Socket] Giveaway ${gid} cancelled in room ${payload.roomId}`);
   }
 
   @SubscribeMessage('select_giveaway_winner')

@@ -56,6 +56,9 @@ export class GiveawaysService {
   }
 
   async updateStatus(id: number, status: string) {
+    if (!id) {
+      throw new Error('Giveaway ID is required for status update');
+    }
     return this.prisma.livestream_giveaways.update({
       where: { id },
       data: { status_code: status }
