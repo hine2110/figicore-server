@@ -430,7 +430,7 @@ export class AuthService {
       }
       const isMatch = await bcrypt.compare(dto.oldPassword, user.password_hash);
       if (!isMatch) {
-        throw new UnauthorizedException('Incorrect old password');
+        throw new BadRequestException('Incorrect old password');
       }
     } else {
       // For Google users or users without a password, we allow setting one without oldPassword
