@@ -6,6 +6,7 @@ import { AuctionsGateway } from './auctions.gateway';
 import { NotificationsService } from '../notifications/notifications.service';
 import { MailService } from '../mail/mail.service';
 import { EncryptionService } from '../common/encryption.service';
+import { GhnService } from '../address/ghn.service';
 
 @Injectable()
 export class AuctionsService {
@@ -16,7 +17,8 @@ export class AuctionsService {
     @Inject(forwardRef(() => AuctionsGateway)) private auctionsGateway: AuctionsGateway,
     private notificationsService: NotificationsService,
     private mailService: MailService,
-    private encryption: EncryptionService
+    private encryption: EncryptionService,
+    private ghnService: GhnService,
   ) { }
 
   private decryptUser(user: any) {
@@ -98,6 +100,7 @@ export class AuctionsService {
             }
           }
         },
+        users: { select: { user_id: true, full_name: true } }, // Winner info for management list
         _count: {
           select: { auction_participants: true, auction_bids: true }
         }
@@ -593,12 +596,36 @@ export class AuctionsService {
 
             const paymentRefCode = `PAY${Date.now()}${Math.floor(Math.random() * 1000)}`;
             const orderCode = `AUC-${auctionId}-${Date.now()}`;
-            const shippingFee = 30000;
-            const remainingPayable = Number(updatedAuction.final_price) - Number(p.deposit_amount) + shippingFee;
 
+            // --- Calculate GHN Shipping Fee (Real API, same logic as retail orders) ---
+            let realGhnFee = 30000; // Fallback default
             const userAddress = await tx.addresses.findFirst({
               where: { user_id: p.user_id, is_default: true, deleted_at: null }
             });
+
+            if (userAddress?.district_id && userAddress?.ward_code) {
+              try {
+                const variantInfo = await tx.product_variants.findUnique({
+                  where: { variant_id: auction.variant_id }
+                });
+                realGhnFee = await this.ghnService.calculateRealFee({
+                  to_district_id: userAddress.district_id,
+                  to_ward_code: userAddress.ward_code,
+                  weight: variantInfo?.weight_g || 500,
+                  length: variantInfo?.length_cm || 15,
+                  width: variantInfo?.width_cm || 15,
+                  height: variantInfo?.height_cm || 15,
+                  insurance_value: 0,
+                });
+                this.logger.log(`[Auction #${auctionId}] GHN fee for winner ${p.user_id}: ${realGhnFee} VND`);
+              } catch (ghnErr) {
+                this.logger.warn(`[Auction #${auctionId}] GHN fee calculation failed, using fallback 30,000`, ghnErr);
+              }
+            }
+
+            // Apply business rule: ceil to nearest 1,000 VND, minimum 30,000 VND
+            const roundedShippingFee = Math.ceil(Math.max(30000, realGhnFee) / 1000) * 1000;
+            const remainingPayable = Number(updatedAuction.final_price) - Number(p.deposit_amount) + roundedShippingFee;
 
             await tx.orders.create({
               data: {
@@ -606,8 +633,8 @@ export class AuctionsService {
                 order_code: orderCode,
                 total_amount: Math.max(0, remainingPayable),
                 paid_amount: p.deposit_amount,
-                shipping_fee: shippingFee,
-                original_shipping_fee: shippingFee,
+                shipping_fee: roundedShippingFee,
+                original_shipping_fee: realGhnFee,
                 payment_ref_code: paymentRefCode,
                 status_code: 'PENDING_PAYMENT',
                 payment_deadline: paymentDeadline,
