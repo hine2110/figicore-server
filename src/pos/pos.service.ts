@@ -82,13 +82,23 @@ export class PosService {
       },
     });
 
-    let lastClosingCash = 2000000; // Mặc định 2tr nếu là ca đầu tiên
-    if (lastSession && lastSession.closing_cash !== null) {
-      lastClosingCash = Number(lastSession.closing_cash);
+    let expectedOpeningCash = 2000000; // Mặc định 2tr nếu là ca đầu tiên của ngày
+
+    if (lastSession && lastSession.closed_at && lastSession.closing_cash !== null) {
+      // Chỉ kiểm tra số tiền ca trước nếu ca đó mới đóng TRONG HÔM NAY (tiếp nối ca)
+      const lastClosedDate = new Date(lastSession.closed_at);
+      const today = new Date();
+      const isToday = lastClosedDate.getDate() === today.getDate() &&
+                      lastClosedDate.getMonth() === today.getMonth() &&
+                      lastClosedDate.getFullYear() === today.getFullYear();
+
+      if (isToday) {
+        expectedOpeningCash = Number(lastSession.closing_cash);
+      }
     }
 
-    // 2. Nếu có chênh lệch, bắt buộc phải có ghi chú
-    if (Number(dto.opening_cash) !== lastClosingCash && !dto.note) {
+    // 2. Nếu có chênh lệch so với số tiền kỳ vọng, bắt buộc phải có ghi chú
+    if (Number(dto.opening_cash) !== expectedOpeningCash && !dto.note) {
       throw new BadRequestException(
         'Opening cash mismatch. Please provide the reason for the discrepancy in the notes field.',
       );
