@@ -3,9 +3,14 @@ import { PosService } from './pos.service';
 import { OpenSessionDto } from './dto/open-session.dto';
 import { CloseSessionDto } from './dto/close-session.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { StoreIpGuard } from '../common/guards/store-ip.guard';
+import { AllowAnyIp } from '../common/decorators/allow-any-ip.decorator';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import { Roles } from '../auth/decorators/roles.decorator';
 
 @Controller('pos')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, StoreIpGuard)
+@Roles('SUPER_ADMIN', 'MANAGER', 'STAFF_POS')
 export class PosController {
   constructor(private readonly posService: PosService) { }
 
@@ -38,6 +43,7 @@ export class PosController {
    * GET /pos/sessions
    */
   @Get('sessions')
+  @AllowAnyIp()
   async getSessions(
     @Request() req,
     @Query('page') page?: string,

@@ -1,15 +1,20 @@
 import { Controller, Post, Patch, Param, Get, Body, Query, UseGuards, Request, Logger, UnauthorizedException, BadRequestException } from '@nestjs/common';
 import { InventoryService } from './inventory.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import { StoreIpGuard } from '../common/guards/store-ip.guard';
+import { Roles } from '../auth/decorators/roles.decorator';
+import { AllowAnyIp } from '../common/decorators/allow-any-ip.decorator';
 
 @Controller('inventory')
+@UseGuards(JwtAuthGuard, RolesGuard, StoreIpGuard) // 1. Áp dụng khiên 3 lớp cho TOÀN BỘ controller
+@Roles('SUPER_ADMIN', 'MANAGER', 'STAFF_INVENTORY')
 export class InventoryController {
   private readonly logger = new Logger(InventoryController.name);
 
   constructor(private readonly inventoryService: InventoryService) { }
 
   @Post('receipts')
-  @UseGuards(JwtAuthGuard)
   async create(@Request() req: any, @Body() dto: any) {
     const user = req.user;
 
@@ -32,7 +37,7 @@ export class InventoryController {
   }
 
   @Patch('receipts/:id/complete')
-  @UseGuards(JwtAuthGuard)
+  
   async complete(
     @Request() req: any,
     @Param('id') id: string,
@@ -57,8 +62,9 @@ export class InventoryController {
     }
   }
 
-  @UseGuards(JwtAuthGuard)
+  
   @Get('receipts') // GET /inventory/receipts
+  @AllowAnyIp()
   async getHistory(@Request() req: any, @Query() query: any) {
     return await this.inventoryService.getHistory(query);
   }

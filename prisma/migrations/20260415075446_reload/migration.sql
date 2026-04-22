@@ -65,6 +65,7 @@ CREATE TABLE "cart_items" (
     "updated_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
     "deleted_at" TIMESTAMP(6),
     "giveaway_claim_id" INTEGER,
+    "is_flash_sale" BOOLEAN DEFAULT false,
 
     CONSTRAINT "cart_items_pkey" PRIMARY KEY ("item_id")
 );
@@ -291,6 +292,7 @@ CREATE TABLE "orders" (
     "payment_ref_code" VARCHAR(50),
     "status_code" VARCHAR(50) DEFAULT 'PENDING',
     "packing_video_urls" JSONB,
+    "packed_by_staff_id" INTEGER,
     "packed_at" TIMESTAMP(6),
     "note" TEXT,
     "cash_received" DECIMAL(15,2),
@@ -383,10 +385,12 @@ CREATE TABLE "product_preorder_configs" (
     "deposit_amount" DECIMAL(15,2) NOT NULL DEFAULT 0,
     "full_price" DECIMAL(15,2) NOT NULL DEFAULT 0,
     "release_date" TIMESTAMP(6),
-    "total_slots" INTEGER NOT NULL DEFAULT 0,
+    "total_slots" INTEGER NOT NULL DEFAULT 50,
     "sold_slots" INTEGER NOT NULL DEFAULT 0,
     "max_qty_per_user" INTEGER NOT NULL DEFAULT 1,
     "stock_held" INTEGER NOT NULL DEFAULT 0,
+    "booking_end_date" TIMESTAMP(6),
+    "extension_count" INTEGER NOT NULL DEFAULT 0,
     "created_at" TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP,
 
@@ -1223,6 +1227,9 @@ ALTER TABLE "order_status_history" ADD CONSTRAINT "order_status_history_order_id
 
 -- AddForeignKey
 ALTER TABLE "orders" ADD CONSTRAINT "orders_created_by_staff_id_fkey" FOREIGN KEY ("created_by_staff_id") REFERENCES "employees"("user_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
+
+-- AddForeignKey
+ALTER TABLE "orders" ADD CONSTRAINT "orders_packed_by_staff_id_fkey" FOREIGN KEY ("packed_by_staff_id") REFERENCES "employees"("user_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
 
 -- AddForeignKey
 ALTER TABLE "orders" ADD CONSTRAINT "orders_promotion_id_fkey" FOREIGN KEY ("promotion_id") REFERENCES "promotions"("promotion_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
