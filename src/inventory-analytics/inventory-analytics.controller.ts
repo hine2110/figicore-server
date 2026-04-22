@@ -6,7 +6,7 @@ import { Roles } from '../auth/decorators/roles.decorator';
 
 @Controller('analytics')
 export class InventoryAnalyticsController {
-  constructor(private readonly inventoryAnalyticsService: InventoryAnalyticsService) {}
+  constructor(private readonly inventoryAnalyticsService: InventoryAnalyticsService) { }
 
   @Post('trigger-inventory-check')
   async triggerInventoryCheck(): Promise<any> {
