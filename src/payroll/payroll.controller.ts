@@ -5,10 +5,12 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { UpsertPenaltyRuleDto } from './dto/upsert-penalty-rule.dto';
+import { StoreIpGuard } from '../common/guards/store-ip.guard'; 
+import { AllowAnyIp } from '../common/decorators/allow-any-ip.decorator';
 
 
 @Controller('payroll')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, StoreIpGuard)
 export class PayrollController {
     constructor(private readonly payrollService: PayrollService) { }
 
@@ -140,18 +142,21 @@ export class PayrollController {
     // --- SELF SERVICE APIs ---
 
     @Get('my-history')
+    @AllowAnyIp()
     async getMyHistory(@Request() req: any) {
         const userId = Number(req.user.userId || req.user.id || req.user.sub || req.user.user_id);
         return this.payrollService.getMySalaryHistory(userId);
     }
 
     @Get('my-payrolls')
+    @AllowAnyIp()
     async getMyPayrolls(@Request() req: any) {
         const userId = Number(req.user.userId || req.user.id || req.user.sub || req.user.user_id);
         return this.payrollService.getMyPayrolls(userId);
     }
 
     @Patch('my-payrolls/:id/confirm')
+    @AllowAnyIp()
     async confirmMyPayroll(@Request() req: any, @Param('id', ParseIntPipe) id: number) {
         const userId = Number(req.user.userId || req.user.id || req.user.sub || req.user.user_id);
         return this.payrollService.confirmMyPayroll(userId, id);
@@ -165,6 +170,7 @@ export class PayrollController {
     }
 
     @Post('my-payrolls/:id/sign')
+    @AllowAnyIp()
     async signMyPayroll(
         @Request() req: any,
         @Param('id', ParseIntPipe) id: number,
@@ -172,5 +178,15 @@ export class PayrollController {
     ) {
         const userId = Number(req.user.userId || req.user.id || req.user.sub || req.user.user_id);
         return this.payrollService.signMyPayroll(userId, id, dto.signature_data);
+    }
+
+    // ADMIN/MANAGER: Lấy thống kê tổng lương
+    @Get('statistics')
+    @UseGuards(RolesGuard)
+    @Roles('SUPER_ADMIN', 'MANAGER')
+    async getPayrollStatistics(@Query('year') year?: string) {
+        // Nếu không truyền năm, mặc định lấy năm hiện tại
+        const targetYear = year ? parseInt(year) : new Date().getFullYear();
+        return this.payrollService.getPayrollStatistics(targetYear);
     }
 }
