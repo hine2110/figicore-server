@@ -57,6 +57,8 @@ export class EmployeesService {
         data: { user_id: newUser.user_id, employee_code: employee_code!, job_title_code, start_date: start_date || new Date() },
       });
       return { ...this.decryptUser(newUser), employee_details: newEmployee };
+    }, {
+      timeout: 10000 // Tăng timeout cho create đơn lẻ
     });
   }
 
@@ -87,7 +89,11 @@ export class EmployeesService {
         const salt = 10;
         const hash = await bcrypt.hash(tempPassword, salt);
 
-        // 3. Transaction
+        // 3. Transaction & Metadata
+        let newUserResult: any = null;
+        let activationToken: string = '';
+
+        // Tăng timeout lên 30 giây cho mỗi lượt import để tránh đóng transaction sớm
         await this.prisma.$transaction(async (tx) => {
           // A. Create User
           const newUser = await tx.users.create({
@@ -103,42 +109,45 @@ export class EmployeesService {
             }
           });
 
-          // B. Generate Employee Code (EMP + padded ID)
-          const employeeCode = `EMP${newUser.user_id.toString().padStart(6, '0')}`; // e.g., EMP000012
+          // B. Generate Employee Code
+          const employeeCode = `EMP${newUser.user_id.toString().padStart(6, '0')}`;
 
           // C. Create Employee
           await tx.employees.create({
             data: {
               user_id: newUser.user_id,
               employee_code: employeeCode,
-              job_title_code: row.role_code, // Using role as job title for now or "TBD"
+              job_title_code: row.role_code,
               base_salary: 0,
               start_date: new Date(),
             }
           });
 
-          // Address creation removed as per new requirement
-
-          // 4. Send Email (Post-creation logic, but awaited to ensure delivery or log error)
-          // Generate Activation Token
-          const token = this.jwtService.sign(
+          newUserResult = newUser;
+          activationToken = this.jwtService.sign(
             { sub: newUser.user_id, email: newUser.email },
             {
               secret: process.env.JWT_SECRET || 'figicore_secret_key',
               expiresIn: '24h'
             }
           );
-
-          // Trigger Email
-          try {
-            await this.mailService.sendEmployeeActivation(row.email, tempPassword, token, row.full_name);
-          } catch (emailErr) {
-            console.error(`Failed to send email to ${row.email}`, emailErr);
-            // We don't rollback transaction for email failure, but log it. Admin can resend.
-          }
+        }, {
+          timeout: 30000 // 30 seconds
         });
 
-        results.success++;
+        // 4. Send Email (NGOÀI TRANSACTION)
+        // Việc gửi email có thể tốn thời gian, tách ra để không làm nghẽn Database
+        if (newUserResult) {
+          try {
+            // Không sử dụng await ở đây nếu bạn muốn chạy nền hoàn toàn, 
+            // nhưng sử dụng await ở đây (ngoài transaction) vẫn an toàn hơn nhiều
+            await this.mailService.sendEmployeeActivation(row.email, tempPassword, activationToken, row.full_name);
+          } catch (emailErr) {
+            console.error(`Failed to send email to ${row.email}`, emailErr);
+            // Email lỗi không làm rollback DB, admin có thể dùng chức năng "Resend" sau
+          }
+          results.success++;
+        }
 
       } catch (error) {
         console.error(error);
@@ -273,7 +282,6 @@ export class EmployeesService {
     return `EMP${Date.now().toString().slice(-3)}`;
   }
 
-  /** Log a PII access event when staff views sensitive employee data */
   private async logPiiAccess(accessedBy: number, targetUserId: number, fieldsViewed: string[], ip?: string) {
     try {
       await this.prisma.pii_access_logs.create({

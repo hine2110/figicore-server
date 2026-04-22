@@ -306,7 +306,6 @@ export class InventoryAnalyticsService {
     ]);
 
     return {
-      success: true,
       data,
       meta: {
         total,
@@ -461,7 +460,6 @@ export class InventoryAnalyticsService {
       });
 
       return {
-        success: true,
         message: `Recommendation ${recommendation.type} applied successfully`,
         data: updatedRecommendation
       };
