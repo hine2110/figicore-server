@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { Prisma } from '@prisma/client';
 
 @Injectable()
 export class BrandsService {
@@ -20,11 +21,13 @@ export class BrandsService {
         data: { name: trimmedName },
       });
     } catch (error) {
-      if (error.code === 'P2002') {
+      if (error instanceof Prisma.PrismaClientKnownRequestError) {
+        if (error.code === 'P2002') {
         return this.prisma.brands.findUnique({
           where: { name: trimmedName },
         });
       }
+    }
       throw error;
     }
   }

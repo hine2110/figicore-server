@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { Prisma } from '@prisma/client';
 
 @Injectable()
 export class CategoriesService {
@@ -26,11 +27,13 @@ export class CategoriesService {
         }
       });
     } catch (error) {
-      if (error.code === 'P2002') {
+      if (error instanceof Prisma.PrismaClientKnownRequestError) {
+        if (error.code === 'P2002') {
         return this.prisma.categories.findUnique({
           where: { name: trimmedName }
         });
       }
+    }
       throw error;
     }
   }
