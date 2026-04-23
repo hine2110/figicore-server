@@ -1,4 +1,4 @@
-import { Controller, Post, UseInterceptors, UploadedFile, BadRequestException, Get, Query } from '@nestjs/common';
+import { Controller, Post, UseInterceptors, UploadedFile, BadRequestException, Get, Query, Body } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { UploadService } from './upload.service';
 
@@ -15,7 +15,10 @@ export class UploadController {
     @UseInterceptors(FileInterceptor('file', {
         limits: { fileSize: 100 * 1024 * 1024 }, // 100MB limit
     }))
-    async uploadFile(@UploadedFile() file: Express.Multer.File) {
-        return await this.uploadService.uploadFile(file);
+    async uploadFile(
+        @UploadedFile() file: Express.Multer.File,
+        @Body('folder') folder?: string
+    ) {
+        return await this.uploadService.uploadFile(file, folder);
     }
 }
