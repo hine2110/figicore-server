@@ -106,7 +106,7 @@ export class GhnService {
         } catch (error) {
             this.logger.error("GHN Fee Calc Failed", error.response?.data);
             // Fallback for dev/sandbox if API acts up or config is wrong
-            return { data: { total: 30000 } };
+            return { data: { total: 25000 } };
         }
     }
 

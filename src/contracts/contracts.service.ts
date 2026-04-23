@@ -1,6 +1,7 @@
 import { Injectable, BadRequestException, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateFinalPaymentDto } from './dto/create-final-payment.dto';
+import { GhnService } from '../address/ghn.service';
 
 import { EncryptionService } from '../common/encryption.service';
 
@@ -10,7 +11,8 @@ export class ContractsService {
 
     constructor(
         private prisma: PrismaService,
-        private encryption: EncryptionService
+        private encryption: EncryptionService,
+        private ghnService: GhnService
     ) { }
 
     async createFinalPayment(userId: number, dto: CreateFinalPaymentDto) {
@@ -47,7 +49,39 @@ export class ContractsService {
             }
 
             // 3. Calculate Shipping Fee
-            let shippingFee = 30000; // Standard
+            let realGhnFee = 30000;
+            const address = await tx.addresses.findUnique({ where: { address_id: shipping_address_id } });
+            
+            if (address) {
+                let totalWeight = 0;
+                let maxLength = 0;
+                let maxWidth = 0;
+                let totalHeight = 0;
+
+                for (const c of contracts) {
+                    const qty = c.quantity || 1;
+                    totalWeight += (c.product_variants?.weight_g || 500) * qty;
+                    maxLength = Math.max(maxLength, c.product_variants?.length_cm || 15);
+                    maxWidth = Math.max(maxWidth, c.product_variants?.width_cm || 15);
+                    totalHeight += (c.product_variants?.height_cm || 15) * qty;
+                }
+
+                try {
+                    realGhnFee = await this.ghnService.calculateRealFee({
+                        to_district_id: address.district_id,
+                        to_ward_code: address.ward_code,
+                        weight: totalWeight,
+                        length: maxLength,
+                        width: maxWidth,
+                        height: totalHeight,
+                        insurance_value: 0
+                    });
+                } catch (e) {
+                    this.logger.warn("GHN Fee calc failed for pre-order final payment", e);
+                }
+            }
+
+            let shippingFee = Math.ceil(realGhnFee / 1000) * 1000;
 
             // Incentive Rule: IF ALL contracts have is_shipping_free == true -> shipping_fee = 0
             if (allShippingFree) {
@@ -96,7 +130,7 @@ export class ContractsService {
                     shipping_address_id,
                     total_amount: totalAmount,
                     shipping_fee: shippingFee,
-                    original_shipping_fee: 30000, // Standard ref
+                    original_shipping_fee: realGhnFee, // Standard ref
                     payment_method_code,
                     status_code: 'PENDING_PAYMENT',
                     channel_code: 'WEB',

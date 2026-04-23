@@ -623,8 +623,7 @@ export class AuctionsService {
               }
             }
 
-            // Apply business rule: ceil to nearest 1,000 VND, minimum 30,000 VND
-            const roundedShippingFee = Math.ceil(Math.max(30000, realGhnFee) / 1000) * 1000;
+            const roundedShippingFee = Math.ceil(realGhnFee / 1000) * 1000;
             const remainingPayable = Number(updatedAuction.final_price) - Number(p.deposit_amount) + roundedShippingFee;
 
             await tx.orders.create({
@@ -869,12 +868,36 @@ export class AuctionsService {
         // Auto-create Order for Standby (No deposit subtracted because it was refunded)
         const paymentRefCode = `PAY${Date.now()}${Math.floor(Math.random() * 1000)}`;
         const orderCode = `AUC-${auctionId}-${Date.now()}`;
-        const shippingFee = 30000;
-        const remainingPayable = standbyPrice + shippingFee;
-
+        // --- Calculate GHN Shipping Fee for Standby ---
+        let realGhnFee = 30000;
         const userAddress = await tx.addresses.findFirst({
           where: { user_id: standby.user_id, is_default: true, deleted_at: null }
         });
+
+        if (userAddress?.district_id && userAddress?.ward_code) {
+          try {
+            const variantInfo = await tx.product_variants.findUnique({
+              where: { variant_id: auction.variant_id }
+            });
+            realGhnFee = await this.ghnService.calculateRealFee({
+              to_district_id: userAddress.district_id,
+              to_ward_code: userAddress.ward_code,
+              weight: variantInfo?.weight_g || 500,
+              length: variantInfo?.length_cm || 15,
+              width: variantInfo?.width_cm || 15,
+              height: variantInfo?.height_cm || 15,
+              insurance_value: 0,
+            });
+          } catch (ghnErr) {
+            this.logger.warn(`[Forfeit Auction #${auctionId}] GHN fee calculation failed`, ghnErr);
+          }
+        }
+
+        const shippingFee = Math.ceil(realGhnFee / 1000) * 1000;
+        const remainingPayable = standbyPrice + shippingFee;
+
+        // Re-fetch address to ensure it's not stale after ghn call
+        const finalUserAddress = userAddress;
 
         await tx.orders.create({
           data: {
@@ -883,12 +906,12 @@ export class AuctionsService {
             total_amount: Math.max(0, remainingPayable),
             paid_amount: 0,
             shipping_fee: shippingFee,
-            original_shipping_fee: shippingFee,
+            original_shipping_fee: realGhnFee,
             payment_ref_code: paymentRefCode,
             status_code: 'PENDING_PAYMENT',
             payment_deadline: newPaymentDeadline,
             channel_code: 'WEB',
-            shipping_address_id: userAddress?.address_id || null,
+            shipping_address_id: finalUserAddress?.address_id || null,
             order_items: {
               create: [
                 {
@@ -1022,12 +1045,34 @@ export class AuctionsService {
 
         const paymentRefCode = `PAY${Date.now()}${Math.floor(Math.random() * 1000)}`;
         const orderCode = `AUC-${auctionId}-${Date.now()}`;
-        const shippingFee = 30000;
-        const remainingPayable = standbyPrice + shippingFee;
-
+        // --- Calculate GHN Shipping Fee for Standby ---
+        let realGhnFee = 30000;
         const userAddress = await tx.addresses.findFirst({
           where: { user_id: standby.user_id, is_default: true, deleted_at: null }
         });
+
+        if (userAddress?.district_id && userAddress?.ward_code) {
+          try {
+            const variantInfo = await tx.product_variants.findUnique({
+              where: { variant_id: auction.variant_id }
+            });
+            realGhnFee = await this.ghnService.calculateRealFee({
+              to_district_id: userAddress.district_id,
+              to_ward_code: userAddress.ward_code,
+              weight: variantInfo?.weight_g || 500,
+              length: variantInfo?.length_cm || 15,
+              width: variantInfo?.width_cm || 15,
+              height: variantInfo?.height_cm || 15,
+              insurance_value: 0,
+            });
+          } catch (ghnErr) {
+            this.logger.warn(`[Manual Forfeit Auction #${auctionId}] GHN fee calculation failed`, ghnErr);
+          }
+        }
+
+        const shippingFee = Math.ceil(realGhnFee / 1000) * 1000;
+        const remainingPayable = standbyPrice + shippingFee;
+        const finalUserAddress = userAddress;
 
         await tx.orders.create({
           data: {
@@ -1036,12 +1081,12 @@ export class AuctionsService {
             total_amount: Math.max(0, remainingPayable),
             paid_amount: 0,
             shipping_fee: shippingFee,
-            original_shipping_fee: shippingFee,
+            original_shipping_fee: realGhnFee,
             payment_ref_code: paymentRefCode,
             status_code: 'PENDING_PAYMENT',
             payment_deadline: newPaymentDeadline,
             channel_code: 'WEB',
-            shipping_address_id: userAddress?.address_id || null,
+            shipping_address_id: finalUserAddress?.address_id || null,
             order_items: {
               create: [{
                 variant_id: auction.variant_id,
