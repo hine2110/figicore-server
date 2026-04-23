@@ -315,7 +315,7 @@ export class OrdersService {
       try {
         const retailItemsList = validatedItems.filter(item => {
             const tc = item.variant?.products?.type_code;
-            return tc !== 'BLINDBOX' && tc !== 'PREORDER' && !item.variant?.product_preorder_configs;
+            return tc !== 'PREORDER' && !item.variant?.product_preorder_configs;
         });
         
         let retailWeight = 0;
@@ -644,9 +644,7 @@ export class OrdersService {
             }
           }
 
-          // BUSINESS LOGIC: Calculate customer fee with 30,000đ floor and rounding up to nearest 1,000đ
-          const realFeeAtLeast30k = Math.max(30000, realGhnFee);
-          const roundedCustomerFee = Math.ceil(realFeeAtLeast30k / 1000) * 1000;
+          const roundedCustomerFee = Math.ceil(realGhnFee / 1000) * 1000;
           
           let customerShippingFee = roundedCustomerFee;
           if (isVoucherFreeShip) {
@@ -1737,9 +1735,7 @@ export class OrdersService {
       if (!config) throw new BadRequestException("Pre-order config missing for variant");
 
       const fullPrice = Number(config.full_price);
-      // Floor the shipping fee at 30,000đ and round up to nearest 1,000đ
-      const flooredFee = Math.max(30000, realGhnFee);
-      const roundedFee = Math.ceil(flooredFee / 1000) * 1000;
+      const roundedFee = Math.ceil(realGhnFee / 1000) * 1000;
       const totalAmount = (fullPrice * contract.quantity) + roundedFee;
 
       let newStatus = 'PROCESSING';
@@ -2169,7 +2165,7 @@ export class OrdersService {
        }
     }
 
-    const roundedFee = Math.ceil(Math.max(30000, realGhnFee) / 1000) * 1000;
+    const roundedFee = Math.ceil(realGhnFee / 1000) * 1000;
     let finalShippingFee = roundedFee;
 
     if (order.shipping_promotions) {
