@@ -37,7 +37,7 @@ export class InventoryController {
   }
 
   @Patch('receipts/:id/complete')
-  
+
   async complete(
     @Request() req: any,
     @Param('id') id: string,
@@ -45,12 +45,12 @@ export class InventoryController {
   ) {
     const user = req.user;
     if (!user) throw new UnauthorizedException('User not found in request context');
-    
+
     const userId = Number(user.userId || user.id || user.sub || user.user_id);
     const receiptId = parseInt(id, 10);
 
     if (isNaN(receiptId)) {
-        throw new BadRequestException('Invalid receipt ID');
+      throw new BadRequestException('Invalid receipt ID');
     }
 
     try {
@@ -62,7 +62,7 @@ export class InventoryController {
     }
   }
 
-  
+
   @Get('receipts') // GET /inventory/receipts
   @AllowAnyIp()
   async getHistory(@Request() req: any, @Query() query: any) {
