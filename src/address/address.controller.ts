@@ -53,9 +53,7 @@ export class AddressController {
             insurance_value: body.total_amount
         });
 
-        // 3. New Policy: Customer pays real shipping fee, but at least 30,000 VND and rounded UP to nearest 1k
-        const flooredFee = Math.max(30000, realFee);
-        const customerFee = Math.ceil(flooredFee / 1000) * 1000;
+        const customerFee = Math.ceil(realFee / 1000) * 1000;
 
         // 4. Return BOTH values
         // 'fee': What the user pays (Floored at 30k & Rounded Up)
