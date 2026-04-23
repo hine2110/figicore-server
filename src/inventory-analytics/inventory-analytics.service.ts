@@ -320,6 +320,9 @@ export class InventoryAnalyticsService {
    * Lấy toàn bộ danh sách tồn kho thực tế từ DB
    */
   async getGlobalInventory() {
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
     const inventory = await this.prisma.product_variants.findMany({
       where: {
         deleted_at: null,
@@ -331,18 +334,32 @@ export class InventoryAnalyticsService {
         variant_id: true,
         sku: true,
         stock_available: true,
+        price: true,
+        cost_price: true,
         products: {
           select: { name: true }
-        }
+        },
+        order_items: {
+          where: {
+            orders: {
+              created_at: { gte: thirtyDaysAgo },
+              status_code: { in: ['PROCESSING', 'COMPLETED', 'SHIPPING_TO_WAREHOUSE', 'INSPECTING', 'DEPOSITED'] },
+            },
+          },
+          select: { quantity: true },
+        },
       },
-      orderBy: { stock_available: 'asc' } // Ưu tiên hiện hàng sắp hết lên trước
+      orderBy: { stock_available: 'asc' }
     });
 
     return inventory.map(v => ({
       id: v.variant_id,
       name: v.products?.name || 'Unknown',
       sku: v.sku,
-      stock: v.stock_available
+      stock: v.stock_available,
+      price: Number(v.price || 0),
+      cost_price: Number(v.cost_price || 0),
+      sales30d: v.order_items.reduce((sum, item) => sum + item.quantity, 0),
     }));
   }
 
