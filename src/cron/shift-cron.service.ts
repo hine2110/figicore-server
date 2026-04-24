@@ -12,8 +12,8 @@ export class ShiftCronService {
     private notificationsService: NotificationsService,
   ) {}
 
-  // 00:00 every Thursday
-  @Cron('0 0 * * 4', {
+  // 00:01 every Thursday
+  @Cron('1 0 * * 4', {
     timeZone: 'Asia/Ho_Chi_Minh',
   })
   async notifyShiftRegistrationOpen() {
@@ -42,8 +42,8 @@ export class ShiftCronService {
 
         await this.notificationsService.create(
           user.user_id,
-          'Đăng Ký Lịch Làm Tuần Mới! ⏰',
-          'Cổng đăng ký lịch làm cho tuần tới đã được mở. Hạn chót đăng ký là vào 23:59 đêm Thứ Sáu. Hãy vào đăng ký ngay nhé!',
+          'Shift Registration Open! ⏰',
+          'The shift registration portal for next week is now open! You must register for a minimum of 32 hours (8 shifts). Deadline: Friday 23:59.',
           targetUrl,
           true
         );

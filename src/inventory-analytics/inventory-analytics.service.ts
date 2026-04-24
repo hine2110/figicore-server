@@ -112,9 +112,7 @@ export class InventoryAnalyticsService {
 
     this.logger.log(`Filtered ${filteredData.length} items for AI analysis from ${mappedData.length} total retail items.`);
 
-    return filteredData
-      .sort((a, b) => b.sales30d - a.sales30d)
-      .slice(0, 50);
+    return filteredData.sort((a, b) => b.sales30d - a.sales30d || a.id - b.id);
   }
 
   /**
@@ -152,7 +150,8 @@ export class InventoryAnalyticsService {
           }
         ],
         response_format: { type: 'json_object' },
-        temperature: 0.7, // Cho phép một chút biến động để dữ liệu sinh động
+        temperature: 0.0, // Chỉnh về 0.0 để dữ liệu ổn định tuyệt đối
+        seed: 12345, // Thêm seed để đảm bảo kết quả không đổi nếu input không đổi
       });
 
       const responseText = completion.choices[0]?.message?.content;
@@ -188,7 +187,7 @@ export class InventoryAnalyticsService {
               
               ANALYSIS RULES & FINANCIAL CONSTRAINTS:
               1. Clearance (Giảm giá xả kho): 
-                 - Conditions: ONLY suggest if current stock > 20 AND salesLast30Days is low.
+                 - Conditions: ONLY suggest if current stock > 20 AND sales is low.
                  - NEVER suggest clearance if current stock is 0 or very low (<10).
                  - PRICING RULE: "suggestedDiscount" must ensure post-discount price >= [breakEvenPrice].
               
@@ -210,20 +209,23 @@ export class InventoryAnalyticsService {
                 "restockList": [
                   { "productId": number, "name": "string", "reason": "string", "priority": "LOW" | "MEDIUM" | "HIGH" | "URGENT" }
                 ],
-                "summary": "Expert executive summary of current inventory health."
+                "summary": "Expert executive summary."
               }
             `
           },
           {
             role: 'user',
             content: `
-              INVENTORY DATA (Key Items Only):
+              INVENTORY DATA FORMAT LEGEND:
+              [ i=productId, n=name, s=stock, sl=sales30d, c=cost, b=breakEven, l=liquidatePrice ]
+              
+              INVENTORY DATA (Minified):
               ${JSON.stringify(contextData.inventory)}
               
               MARKET TRENDS:
               ${JSON.stringify(contextData.market)}
               
-              OVERALL METRICS (Across entire warehouse):
+              OVERALL METRICS:
               ${JSON.stringify(contextData.metrics)}
               
               Analysis Date: ${contextData.analysisDate}
@@ -231,7 +233,8 @@ export class InventoryAnalyticsService {
           }
         ],
         response_format: { type: 'json_object' },
-        temperature: 0.1, // Tuyệt đối ổn định
+        temperature: 0.0, // Chỉnh về 0.0 để kết quả tuyệt đối ổn định
+        seed: 12345, // Thêm seed để đảm bảo cùng data sẽ ra cùng một kết quả
       });
 
       const responseText = completion.choices[0]?.message?.content;
@@ -498,16 +501,14 @@ export class InventoryAnalyticsService {
         ...restockList.map((item: any) => item.productId),
       ].filter(id => id !== undefined);
 
-      // 2. Đánh dấu các đề xuất PENDING cũ là SUPERSEDED (đã bị thay thế)
-      if (variantIds.length > 0) {
-        await (tx as any).inventory_recommendations.updateMany({
-          where: {
-            variant_id: { in: variantIds },
-            status: 'PENDING',
-          },
-          data: { status: 'SUPERSEDED' },
-        });
-      }
+      // 2. Đánh dấu TẤT CẢ các đề xuất PENDING cũ là SUPERSEDED (đã bị thay thế)
+      // Vì đây là 1 đợt quét toàn diện mới, các đề xuất chưa duyệt từ lần quét trước không còn giá trị
+      await (tx as any).inventory_recommendations.updateMany({
+        where: {
+          status: 'PENDING',
+        },
+        data: { status: 'SUPERSEDED' },
+      });
 
       // 3. Chuẩn bị dữ liệu lưu mới cho Clearance
       const clearanceRecords = clearanceList.map((item: any) => ({
@@ -560,19 +561,30 @@ export class InventoryAnalyticsService {
         estimatedAnalyzedValue: totalInventoryValue,
       };
 
-      const topKeywords = inventoryData
-        .sort((a, b) => b.sales30d - a.sales30d)
+      const topKeywords = [...inventoryData]
+        .sort((a, b) => b.sales30d - a.sales30d || a.id - b.id)
         .slice(0, 5)
         .map(item => item.name);
 
       const marketTrends = await this.getExternalMarketTrends(topKeywords);
 
       // 2. Chạy Phân tích AI
+      // Nén dữ liệu inventory trước khi gửi cho AI để tiết kiệm tokens
+      const minifiedInventory = inventoryData.map(item => ({
+        i: item.id,
+        n: item.name.length > 25 ? item.name.substring(0, 25) + '...' : item.name,
+        s: item.stock,
+        sl: item.sales30d,
+        c: item.cost,
+        b: item.breakEven,
+        l: item.liquidate
+      }));
+
       const aiAnalysis = await this.analyzeWithAI({
-        inventory: inventoryData,
+        inventory: minifiedInventory,
         market: marketTrends,
         metrics: metrics,
-        analysisDate: new Date().toISOString()
+        analysisDate: new Date().toISOString().split('T')[0]
       });
 
       // 3. LƯU VÀO DATABASE (Bước 5)

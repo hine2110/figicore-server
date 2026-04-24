@@ -153,7 +153,7 @@ export class LivestreamLiveGateway implements OnGatewayConnection, OnGatewayDisc
     // --- GIVEAWAY HOOK ---
     const state = this.giveawayStates.get(payload.roomId);
     if (state && state.isActive && payload.userId) {
-      if (payload.text.trim() === state.keyword) { // Exact Case-Sensitive Match
+      if (payload.text.trim().toUpperCase() === state.keyword.toUpperCase()) { // Case-Insensitive Match
         if (!state.participants.has(payload.userId) && state.participants.size < state.slots) {
           state.participants.set(payload.userId, payload.name || 'User');
           this.server.to(payload.roomId).emit('giveaway_entry_count', { count: state.participants.size });
@@ -372,9 +372,9 @@ export class LivestreamLiveGateway implements OnGatewayConnection, OnGatewayDisc
   }
 
   @SubscribeMessage('claim_giveaway_prize')
-  // @UseGuards(WsJwtGuard) <-- TEMPORARY REMOVAL TO DEBUG SILENT REJECTION
-  async handleClaimPrize(client: any, payload: { claimId: number }) {
-    console.log(`[Socket] !!! EMERGENCY RECEIVE !!! claim_giveaway_prize payload:`, payload);
+  @UseGuards(WsJwtGuard)
+  async handleClaimPrize(client: any, payload: { claimId: number; userId?: number }) {
+    console.log(`[Socket] !!! RECEIVE !!! claim_giveaway_prize payload:`, payload);
     
     // Fallback userId if guard is off (though guard should be on in production)
     const userId = client.user?.user_id || payload['userId']; 
