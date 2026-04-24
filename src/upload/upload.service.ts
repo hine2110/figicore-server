@@ -15,20 +15,50 @@ export class UploadService {
     async uploadFile(file: Express.Multer.File, folder: string = 'figicore_products'): Promise<{ url: string; type: string; public_id: string }> {
         if (!file) throw new BadRequestException('No file provided');
 
-        // PREDICT URL: We know the pattern Cloudinary uses
-        const publicId = `ship_video_${Date.now()}`;
+        const isVideo = file.mimetype.startsWith('video');
+        const publicId = `${isVideo ? 'ship_video' : 'banner'}_${Date.now()}`;
         const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
-        const predictedUrl = `https://res.cloudinary.com/${cloudName}/video/upload/${folder}/${publicId}.mp4`;
 
-        // DETACHED BACKGROUND UPLOAD: Start it but do NOT await it
-        // This ensures the response is sent back to the UI in milliseconds
-        this.runIsolatedBackgroundUpload(file, folder, publicId);
+        if (isVideo) {
+            // PREDICT URL for Video (Background Upload)
+            const predictedUrl = `https://res.cloudinary.com/${cloudName}/video/upload/${folder}/${publicId}.mp4`;
+            this.runIsolatedBackgroundUpload(file, folder, publicId);
+            return {
+                url: predictedUrl,
+                type: 'VIDEO',
+                public_id: publicId,
+            };
+        } else {
+            // DIRECT UPLOAD for Images
+            try {
+                const result: any = await new Promise((resolve, reject) => {
+                    const uploadStream = cloudinary.uploader.upload_stream(
+                        {
+                            folder: folder,
+                            public_id: publicId,
+                            resource_type: 'image',
+                        },
+                        (error, result) => {
+                            if (error) return reject(error);
+                            resolve(result);
+                        }
+                    );
+                    const stream = new Readable();
+                    stream.push(file.buffer);
+                    stream.push(null);
+                    stream.pipe(uploadStream);
+                });
 
-        return {
-            url: predictedUrl,
-            type: 'VIDEO',
-            public_id: publicId,
-        };
+                return {
+                    url: result.secure_url,
+                    type: 'IMAGE',
+                    public_id: result.public_id,
+                };
+            } catch (error) {
+                console.error('Image Upload Error:', error);
+                throw new BadRequestException('Failed to upload image to Cloudinary');
+            }
+        }
     }
 
     private runIsolatedBackgroundUpload(file: Express.Multer.File, folder: string, publicId: string) {
