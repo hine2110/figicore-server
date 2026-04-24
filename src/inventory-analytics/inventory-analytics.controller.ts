@@ -30,8 +30,10 @@ export class InventoryAnalyticsController {
   async getRecommendations(
     @Query('status') status?: string,
     @Query('type') type?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
   ): Promise<any> {
-    const result = await this.inventoryAnalyticsService.getRecommendations({ status, type });
+    const result = await this.inventoryAnalyticsService.getRecommendations({ status, type, page, limit });
     return { success: true, data: result };
   }
 
