@@ -1470,8 +1470,8 @@ export class OrdersService {
     }
   }
 
-  async findAll(params?: { status?: string, startDate?: string, endDate?: string }) {
-    const { status, startDate, endDate } = params || {};
+  async findAll(params?: { status?: string, startDate?: string, endDate?: string, channel?: string }) {
+    const { status, startDate, endDate, channel } = params || {};
     
     let dateFilter: any = undefined;
     if (startDate || endDate) {
@@ -1491,6 +1491,14 @@ export class OrdersService {
     const where: any = { deleted_at: null };
     if (status && status !== 'PACKED') {
       where.status_code = status;
+    }
+    
+    if (channel && channel !== 'all') {
+      if (channel === 'ONLINE') {
+        where.channel_code = { in: ['WEB', 'LIVESTREAM', 'AUCTION'] };
+      } else {
+        where.channel_code = channel;
+      }
     }
 
     if (dateFilter) {
@@ -2457,7 +2465,7 @@ export class OrdersService {
 
       const [
         packedOrders, totalOrders, totalOnlineOrders, totalLivestreamOrders,
-        onlineOrders, livestreamOrders, preorderContracts, shipments, collectedShipping,
+        onlineOrders, livestreamOrders, preorderContracts, shipments, collectedShipping, rawPromoOrders
       ] = await Promise.all([
         this.prisma.orders.count({ where: { packed_at: dateFilter, deleted_at: null } }),
         this.prisma.orders.count({ where: { created_at: dateFilter, deleted_at: null } }),
@@ -2468,7 +2476,16 @@ export class OrdersService {
         this.prisma.preorder_contracts.aggregate({ _sum: { deposit_amount_paid: true }, _count: { contract_id: true }, where: { created_at: dateFilter } }),
         this.prisma.shipments.aggregate({ _sum: { shipping_fee: true }, where: { created_at: dateFilter } }),
         this.prisma.orders.aggregate({ _sum: { shipping_fee: true }, where: { created_at: dateFilter, deleted_at: null, shipments: { isNot: null } } }),
+        this.prisma.orders.findMany({ 
+          where: { created_at: dateFilter, deleted_at: null, shipping_promotion_id: { not: null }, shipments: { isNot: null } },
+          select: { shipping_fee: true, original_shipping_fee: true }
+        }),
       ]);
+
+      const shippingDiscount = rawPromoOrders.reduce((sum, order) => {
+          const discount = Number(order.original_shipping_fee || 0) - Number(order.shipping_fee || 0);
+          return sum + Math.max(0, discount);
+      }, 0);
 
       return {
         packedOrders, totalOrders, totalOnlineOrders, totalLivestreamOrders,
@@ -2478,6 +2495,8 @@ export class OrdersService {
         preorderRevenue: Number(preorderContracts._sum.deposit_amount_paid || 0),
         shippingCollected: Number(collectedShipping._sum.shipping_fee || 0),
         shippingPaid: Number(shipments._sum.shipping_fee || 0),
+        shippingDiscount,
+        freeshipOrders: rawPromoOrders.length,
       };
     };
 

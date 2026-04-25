@@ -100,11 +100,11 @@ export class InventoryAnalyticsService {
     });
 
     // --- LOGIC LỌC THÔNG MINH ---
-    // Chỉ gửi các sản phẩm THỰC SỰ có vấn đề
+    // Chỉ gửi các sản phẩm THỰC SỰ có vấn đề (Có tương tác mua bán)
     const filteredData = mappedData.filter(item => {
-      const isLowStock = item.stock < 10 && item.sales30d > 0; // Chỉ restock nếu có bán được
-      const isOverstock = item.stock >= 30 && item.sales30d < 5; // Hạ ngưỡng tồn kho xuống 30 để dễ test
-      const isBestSeller = item.sales30d > 10;
+      const isLowStock = item.stock < 10 && item.sales30d > 0; // Sắp hết và CÓ bán được
+      const isOverstock = item.stock >= 30 && item.sales30d > 0 && item.sales30d <= 5; // Tồn nhiều nhưng bán ế (Có giao dịch nhưng rất ít)
+      const isBestSeller = item.sales30d > 10; // Bán cực tốt
       const isPreorderActive = item.preCount > 0;
 
       return isLowStock || isOverstock || isBestSeller || isPreorderActive;
@@ -187,12 +187,13 @@ export class InventoryAnalyticsService {
               
               ANALYSIS RULES & FINANCIAL CONSTRAINTS:
               1. Clearance (Giảm giá xả kho): 
-                 - Conditions: ONLY suggest if current stock > 20 AND sales is low.
-                 - NEVER suggest clearance if current stock is 0 or very low (<10).
+                 - Conditions: ONLY suggest if current stock > 20 AND sales velocity (sl) is greater than 0 but less than 5.
+                 - NEVER suggest clearance if sales velocity (sl) is 0 (it might be a newly added product).
                  - PRICING RULE: "suggestedDiscount" must ensure post-discount price >= [breakEvenPrice].
               
               2. Restock (Nhập hàng): 
-                 - Conditions: Suggest if current stock < 10 OR (high sales velocity AND trending market).
+                 - Conditions: Suggest if current stock < 10 AND sales velocity (sl) > 0.
+                 - NEVER suggest restock if sales velocity (sl) is 0 (no demand).
                  - Priority Level: URGENT if stock is 0 and sales are active.
       
               RETURN FORMAT (JSON):
@@ -587,10 +588,32 @@ export class InventoryAnalyticsService {
         analysisDate: new Date().toISOString().split('T')[0]
       });
 
-      // 3. LƯU VÀO DATABASE (Bước 5)
+      // 3. VALIDATE AI RESPONSE - Lọc bỏ các ID bịa đặt (hallucinated)
+      // AI có thể trả về productId không tồn tại trong DB -> gây lỗi FK constraint
+      const validVariantIds = new Set(inventoryData.map(item => item.id));
+
+      const originalClearance = aiAnalysis.clearanceList.length;
+      const originalRestock = aiAnalysis.restockList.length;
+
+      aiAnalysis.clearanceList = (aiAnalysis.clearanceList || []).filter((item: any) => {
+        const isValid = validVariantIds.has(item.productId);
+        if (!isValid) this.logger.warn(`[AI VALIDATION] Removed hallucinated Clearance ID: ${item.productId}`);
+        return isValid;
+      });
+
+      aiAnalysis.restockList = (aiAnalysis.restockList || []).filter((item: any) => {
+        const isValid = validVariantIds.has(item.productId);
+        if (!isValid) this.logger.warn(`[AI VALIDATION] Removed hallucinated Restock ID: ${item.productId}`);
+        return isValid;
+      });
+
+      this.logger.log(`[AI VALIDATION] Clearance: ${originalClearance} -> ${aiAnalysis.clearanceList.length} valid`);
+      this.logger.log(`[AI VALIDATION] Restock: ${originalRestock} -> ${aiAnalysis.restockList.length} valid`);
+
+      // 4. LƯU VÀO DATABASE (Bước 5)
       await this.saveRecommendations(aiAnalysis);
 
-      // 4. Log kết quả ra terminal
+      // 5. Log kết quả ra terminal
       console.log('--- [AI ANALYTICS] FINAL DECISION ---');
       console.log('CLEARANCE:', aiAnalysis.clearanceList.length, 'items');
       console.log('RESTOCK:', aiAnalysis.restockList.length, 'items');
