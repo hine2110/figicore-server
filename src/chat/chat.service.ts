@@ -38,10 +38,13 @@ export class ChatService {
         </CONTEXT>
 
         <STRICT_RULES>
-        1. CHỈ sử dụng dữ liệu trong thẻ <DATA>.
-        2. TUYỆT ĐỐI KHÔNG tự bịa ra sản phẩm, giá cả, hoặc mã đơn hàng.
-        3. TUYỆT ĐỐI KHÔNG tự bịa ra đường dẫn ảnh (URL). Chỉ hiển thị ảnh nếu URL bắt đầu bằng "http".
-        4. KHÔNG nhận vơ: Nếu khách hỏi mẫu A mà trong <DATA> chỉ có mẫu B, hãy báo rõ mẫu A chưa có sẵn.
+        1. LẮNG NGHE & TƯƠNG TÁC: Nếu khách hàng hỏi chung chung (ví dụ "Tôi muốn tư vấn", "Chào bạn"), KHÔNG ĐƯỢC list một loạt sản phẩm. Hãy chào hỏi và đặt câu hỏi mở để tìm hiểu nhu cầu (dòng sản phẩm, kích thước, mức giá mong muốn).
+        2. CHỈ GỢI Ý SẢN PHẨM KHI CẦN THIẾT: Chỉ hiển thị sản phẩm từ thẻ <DATA> khi khách có yêu cầu cụ thể (màu sắc, giá, từ khóa) hoặc khi bạn thực sự muốn nhá hàng 1-2 mẫu tiêu biểu. KHÔNG BAO GIỜ hiển thị toàn bộ danh sách 10 sản phẩm cùng lúc gây rối mắt.
+        3. LINK DANH MỤC QUAN TRỌNG:
+           - Trang Blindbox: [Khám phá toàn bộ Blindbox](/customer/blindbox)
+           - Trang Pre-order: [Xem hàng Pre-order](/customer/preorder)
+           - Nếu khách hỏi "Blindbox là gì?", hãy giải thích ngắn gọn, sinh động và đính kèm link Trang Blindbox ở trên thay vì dẫn trực tiếp vào một sản phẩm cụ thể.
+        4. TUYỆT ĐỐI KHÔNG tự bịa ra sản phẩm, giá cả, ảnh hoặc URL.
         </STRICT_RULES>
 
         <DATA>
@@ -54,13 +57,9 @@ export class ChatService {
 
         <GUIDELINES>
         - Thân thiện, am hiểu mô hình.
-        - Trình bày SP: "- ![tên ảnh](url) **Tên sản phẩm** (Loại): Giá - [Xem chi tiết](/customer/product/ID)"
+        - Định dạng hiển thị 1 SP cụ thể (nếu có): "- ![tên ảnh](url) **Tên sản phẩm** (Loại): Giá - [Xem chi tiết](/customer/product/ID)"
         - Giữ nguyên link [Xem chi tiết](/...) và ID.
         </GUIDELINES>
-
-        <MARKETING_SCRIPT>
-        - Nếu không có mẫu khách tìm: "Chào bạn! Mẫu [Tên khách tìm] hiện chưa có sẵn trên hệ thống FigiCore. Tuy nhiên, shop luôn cập nhật hàng mới mỗi tuần! Bạn tham khảo các mẫu HOT đang sẵn hàng sau đây nhé:"
-        </MARKETING_SCRIPT>
       `;
 
       // 1. Detect Search Intent and Extract Parameters
@@ -133,9 +132,16 @@ export class ChatService {
         return new Intl.NumberFormat('vi-VN').format(Number(price)) + 'đ';
       };
 
-      const productContextPrefix = isFallback
-        ? "--- HIỆN KHÔNG TÌM THẤY SẢN PHẨM KHÁCH YÊU CẦU. Đây là danh sách các sản phẩm HOT khác để gợi ý: ---\n"
-        : "--- ĐÂY LÀ CÁC SẢN PHẨM TÌM THẤY PHÙ HỢP VỚI CÂU HỎI: ---\n";
+      const isGeneralGreeting = !keywordFound && !colorMatch && !priceKMatch && !priceTrMatch;
+
+      let productContextPrefix = "";
+      if (isFallback) {
+        productContextPrefix = "--- [LƯU Ý] KHÔNG TÌM THẤY SP HOẶC KHÁCH CHỈ CHÀO HỎI. Đây là danh sách dự phòng. HÃY TƯƠNG TÁC VÀ HỎI NHU CẦU KHÁCH TRƯỚC, CHỈ GỢI Ý TỐI ĐA 1-2 MẪU NẾU CẦN: ---\n";
+      } else if (isGeneralGreeting) {
+        productContextPrefix = "--- [LƯU Ý] KHÁCH ĐANG HỎI CHUNG CHUNG. HÃY TƯƠNG TÁC VÀ HỎI RÕ NHU CẦU, CHỈ GỢI Ý TỐI ĐA 1-2 MẪU TRONG DANH SÁCH DƯỚI ĐÂY NẾU CẦN: ---\n";
+      } else {
+        productContextPrefix = "--- ĐÂY LÀ CÁC SẢN PHẨM TÌM THẤY CHÍNH XÁC THEO YÊU CẦU (Bạn có thể giới thiệu vài mẫu phù hợp nhất): ---\n";
+      }
 
       const productContext = displayProducts.length > 0
         ? productContextPrefix + displayProducts.map(p => {
