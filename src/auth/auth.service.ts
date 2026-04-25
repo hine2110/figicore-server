@@ -118,10 +118,10 @@ export class AuthService {
       message: 'Registration successful',
       access_token: this.jwtService.sign(payload),
       user: {
-        id: user.user_id,
+        user_id: user.user_id,
         email: user.email,
         role_code: user.role_code,
-        fullName: user.full_name,
+        full_name: user.full_name,
         dob: user.dob,
       },
     };
@@ -159,10 +159,10 @@ export class AuthService {
     return {
       access_token: this.jwtService.sign(payload),
       user: {
-        id: user.user_id,
+        user_id: user.user_id,
         email: user.email,
         role_code: user.role_code,
-        fullName: user.full_name,
+        full_name: user.full_name,
         dob: user.dob,
       },
     };
@@ -225,10 +225,10 @@ export class AuthService {
     return {
       access_token: this.jwtService.sign(payload),
       user: {
-        id: user.user_id,
+        user_id: user.user_id,
         email: user.email,
         role_code: user.role_code,
-        fullName: user.full_name,
+        full_name: user.full_name,
         dob: user.dob,
       },
     };
@@ -430,7 +430,7 @@ export class AuthService {
       }
       const isMatch = await bcrypt.compare(dto.oldPassword, user.password_hash);
       if (!isMatch) {
-        throw new UnauthorizedException('Incorrect old password');
+        throw new BadRequestException('Incorrect old password');
       }
     } else {
       // For Google users or users without a password, we allow setting one without oldPassword

@@ -55,7 +55,7 @@ export class MailService {
           orderCode: order.order_code || order.order_id,
           formattedTotal: this.formatCurrency(Number(order.total_amount)),
           items: items,
-          url: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/customer/profile?tab=orders`
+          url: `${process.env.FRONTEND_URL || 'https://figicore.com'}/customer/profile?tab=orders`
         },
       });
       console.log(`[MailService] Order confirmation sent to ${toEmail}`);
@@ -112,7 +112,7 @@ export class MailService {
           name: decUser.full_name,
           orderCode: order.order_code || order.order_id,
           earnedPoints: earnedPoints,
-          url: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/customer/profile?tab=orders`
+          url: `${process.env.FRONTEND_URL || 'https://figicore.com'}/customer/profile?tab=orders`
         },
       });
       console.log(`[MailService] Delivery success email sent to ${toEmail}`);
@@ -167,7 +167,7 @@ export class MailService {
 
   async sendVerificationEmail(email: string, token: string) {
     const toEmail = this.decryptEmail(email);
-    const url = `http://localhost:3000/auth/verify?token=${token}`;
+    const url = `${process.env.FRONTEND_URL || 'https://figicore.com'}/auth/verify?token=${token}`;
 
     await this.mailerService.sendMail({
       to: toEmail,
@@ -184,7 +184,7 @@ export class MailService {
   async sendEmployeeActivation(to: string, tempPass: string, token: string, name: string) {
     const toEmail = this.decryptEmail(to);
     const toName = this.decryptEmail(name);
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const frontendUrl = process.env.FRONTEND_URL || 'https://figicore.com';
     const activationLink = `${frontendUrl}/auth/activate?token=${token}`;
 
     await this.mailerService.sendMail({
@@ -200,7 +200,7 @@ export class MailService {
                         <p style="margin: 5px 0;"><strong>Email:</strong> ${toEmail}</p>
                         <p style="margin: 5px 0;"><strong>Temporary Password:</strong> <span style="font-family: monospace; font-size: 16px; background: #eee; padding: 2px 6px; border-radius: 4px;">${tempPass}</span></p>
                     </div>
-
+                    
                     <p>Please click the button below to change your password and activate your account:</p>
                     
                     <div style="text-align: center; margin: 30px 0;">
@@ -383,7 +383,7 @@ export class MailService {
     const toEmail = this.decryptEmail(user.email);
     const toName = this.decryptEmail(user.full_name);
     try {
-      const frontendUrl = this.configService.get('FRONTEND_URL', 'http://localhost:5173');
+      const frontendUrl = this.configService.get('FRONTEND_URL', 'https://figicore.com');
       const collectUrl = `${frontendUrl}/customer/vouchers/collect/${promotion.promotion_id}`;
 
       const rankBadge = promotion.apply_rank_code
@@ -457,7 +457,7 @@ export class MailService {
     const toEmail = this.decryptEmail(email);
     const toName = this.decryptEmail(fullName);
     try {
-      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+      const frontendUrl = process.env.FRONTEND_URL || 'https://figicore.com';
       const walletUrl = `${frontendUrl}/customer/profile?tab=vouchers`;
 
       const formattedExpiry = new Intl.DateTimeFormat('en-US', {
@@ -527,6 +527,197 @@ export class MailService {
       console.log(`[MailService] Birthday email sent to ${toEmail}`);
     } catch (error) {
       console.error(`[MailService] Failed to send birthday email to ${toEmail}`, error);
+    }
+  }
+
+  // ─── Weekly Rank Voucher Email ───────────────────────────────────────────────
+
+  async sendWeeklyRankVoucherEmail(
+    user: { email: string; full_name: string },
+    promotion: any,
+    rankCode: string,
+    label: string,
+  ) {
+    const toEmail = user.email; // Already decrypted by caller
+    const toName = user.full_name;
+    try {
+      const frontendUrl = this.configService.get('FRONTEND_URL', 'https://figicore.com');
+      const collectUrl = `${frontendUrl}/customer/home`;
+
+      // Màu sắc badge theo rank
+      const RANK_COLORS: Record<string, { bg: string; text: string; emoji: string }> = {
+        BRONZE:  { bg: '#cd7f32', text: '#fff', emoji: '🥉' },
+        SILVER:  { bg: '#94a3b8', text: '#fff', emoji: '🥈' },
+        GOLD:    { bg: '#f59e0b', text: '#fff', emoji: '🥇' },
+        DIAMOND: { bg: '#6366f1', text: '#fff', emoji: '💎' },
+      };
+      const rankStyle = RANK_COLORS[rankCode] || { bg: '#374151', text: '#fff', emoji: '🎫' };
+
+      const discountDisplay = promotion.discount_type === 'FREE_SHIP'
+        ? 'Free Shipping'
+        : `${promotion.discount_value}% OFF`;
+
+      const capDisplay = promotion.max_discount_amount
+        ? `(Up to ${this.formatCurrency(Number(promotion.max_discount_amount))})`
+        : '';
+
+      const minOrderDisplay = promotion.min_order_value && Number(promotion.min_order_value) > 0
+        ? `Min Order: ${this.formatCurrency(Number(promotion.min_order_value))}`
+        : 'No minimum order';
+
+      const expiryDisplay = promotion.end_date
+        ? new Intl.DateTimeFormat('en-GB', {
+            weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit',
+          }).format(new Date(promotion.end_date))
+        : 'No expiry';
+
+      await this.mailerService.sendMail({
+        to: toEmail,
+        subject: `🎫 [${rankCode}] New Weekly Voucher Ready! — FigiCore`,
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border-radius: 12px; overflow: hidden; border: 1px solid #eaeaea;">
+            <!-- Header -->
+            <div style="background: linear-gradient(135deg, #111 0%, #333 100%); padding: 32px; text-align: center;">
+              <p style="font-size: 40px; margin: 0;">${rankStyle.emoji}</p>
+              <h1 style="color: #fff; margin: 12px 0 4px; font-size: 24px;">New Weekly Voucher!</h1>
+              <p style="color: rgba(255,255,255,0.8); margin: 0; font-size: 14px;">
+                Exclusively for member rank:
+                <span style="background:${rankStyle.bg}; color:${rankStyle.text}; padding:2px 10px; border-radius:12px; font-weight:bold; font-size:13px;">
+                  ${rankStyle.emoji} ${rankCode}
+                </span>
+              </p>
+            </div>
+
+            <!-- Body -->
+            <div style="padding: 32px;">
+              <p style="color: #374151; font-size: 15px; margin-top: 0;">
+                Hello <strong>${toName}</strong>,
+              </p>
+              <p style="color: #374151; font-size: 15px;">
+                FigiCore has just released the <strong>Rank-Exclusive Voucher</strong> for this week.
+                Make sure to collect it before it expires!
+              </p>
+
+              <!-- Voucher Card -->
+              <div style="border: 2px dashed #e5e7eb; border-radius: 12px; padding: 24px; margin: 24px 0; text-align: center; background: #fafafa;">
+                <span style="display:inline-block; background:${rankStyle.bg}; color:${rankStyle.text}; padding:3px 14px; border-radius:20px; font-size:12px; font-weight:bold; margin-bottom: 12px;">
+                  ${rankStyle.emoji} ${rankCode} Exclusive
+                </span>
+                <p style="font-size: 30px; font-weight: bold; color: #111; margin: 8px 0;">${discountDisplay}</p>
+                ${capDisplay ? `<p style="font-size: 14px; color: #6b7280; margin: 2px 0;">${capDisplay}</p>` : ''}
+                <p style="font-size: 13px; color: #6b7280; margin: 8px 0;">
+                  Code: <span style="font-family: monospace; background: #f3f4f6; padding: 2px 10px; border-radius: 6px; font-weight: bold;">${promotion.code}</span>
+                </p>
+                <p style="font-size: 12px; color: #9ca3af; margin: 6px 0;">${minOrderDisplay}</p>
+                <p style="font-size: 12px; color: #ef4444; font-weight: bold; margin: 6px 0;">
+                  ⏰ Expires: ${expiryDisplay}
+                </p>
+              </div>
+
+              <!-- Note -->
+              <div style="background: #f8fafc; border-left: 4px solid #cbd5e1; padding: 14px; border-radius: 4px; margin-bottom: 24px;">
+                <p style="margin: 0; font-size: 13px; color: #64748b;">
+                  <strong>📌 Note:</strong> This voucher has <strong>not been automatically added</strong> to your wallet.
+                  Click the button below to collect it manually. Applicable for Retail items only.
+                </p>
+              </div>
+
+              <!-- CTA -->
+              <div style="text-align: center; margin: 28px 0 16px;">
+                <a href="${collectUrl}"
+                   style="background-color: #111; color: white; padding: 14px 40px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 15px; display: inline-block;">
+                  Collect Voucher Now
+                </a>
+              </div>
+
+              <p style="color: #9ca3af; font-size: 12px; text-align: center; margin-top: 24px;">
+                Thank you for being part of FigiCore!<br>
+                Team FigiCore 🖤
+              </p>
+            </div>
+
+            <!-- Footer -->
+            <div style="background: #f9fafb; padding: 16px; text-align: center;">
+              <p style="color: #d1d5db; font-size: 11px; margin: 0;">© ${new Date().getFullYear()} FigiCore — With love 🖤</p>
+            </div>
+          </div>
+        `,
+      });
+      console.log(`[MailService] Weekly rank voucher email sent to ${toEmail} (rank: ${rankCode})`);
+    } catch (error) {
+      console.error(`[MailService] Failed to send weekly rank voucher email to ${toEmail}`, error);
+    }
+  }
+
+  // ─── Apology Voucher Email ───────────────────────────────────────────────
+
+  async sendApologyEmail(
+    user: { email: string; full_name: string },
+    promotion: any,
+  ) {
+    const toEmail = user.email; // Already decrypted
+    const toName = user.full_name;
+    try {
+      const frontendUrl = this.configService.get('FRONTEND_URL', 'https://figicore.com');
+      const walletUrl = `${frontendUrl}/customer/home`;
+
+      await this.mailerService.sendMail({
+        to: toEmail,
+        subject: `A Sincere Apology from FigiCore — A Special Gift Just for You`,
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border-radius: 12px; overflow: hidden; border: 1px solid #eaeaea;">
+            <div style="background: linear-gradient(135deg, #111 0%, #333 100%); padding: 32px; text-align: center;">
+              <div style="color: #fff; font-size: 12px; font-weight: bold; letter-spacing: 2px; text-transform: uppercase; margin-bottom: 8px; opacity: 0.7;">Customer Service</div>
+              <h1 style="color: #fff; margin: 12px 0 4px; font-size: 24px;">Our Sincere Apologies</h1>
+              <p style="color: rgba(255,255,255,0.8); margin: 0; font-size: 14px;">
+                Thank you for your patience and for staying with us.
+              </p>
+            </div>
+
+            <div style="padding: 32px;">
+              <p style="color: #374151; font-size: 15px; margin-top: 0;">
+                Hello <strong>${toName}</strong>,
+              </p>
+              <p style="color: #374151; font-size: 15px; line-height: 1.6;">
+                On behalf of the entire FigiCore team, we would like to sincerely apologize for any inconvenience or errors you may have experienced with our service.
+                Meeting your expectations is our top priority, and we are truly sorry for failing to do so this time.
+              </p>
+              <p style="color: #374151; font-size: 15px; line-height: 1.6;">
+                As a token of our sincere apology, we have added a <strong>Private Voucher</strong> directly to your Voucher Wallet. No collection needed—simply select it during checkout:
+              </p>
+
+              <div style="background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 8px; padding: 20px; text-align: center; margin: 24px 0;">
+                <p style="margin: 0; color: #64748b; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px;">Your Apology Voucher Code</p>
+                <div style="font-family: monospace; font-size: 28px; font-weight: bold; color: #0f172a; margin: 8px 0; letter-spacing: 2px;">
+                  ${promotion.code}
+                </div>
+                <div style="display: inline-block; background: #fee2e2; color: #b91c1c; padding: 4px 12px; border-radius: 16px; font-size: 13px; font-weight: bold; margin-bottom: 8px;">
+                  Exclusively for you: 15% OFF (Up to ${this.formatCurrency(Number(promotion.max_discount_amount))})
+                </div>
+                <p style="margin: 0; color: #64748b; font-size: 13px;">
+                  Applicable to all orders (Valid for 30 days)
+                </p>
+              </div>
+
+              <div style="text-align: center; margin: 28px 0 16px;">
+                <a href="${walletUrl}"
+                   style="background: #111; color: white; padding: 14px 40px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 15px; display: inline-block;">
+                  Check Your Voucher Wallet
+                </a>
+              </div>
+
+              <p style="color: #9ca3af; font-size: 13px; text-align: center; margin-top: 24px; line-height: 1.5;">
+                We are committed to improving our service to provide you with a better experience in the future.<br>
+                Best regards,<br>
+                <strong>FigiCore Customer Care</strong>
+              </p>
+            </div>
+          </div>
+        `,
+      });
+      console.log(`[MailService] Apology email sent to ${toEmail}`);
+    } catch (error) {
+      console.error(`[MailService] Failed to send apology email to ${toEmail}`, error);
     }
   }
 }

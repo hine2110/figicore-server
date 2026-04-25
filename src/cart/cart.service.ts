@@ -179,7 +179,8 @@ export class CartService {
     }
 
     // 3. Upsert Item (Flash Sale Split Logic)
-    const paymentOption = dto.paymentOption || 'DEPOSIT';
+    const isPreorder = variant.products.type_code === 'PREORDER' || !!variant.product_preorder_configs;
+    const paymentOption = dto.paymentOption || (isPreorder ? 'DEPOSIT' : 'FULL_PAYMENT');
 
     // FIX: User cannot have the same variant with DIFFERENT payment options in the cart.
     const conflictingItem = await this.prisma.cart_items.findFirst({
@@ -187,6 +188,7 @@ export class CartService {
         cart_id: cart.cart_id,
         variant_id: variantId,
         payment_option: { not: paymentOption },
+        giveaway_claim_id: null, // Ignore giveaways
         deleted_at: null
       }
     });

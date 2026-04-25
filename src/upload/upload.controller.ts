@@ -1,49 +1,24 @@
-import { Controller, Post, UseInterceptors, UploadedFile, BadRequestException } from '@nestjs/common';
+import { Controller, Post, UseInterceptors, UploadedFile, BadRequestException, Get, Query, Body } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { UploadService } from './upload.service';
-import { diskStorage } from 'multer';
-import { v4 as uuidv4 } from 'uuid';
-import { extname } from 'path';
 
 @Controller('upload')
 export class UploadController {
     constructor(private readonly uploadService: UploadService) { }
 
-    /*
-    @Post('avatar')
-    @UseInterceptors(FileInterceptor('file', {
-        storage: diskStorage({
-            destination: './uploads/avatars',
-            filename: (req, file, cb) => {
-                const randomName = uuidv4();
-                return cb(null, `${randomName}${extname(file.originalname)}`);
-            },
-        }),
-        fileFilter: (req, file, cb) => {
-            if (!file.mimetype.match(/\/(jpg|jpeg|png|gif)$/)) {
-                return cb(new BadRequestException('Only image files are allowed!'), false);
-            }
-            cb(null, true);
-        },
-    }))
-    uploadAvatar(@UploadedFile() file: Express.Multer.File) {
-        if (!file) {
-            throw new BadRequestException('File is required');
-        }
-        // Construct public URL
-        const backendUrl = process.env.BACKEND_URL || 'http://localhost:3000'; // Fallback or use request host
-        return {
-            url: `${backendUrl}/uploads/avatars/${file.filename}`,
-        };
-        // Note: For now assuming localhost:3000, ideally env var
+    @Get('signature')
+    getSignature(@Query('folder') folder: string) {
+        return this.uploadService.getSignature(folder);
     }
-    */
 
     @Post()
     @UseInterceptors(FileInterceptor('file', {
-        limits: { fileSize: 50 * 1024 * 1024 }, // Enforce 50MB limit at Multer level
+        limits: { fileSize: 100 * 1024 * 1024 }, // 100MB limit
     }))
-    async uploadFile(@UploadedFile() file: Express.Multer.File) {
-        return await this.uploadService.uploadFile(file);
+    async uploadFile(
+        @UploadedFile() file: Express.Multer.File,
+        @Body('folder') folder?: string
+    ) {
+        return await this.uploadService.uploadFile(file, folder);
     }
 }

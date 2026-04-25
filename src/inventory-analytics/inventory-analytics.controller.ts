@@ -1,12 +1,16 @@
 import { Controller, Post, Get, Query, Patch, Param, UseGuards, Request, Body } from '@nestjs/common';
 import { InventoryAnalyticsService } from './inventory-analytics.service';
+import { MarketIntelligenceService } from './market-intelligence.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 
 @Controller('analytics')
 export class InventoryAnalyticsController {
-  constructor(private readonly inventoryAnalyticsService: InventoryAnalyticsService) {}
+  constructor(
+    private readonly inventoryAnalyticsService: InventoryAnalyticsService,
+    private readonly marketIntelligenceService: MarketIntelligenceService,
+  ) { }
 
   @Post('trigger-inventory-check')
   async triggerInventoryCheck(): Promise<any> {
@@ -30,8 +34,10 @@ export class InventoryAnalyticsController {
   async getRecommendations(
     @Query('status') status?: string,
     @Query('type') type?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
   ): Promise<any> {
-    const result = await this.inventoryAnalyticsService.getRecommendations({ status, type });
+    const result = await this.inventoryAnalyticsService.getRecommendations({ status, type, page, limit });
     return { success: true, data: result };
   }
 
@@ -50,6 +56,28 @@ export class InventoryAnalyticsController {
   ): Promise<any> {
     const userId = req.user.userId;
     const result = await this.inventoryAnalyticsService.applyRecommendation(+id, userId);
+    return { success: true, data: result };
+  }
+
+  // --- MARKET INTELLIGENCE ---
+
+  @Post('market-intel/scan')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('MANAGER', 'ADMIN')
+  async triggerMarketScan(): Promise<any> {
+    const result = await this.marketIntelligenceService.triggerMarketScan();
+    return { success: true, data: result };
+  }
+
+  @Get('market-intel')
+  async getMarketIntel(
+    @Query('brand') brand?: string,
+    @Query('status') status?: string,
+    @Query('category') category?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ): Promise<any> {
+    const result = await this.marketIntelligenceService.getMarketIntel({ brand, status, category, page, limit });
     return { success: true, data: result };
   }
 }

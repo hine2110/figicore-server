@@ -327,7 +327,7 @@ export class PosOrdersService {
         return {
             success: true,
             count: orders.length,
-            data: orders.map(o => this.decryptPii(o, true)),
+            data: orders.map(o => this.decryptPii(o, false)),
             total,
             page,
             limit,
@@ -377,7 +377,7 @@ export class PosOrdersService {
             _count: undefined
         }));
 
-        return { success: true, count: formatted.length, data: formatted.map(f => this.decryptPii(f, true)), total, page, limit };
+        return { success: true, count: formatted.length, data: formatted.map(f => this.decryptPii(f, false)), total, page, limit };
     }
 
     async getCustomerOrderHistory(customerId: number, staffId: number) {

@@ -53,16 +53,15 @@ export class InventoryAnalyticsService {
     const opex = await this.getOpexConfig();
     const totalOpexPct = Object.values(opex).reduce((a: any, b: any) => a + b, 0) as number / 100;
 
-    const activeOrderStatuses = [
-      'PROCESSING',
-      'COMPLETED',
-      'SHIPPING_TO_WAREHOUSE',
-      'INSPECTING',
-      'DEPOSITED'
-    ];
+    const activeOrderStatuses = ['PROCESSING', 'COMPLETED', 'SHIPPING_TO_WAREHOUSE', 'INSPECTING', 'DEPOSITED'];
 
     const inventory = await this.prisma.product_variants.findMany({
-      where: { deleted_at: null },
+      where: {
+        deleted_at: null,
+        products: {
+          type_code: 'RETAIL' // CHỈ PHÂN TÍCH HÀNG BÁN LẺ
+        }
+      },
       include: {
         products: { select: { name: true, type_code: true } },
         product_preorder_configs: { select: { sold_slots: true, total_slots: true } },
@@ -78,29 +77,42 @@ export class InventoryAnalyticsService {
       },
     });
 
-    return inventory.map((v) => {
-      const salesLast30Days = v.order_items.reduce((sum, item) => sum + item.quantity, 0);
-      
-      // Retail Pricing Logic
-      const costPrice = Number(v.cost_price || 0);
-      const retailPrice = Number(v.price || 0);
-      const breakEvenPrice = costPrice * (1 + totalOpexPct);
-      const liquidatePrice = costPrice * (1 + (totalOpexPct * 0.2));
+    const mappedData = inventory.map((v) => {
+      const sales30d = v.order_items.reduce((sum, item) => sum + item.quantity, 0);
+      const cost = Number(v.cost_price || 0);
+      const retail = Number(v.price || 0);
+      const breakEven = cost * (1 + totalOpexPct);
+      const liquidate = cost * (1 + (totalOpexPct * 0.2));
 
       return {
-        variantId: v.variant_id,
+        id: v.variant_id,
         sku: v.sku,
-        productName: v.products?.name || 'Unknown',
-        productType: v.products?.type_code || 'RETAIL',
-        currentStock: v.stock_available,
-        retailPrice,
-        costPrice,
-        breakEvenPrice,
-        liquidatePrice,
-        salesLast30Days,
-        preorderCount: v.product_preorder_configs?.sold_slots || 0,
+        name: v.products?.name || 'Unknown',
+        type: v.products?.type_code || 'RETAIL',
+        stock: Number(v.stock_available || 0), // Đảm bảo là số
+        retail,
+        cost,
+        breakEven,
+        liquidate,
+        sales30d,
+        preCount: v.product_preorder_configs?.sold_slots || 0,
       };
     });
+
+    // --- LOGIC LỌC THÔNG MINH ---
+    // Chỉ gửi các sản phẩm THỰC SỰ có vấn đề (Có tương tác mua bán)
+    const filteredData = mappedData.filter(item => {
+      const isLowStock = item.stock < 10 && item.sales30d > 0; // Sắp hết và CÓ bán được
+      const isOverstock = item.stock >= 30 && item.sales30d > 0 && item.sales30d <= 5; // Tồn nhiều nhưng bán ế (Có giao dịch nhưng rất ít)
+      const isBestSeller = item.sales30d > 10; // Bán cực tốt
+      const isPreorderActive = item.preCount > 0;
+
+      return isLowStock || isOverstock || isBestSeller || isPreorderActive;
+    });
+
+    this.logger.log(`Filtered ${filteredData.length} items for AI analysis from ${mappedData.length} total retail items.`);
+
+    return filteredData.sort((a, b) => b.sales30d - a.sales30d || a.id - b.id);
   }
 
   /**
@@ -108,10 +120,10 @@ export class InventoryAnalyticsService {
    */
   async getExternalMarketTrends(keywords: string[]) {
     if (keywords.length === 0) return [];
-    
+
     try {
       const completion = await this.groq.chat.completions.create({
-        model: 'llama-3.3-70b-versatile',
+        model: this.configService.get<string>('GROQ_MODEL', 'llama3-8b-8192'),
         messages: [
           {
             role: 'system',
@@ -138,7 +150,8 @@ export class InventoryAnalyticsService {
           }
         ],
         response_format: { type: 'json_object' },
-        temperature: 0.7, // Cho phép một chút biến động để dữ liệu sinh động
+        temperature: 0.0, // Chỉnh về 0.0 để dữ liệu ổn định tuyệt đối
+        seed: 12345, // Thêm seed để đảm bảo kết quả không đổi nếu input không đổi
       });
 
       const responseText = completion.choices[0]?.message?.content;
@@ -164,7 +177,7 @@ export class InventoryAnalyticsService {
   async analyzeWithAI(contextData: any) {
     try {
       const completion = await this.groq.chat.completions.create({
-        model: 'llama-3.3-70b-versatile',
+        model: this.configService.get<string>('GROQ_MODEL', 'llama3-8b-8192'),
         messages: [
           {
             role: 'system',
@@ -173,18 +186,15 @@ export class InventoryAnalyticsService {
               Task: Based on internal inventory data and external market trends, provide recommendations for restocking and clearance.
               
               ANALYSIS RULES & FINANCIAL CONSTRAINTS:
-              1. Clearance: 
-                 - Conditions: High inventory (>50), low 30-day sales, and NEUTRAL/BEARISH market sentiment.
-                 - PRICING RULE: "suggestedDiscount" must be calculated so that the post-discount price is NOT lower than [breakEvenPrice].
-                 - EXCEPTION: Only when a product has been in stock for too long and the market is extremely bad can it be reduced to the [liquidatePrice] (stop-loss floor). NEVER go below [liquidatePrice].
+              1. Clearance (Giảm giá xả kho): 
+                 - Conditions: ONLY suggest if current stock > 20 AND sales velocity (sl) is greater than 0 but less than 5.
+                 - NEVER suggest clearance if sales velocity (sl) is 0 (it might be a newly added product).
+                 - PRICING RULE: "suggestedDiscount" must ensure post-discount price >= [breakEvenPrice].
               
-              2. Restock: 
-                 - Conditions: Low stock (<20) OR (high 30-day sales AND HOT/VIRAL market sentiment).
-                 - SMART RULES: 
-                    * If current stock > 50, NEVER use the phrase "Low stock".
-                    * If stock is already > 100 and the market is HOT, only suggest MEDIUM priority (not URGENT).
-                    * AI must compare 30-day sales with current stock to calculate "coverage" (e.g., stock of 100 with 50 sales/month is safe, no urgent restock needed).
-                 - Priority Level: Based on sales velocity and actual trends.
+              2. Restock (Nhập hàng): 
+                 - Conditions: Suggest if current stock < 10 AND sales velocity (sl) > 0.
+                 - NEVER suggest restock if sales velocity (sl) is 0 (no demand).
+                 - Priority Level: URGENT if stock is 0 and sales are active.
       
               RETURN FORMAT (JSON):
               {
@@ -199,23 +209,49 @@ export class InventoryAnalyticsService {
                 ],
                 "restockList": [
                   { "productId": number, "name": "string", "reason": "string", "priority": "LOW" | "MEDIUM" | "HIGH" | "URGENT" }
-                ]
+                ],
+                "summary": "Expert executive summary."
               }
             `
           },
           {
             role: 'user',
-            content: `INPUT DATA (JSON):\n${JSON.stringify(contextData)}`
+            content: `
+              INVENTORY DATA FORMAT LEGEND:
+              [ i=productId, n=name, s=stock, sl=sales30d, c=cost, b=breakEven, l=liquidatePrice ]
+              
+              INVENTORY DATA (Minified):
+              ${JSON.stringify(contextData.inventory)}
+              
+              MARKET TRENDS:
+              ${JSON.stringify(contextData.market)}
+              
+              OVERALL METRICS:
+              ${JSON.stringify(contextData.metrics)}
+              
+              Analysis Date: ${contextData.analysisDate}
+            `
           }
         ],
         response_format: { type: 'json_object' },
-        temperature: 0.1, // Tuyệt đối ổn định
+        temperature: 0.0, // Chỉnh về 0.0 để kết quả tuyệt đối ổn định
+        seed: 12345, // Thêm seed để đảm bảo cùng data sẽ ra cùng một kết quả
       });
 
       const responseText = completion.choices[0]?.message?.content;
       if (!responseText) throw new Error('Empty AI response');
 
-      return JSON.parse(responseText);
+      try {
+        const data = JSON.parse(responseText);
+        return {
+          clearanceList: data.clearanceList || [],
+          restockList: data.restockList || [],
+          summary: data.summary || 'No summary available'
+        };
+      } catch (parseError) {
+        this.logger.error('Failed to parse AI JSON response:', responseText);
+        return { clearanceList: [], restockList: [], summary: 'AI response was malformed.' };
+      }
     } catch (error) {
       this.logger.error('Groq AI Analysis Error:', error);
       throw error;
@@ -225,50 +261,74 @@ export class InventoryAnalyticsService {
   /**
    * Bước 6: Lấy danh sách đề xuất từ Database cho Frontend.
    */
-  async getRecommendations(query: { status?: any; type?: any }) {
-    const { status, type } = query;
+  async getRecommendations(query: { status?: any; type?: any; page?: string; limit?: string }) {
+    const status = query.status || 'PENDING';
+    const type = query.type;
+    const page = parseInt(query.page || '1');
+    const limit = parseInt(query.limit || '10');
+    const skip = (page - 1) * limit;
 
-    return await this.prisma.inventory_recommendations.findMany({
-      where: {
-        status: status || 'PENDING', // Mặc định chỉ lấy các đề xuất mới nhất chưa xử lý
-        ...(type && { type }),      // Lọc theo CLEARANCE hoặc RESTOCK nếu có
-      },
-      include: {
-        product_variants: {
-          select: {
-            sku: true,
-            stock_available: true,
-            price: true,
-            cost_price: true,
-            products: {
-              select: {
-                name: true,
-              },
-            },
-            order_items: {
-              where: {
-                orders: {
-                  created_at: { gte: new Date(new Date().setDate(new Date().getDate() - 30)) },
-                  status_code: { in: ['PROCESSING', 'COMPLETED', 'SHIPPING_TO_WAREHOUSE', 'INSPECTING', 'DEPOSITED'] },
+    const where = {
+      status,
+      ...(type && { type }),
+    };
+
+    const [total, data] = await Promise.all([
+      this.prisma.inventory_recommendations.count({ where }),
+      this.prisma.inventory_recommendations.findMany({
+        where,
+        include: {
+          product_variants: {
+            select: {
+              sku: true,
+              stock_available: true,
+              price: true,
+              cost_price: true,
+              products: {
+                select: {
+                  name: true,
                 },
               },
-              select: { quantity: true },
+              order_items: {
+                where: {
+                  orders: {
+                    created_at: { gte: new Date(new Date().setDate(new Date().getDate() - 30)) },
+                    status_code: { in: ['PROCESSING', 'COMPLETED', 'SHIPPING_TO_WAREHOUSE', 'INSPECTING', 'DEPOSITED'] },
+                  },
+                },
+                select: { quantity: true },
+              },
             },
           },
         },
-      },
-      orderBy: {
-        created_at: 'desc', // Phân tích mới nhất lên đầu
-      },
-    });
+        orderBy: {
+          created_at: 'desc',
+        },
+        skip,
+        take: limit,
+      })
+    ]);
+
+    return {
+      data,
+      meta: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit)
+      }
+    };
   }
 
   /**
    * Lấy toàn bộ danh sách tồn kho thực tế từ DB
    */
   async getGlobalInventory() {
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
     const inventory = await this.prisma.product_variants.findMany({
-      where: { 
+      where: {
         deleted_at: null,
         products: {
           type_code: 'RETAIL'
@@ -278,18 +338,32 @@ export class InventoryAnalyticsService {
         variant_id: true,
         sku: true,
         stock_available: true,
+        price: true,
+        cost_price: true,
         products: {
           select: { name: true }
-        }
+        },
+        order_items: {
+          where: {
+            orders: {
+              created_at: { gte: thirtyDaysAgo },
+              status_code: { in: ['PROCESSING', 'COMPLETED', 'SHIPPING_TO_WAREHOUSE', 'INSPECTING', 'DEPOSITED'] },
+            },
+          },
+          select: { quantity: true },
+        },
       },
-      orderBy: { stock_available: 'asc' } // Ưu tiên hiện hàng sắp hết lên trước
+      orderBy: { stock_available: 'asc' }
     });
 
     return inventory.map(v => ({
       id: v.variant_id,
       name: v.products?.name || 'Unknown',
       sku: v.sku,
-      stock: v.stock_available
+      stock: v.stock_available,
+      price: Number(v.price || 0),
+      cost_price: Number(v.cost_price || 0),
+      sales30d: v.order_items.reduce((sum, item) => sum + item.quantity, 0),
     }));
   }
 
@@ -308,14 +382,14 @@ export class InventoryAnalyticsService {
     if (recommendation.status !== 'PENDING') throw new Error('This recommendation has already been processed');
 
     const variantId = recommendation.variant_id;
-    const actionValue = recommendation.suggested_action_value || 'NORMAL'; 
+    const actionValue = recommendation.suggested_action_value || 'NORMAL';
 
     return await this.prisma.$transaction(async (tx) => {
       // 2. Xử lý theo loại đề xuất
       if (recommendation.type === 'RESTOCK') {
         // Tạo phiếu nhập kho Nháp (Draft Receipt)
         const qty = actionValue === 'URGENT' ? 100 : actionValue === 'HIGH' ? 50 : 20;
-        
+
         const receipt = await (tx as any).inventory_receipts.create({
           data: {
             note: `[AI Suggestion] Auto-generated restock for ${recommendation.product_variants.products.name}`,
@@ -337,18 +411,18 @@ export class InventoryAnalyticsService {
       } else if (recommendation.type === 'CLEARANCE') {
         // Tạo chương trình giảm giá (Product Promotion)
         const discountPercent = parseInt(actionValue.replace('%', '')) || 10;
-        
+
         // Bắt đầu Validation Break-even / Liquidation
         const variant = recommendation.product_variants;
         const costPrice = Number(variant.cost_price || 0);
         const originalPrice = Number(variant.price || 0);
-        
+
         // Tính định mức OPEX (có thể gọi trực tiếp getOpexConfig hoặc hardcode tương đối nếu k gọi được, 
         // nhưng ở đây có context service nên sẽ query lại system_settings thông qua opexConfig)
         const opex = await this.getOpexConfig();
         const totalOpexPct = Object.values(opex).reduce((a: any, b: any) => a + b, 0) as number / 100;
         const liquidatePrice = costPrice * (1 + (totalOpexPct * 0.2));
-        
+
         const expectedSalePrice = originalPrice * (1 - discountPercent / 100);
 
         if (expectedSalePrice < liquidatePrice) {
@@ -357,7 +431,7 @@ export class InventoryAnalyticsService {
 
         const now = new Date();
         const endDate = new Date();
-        endDate.setDate(now.getDate() + 7); 
+        endDate.setDate(now.getDate() + 7);
 
         const promotion = await (tx as any).product_promotions.create({
           data: {
@@ -381,15 +455,15 @@ export class InventoryAnalyticsService {
 
         await tx.product_variants.update({
           where: { variant_id: variantId },
-          data: { 
+          data: {
             previous_promotion_id: currentVariant?.product_promotion_id ?? null,
-            product_promotion_id: promotion.promotion_id 
+            product_promotion_id: promotion.promotion_id
           }
         });
 
         // Create promotion_items for storefront logic
         const salePrice = originalPrice * (1 - discountPercent / 100);
-        
+
         await (tx as any).promotion_items.create({
           data: {
             promotion_id: promotion.promotion_id,
@@ -407,7 +481,6 @@ export class InventoryAnalyticsService {
       });
 
       return {
-        success: true,
         message: `Recommendation ${recommendation.type} applied successfully`,
         data: updatedRecommendation
       };
@@ -419,7 +492,7 @@ export class InventoryAnalyticsService {
    * Xử lý ghi đè (SUPERSEDED) các đề xuất PENDING cũ của cùng một sản phẩm.
    */
   async saveRecommendations(aiResult: any) {
-    const { clearanceList, restockList } = aiResult;
+    const { clearanceList = [], restockList = [] } = aiResult || {};
 
     // Sử dụng transaction để đảm bảo tính toàn vẹn dữ liệu
     return await this.prisma.$transaction(async (tx) => {
@@ -427,18 +500,16 @@ export class InventoryAnalyticsService {
       const variantIds = [
         ...clearanceList.map((item: any) => item.productId),
         ...restockList.map((item: any) => item.productId),
-      ];
+      ].filter(id => id !== undefined);
 
-      // 2. Đánh dấu các đề xuất PENDING cũ là SUPERSEDED (đã bị thay thế)
-      if (variantIds.length > 0) {
-        await (tx as any).inventory_recommendations.updateMany({
-          where: {
-            variant_id: { in: variantIds },
-            status: 'PENDING',
-          },
-          data: { status: 'SUPERSEDED' },
-        });
-      }
+      // 2. Đánh dấu TẤT CẢ các đề xuất PENDING cũ là SUPERSEDED (đã bị thay thế)
+      // Vì đây là 1 đợt quét toàn diện mới, các đề xuất chưa duyệt từ lần quét trước không còn giá trị
+      await (tx as any).inventory_recommendations.updateMany({
+        where: {
+          status: 'PENDING',
+        },
+        data: { status: 'SUPERSEDED' },
+      });
 
       // 3. Chuẩn bị dữ liệu lưu mới cho Clearance
       const clearanceRecords = clearanceList.map((item: any) => ({
@@ -478,23 +549,71 @@ export class InventoryAnalyticsService {
     try {
       // 1. Thu thập dữ liệu thực tế
       const inventoryData = await this.getInternalInventoryData();
-      const topKeywords = inventoryData
-        .sort((a, b) => b.salesLast30Days - a.salesLast30Days)
-        .slice(0, 3)
-        .map(item => item.productName);
+
+      // --- TỔNG HỢP CHỈ SỐ VĨ MÔ (METRICS AGGREGATION) ---
+      const totalVariants = await this.prisma.product_variants.count({ where: { deleted_at: null } });
+      const lowStockCount = await this.prisma.product_variants.count({ where: { deleted_at: null, stock_available: { lt: 10 } } });
+      const totalInventoryValue = inventoryData.reduce((sum, item) => sum + (item.stock * item.cost), 0);
+
+      const metrics = {
+        totalVariantsInSystem: totalVariants,
+        currentAnalyzedItems: inventoryData.length,
+        lowStockItemsCount: lowStockCount,
+        estimatedAnalyzedValue: totalInventoryValue,
+      };
+
+      const topKeywords = [...inventoryData]
+        .sort((a, b) => b.sales30d - a.sales30d || a.id - b.id)
+        .slice(0, 5)
+        .map(item => item.name);
+
       const marketTrends = await this.getExternalMarketTrends(topKeywords);
 
       // 2. Chạy Phân tích AI
+      // Nén dữ liệu inventory trước khi gửi cho AI để tiết kiệm tokens
+      const minifiedInventory = inventoryData.map(item => ({
+        i: item.id,
+        n: item.name.length > 25 ? item.name.substring(0, 25) + '...' : item.name,
+        s: item.stock,
+        sl: item.sales30d,
+        c: item.cost,
+        b: item.breakEven,
+        l: item.liquidate
+      }));
+
       const aiAnalysis = await this.analyzeWithAI({
-        inventory: inventoryData,
+        inventory: minifiedInventory,
         market: marketTrends,
-        analysisDate: new Date().toISOString()
+        metrics: metrics,
+        analysisDate: new Date().toISOString().split('T')[0]
       });
 
-      // 3. LƯU VÀO DATABASE (Bước 5)
+      // 3. VALIDATE AI RESPONSE - Lọc bỏ các ID bịa đặt (hallucinated)
+      // AI có thể trả về productId không tồn tại trong DB -> gây lỗi FK constraint
+      const validVariantIds = new Set(inventoryData.map(item => item.id));
+
+      const originalClearance = aiAnalysis.clearanceList.length;
+      const originalRestock = aiAnalysis.restockList.length;
+
+      aiAnalysis.clearanceList = (aiAnalysis.clearanceList || []).filter((item: any) => {
+        const isValid = validVariantIds.has(item.productId);
+        if (!isValid) this.logger.warn(`[AI VALIDATION] Removed hallucinated Clearance ID: ${item.productId}`);
+        return isValid;
+      });
+
+      aiAnalysis.restockList = (aiAnalysis.restockList || []).filter((item: any) => {
+        const isValid = validVariantIds.has(item.productId);
+        if (!isValid) this.logger.warn(`[AI VALIDATION] Removed hallucinated Restock ID: ${item.productId}`);
+        return isValid;
+      });
+
+      this.logger.log(`[AI VALIDATION] Clearance: ${originalClearance} -> ${aiAnalysis.clearanceList.length} valid`);
+      this.logger.log(`[AI VALIDATION] Restock: ${originalRestock} -> ${aiAnalysis.restockList.length} valid`);
+
+      // 4. LƯU VÀO DATABASE (Bước 5)
       await this.saveRecommendations(aiAnalysis);
 
-      // 4. Log kết quả ra terminal
+      // 5. Log kết quả ra terminal
       console.log('--- [AI ANALYTICS] FINAL DECISION ---');
       console.log('CLEARANCE:', aiAnalysis.clearanceList.length, 'items');
       console.log('RESTOCK:', aiAnalysis.restockList.length, 'items');
@@ -502,7 +621,7 @@ export class InventoryAnalyticsService {
       return aiAnalysis;
     } catch (error) {
       this.logger.error('Error in Inventory Analytics:', error);
-      
+
       // Bắn HTTP Exception để React Query bắt lỗi chính xác
       throw new HttpException(
         'AI Analysis currently unavailable. Please check logs.',
@@ -525,7 +644,7 @@ export class InventoryAnalyticsService {
     // 2. Gọi AI để thực thi nghiệp vụ Định lượng tài chính (Actuary Analysis)
     try {
       const completion = await this.groq.chat.completions.create({
-        model: 'llama-3.3-70b-versatile',
+        model: this.configService.get<string>('GROQ_MODEL', 'llama3-8b-8192'),
         messages: [
           {
             role: 'system',

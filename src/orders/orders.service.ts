@@ -315,7 +315,7 @@ export class OrdersService {
       try {
         const retailItemsList = validatedItems.filter(item => {
             const tc = item.variant?.products?.type_code;
-            return tc !== 'BLINDBOX' && tc !== 'PREORDER' && !item.variant?.product_preorder_configs;
+            return tc !== 'PREORDER' && !item.variant?.product_preorder_configs;
         });
         
         let retailWeight = 0;
@@ -644,9 +644,7 @@ export class OrdersService {
             }
           }
 
-          // BUSINESS LOGIC: Calculate customer fee with 30,000đ floor and rounding up to nearest 1,000đ
-          const realFeeAtLeast30k = Math.max(30000, realGhnFee);
-          const roundedCustomerFee = Math.ceil(realFeeAtLeast30k / 1000) * 1000;
+          const roundedCustomerFee = Math.ceil(realGhnFee / 1000) * 1000;
           
           let customerShippingFee = roundedCustomerFee;
           if (isVoucherFreeShip) {
@@ -1472,8 +1470,8 @@ export class OrdersService {
     }
   }
 
-  async findAll(params?: { status?: string, startDate?: string, endDate?: string }) {
-    const { status, startDate, endDate } = params || {};
+  async findAll(params?: { status?: string, startDate?: string, endDate?: string, channel?: string }) {
+    const { status, startDate, endDate, channel } = params || {};
     
     let dateFilter: any = undefined;
     if (startDate || endDate) {
@@ -1494,6 +1492,14 @@ export class OrdersService {
     if (status && status !== 'PACKED') {
       where.status_code = status;
     }
+    
+    if (channel && channel !== 'all') {
+      if (channel === 'ONLINE') {
+        where.channel_code = { in: ['WEB', 'LIVESTREAM', 'AUCTION'] };
+      } else {
+        where.channel_code = channel;
+      }
+    }
 
     if (dateFilter) {
       // If filtering for PACKED history, find all orders that HAVE BEEN packed in that range
@@ -1508,8 +1514,13 @@ export class OrdersService {
 
     const orders = await this.prisma.orders.findMany({
       where,
-      orderBy: { created_at: 'asc' }, // FIFO: Oldest First
+      orderBy: { created_at: 'desc' }, // Latest First for Admin
       include: {
+        users: {
+          select: {
+            full_name: true
+          }
+        },
         order_items: {
           include: {
             product_variants: {
@@ -1588,7 +1599,8 @@ export class OrdersService {
           }
         },
         addresses: true, // To show address
-        shipments: true // To show tracking info
+        shipments: true, // To show tracking info
+        users: true, // NEW: Include customer info for administration
       }
     });
 
@@ -1611,7 +1623,8 @@ export class OrdersService {
       await this.logPiiAccess(requestingUserId, order.user_id, ['order_address'], user.ip);
     }
 
-    // Decrypt Address
+    // Decrypt User & Address
+    if (order.users) order.users = this.decryptUser(order.users);
     order.addresses = this.decryptAddress(order.addresses) as any;
 
     if (hasUnopened && order.status_code !== 'COMPLETED' && !isStaff) {
@@ -1730,9 +1743,7 @@ export class OrdersService {
       if (!config) throw new BadRequestException("Pre-order config missing for variant");
 
       const fullPrice = Number(config.full_price);
-      // Floor the shipping fee at 30,000đ and round up to nearest 1,000đ
-      const flooredFee = Math.max(30000, realGhnFee);
-      const roundedFee = Math.ceil(flooredFee / 1000) * 1000;
+      const roundedFee = Math.ceil(realGhnFee / 1000) * 1000;
       const totalAmount = (fullPrice * contract.quantity) + roundedFee;
 
       let newStatus = 'PROCESSING';
@@ -2114,7 +2125,8 @@ export class OrdersService {
       include: {
         order_items: {
           include: { product_variants: true }
-        }
+        },
+        shipping_promotions: true
       }
     });
 
@@ -2161,12 +2173,21 @@ export class OrdersService {
        }
     }
 
+    const roundedFee = Math.ceil(realGhnFee / 1000) * 1000;
+    let finalShippingFee = roundedFee;
+
+    if (order.shipping_promotions) {
+        const discountCap = Number(order.shipping_promotions.max_discount_amount) || 0;
+        const discount = discountCap > 0 ? Math.min(discountCap, roundedFee) : roundedFee;
+        finalShippingFee = roundedFee - discount;
+    }
+
     return this.prisma.orders.update({
       where: { order_id: id },
       data: {
         shipping_address_id: updateOrderDto.shipping_address_id,
         payment_method_code: updateOrderDto.payment_method_code,
-        shipping_fee: Math.ceil(Math.max(30000, realGhnFee) / 1000) * 1000, 
+        shipping_fee: finalShippingFee, 
         original_shipping_fee: realGhnFee
       }
     });
@@ -2444,7 +2465,7 @@ export class OrdersService {
 
       const [
         packedOrders, totalOrders, totalOnlineOrders, totalLivestreamOrders,
-        onlineOrders, livestreamOrders, preorderContracts, shipments, collectedShipping,
+        onlineOrders, livestreamOrders, preorderContracts, shipments, collectedShipping, rawPromoOrders
       ] = await Promise.all([
         this.prisma.orders.count({ where: { packed_at: dateFilter, deleted_at: null } }),
         this.prisma.orders.count({ where: { created_at: dateFilter, deleted_at: null } }),
@@ -2455,7 +2476,16 @@ export class OrdersService {
         this.prisma.preorder_contracts.aggregate({ _sum: { deposit_amount_paid: true }, _count: { contract_id: true }, where: { created_at: dateFilter } }),
         this.prisma.shipments.aggregate({ _sum: { shipping_fee: true }, where: { created_at: dateFilter } }),
         this.prisma.orders.aggregate({ _sum: { shipping_fee: true }, where: { created_at: dateFilter, deleted_at: null, shipments: { isNot: null } } }),
+        this.prisma.orders.findMany({ 
+          where: { created_at: dateFilter, deleted_at: null, shipping_promotion_id: { not: null }, shipments: { isNot: null } },
+          select: { shipping_fee: true, original_shipping_fee: true }
+        }),
       ]);
+
+      const shippingDiscount = rawPromoOrders.reduce((sum, order) => {
+          const discount = Number(order.original_shipping_fee || 0) - Number(order.shipping_fee || 0);
+          return sum + Math.max(0, discount);
+      }, 0);
 
       return {
         packedOrders, totalOrders, totalOnlineOrders, totalLivestreamOrders,
@@ -2465,6 +2495,8 @@ export class OrdersService {
         preorderRevenue: Number(preorderContracts._sum.deposit_amount_paid || 0),
         shippingCollected: Number(collectedShipping._sum.shipping_fee || 0),
         shippingPaid: Number(shipments._sum.shipping_fee || 0),
+        shippingDiscount,
+        freeshipOrders: rawPromoOrders.length,
       };
     };
 

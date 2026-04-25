@@ -5,11 +5,13 @@ import { AuctionsGateway } from './auctions.gateway';
 import { OrdersModule } from '../orders/orders.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { MailModule } from '../mail/mail.module';
+import { EncryptionService } from '../common/encryption.service';
+import { AddressModule } from '../address/address.module';
 
 @Module({
-  imports: [forwardRef(() => OrdersModule), NotificationsModule, MailModule],
+  imports: [forwardRef(() => OrdersModule), NotificationsModule, MailModule, AddressModule],
   controllers: [AuctionsController],
-  providers: [AuctionsService, AuctionsGateway],
+  providers: [AuctionsService, AuctionsGateway, EncryptionService],
   exports: [AuctionsService],
 })
 export class AuctionsModule { }

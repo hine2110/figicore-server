@@ -854,6 +854,7 @@ model work_schedules {
   user_id        Int
   date           DateTime     @db.Date
   shift_code     String       @db.VarChar(20)
+  status_code    String?      @default("PUBLISHED") @db.VarChar(50)
   expected_start DateTime?    @db.Timestamp(6)
   expected_end   DateTime?    @db.Timestamp(6)
   created_at     DateTime?    @default(now()) @db.Timestamp(6)
@@ -1083,6 +1084,23 @@ model system_settings_logs {
   new_value  Json?
   user_id    Int
   created_at DateTime @default(now()) @db.Timestamp(6)
+}
+
+model market_intel {
+  id           Int      @id @default(autoincrement())
+  brand        String   @db.VarChar(100)
+  product_name String   @db.VarChar(500)
+  description  String?  @db.Text
+  category     String?  @db.VarChar(100)
+  status       String   @db.VarChar(50)  // "UPCOMING", "RELEASED", "RUMORED"
+  release_date String?  @db.VarChar(100) // e.g. "Q3/2025" or "2025-09"
+  source_url   String   @db.Text
+  source_title String?  @db.VarChar(500)
+  confidence   String   @db.VarChar(20)  // "HIGH", "MEDIUM", "LOW"
+  scanned_at   DateTime @default(now()) @db.Timestamp(6)
+
+  @@index([brand], map: "idx_market_intel_brand")
+  @@index([scanned_at], map: "idx_market_intel_scanned_at")
 }
 
 enum VoucherStatus {

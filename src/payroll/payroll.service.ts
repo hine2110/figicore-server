@@ -21,14 +21,15 @@ export class PayrollService {
 
         // 2. LOGIC MỚI: Phân tách ngày có hiệu lực
         let effectiveDate: Date;
-        let isImmediate = false;
+        
 
         if (dto.reasonCode === 'NEW_HIRE') {
             effectiveDate = new Date(); // Áp dụng ngay bây giờ!
-            isImmediate = true;
+            
         } else {
             // Các trường hợp khác (Tăng lương, thăng chức...) áp dụng vào đầu tháng sau
-            effectiveDate = dayjs().add(1, 'month').startOf('month').toDate();
+            const nextMonthStr = dayjs().add(1, 'month').startOf('month').format('YYYY-MM-DD');
+            effectiveDate = new Date(nextMonthStr);
         }
 
         // 3. Open transaction
@@ -47,12 +48,12 @@ export class PayrollService {
             });
 
             // B. Nếu là nhân viên mới, cập nhật thẳng mức lương vào hồ sơ để UI hiển thị ngay lập tức
-            if (isImmediate) {
+            
                 await tx.employees.update({
                     where: { user_id: userId },
                     data: { base_salary: dto.newSalary }
                 });
-            }
+            
 
             return newHistory;
         });
@@ -123,6 +124,12 @@ export class PayrollService {
             if (!employee) throw new NotFoundException(`Employee with ID ${userId} not found.`);
             effectiveBaseSalaryNum = employee.base_salary.toNumber();
         }
+
+        const userRecord = await this.prisma.users.findUnique({ 
+            where: { user_id: userId }, 
+            select: { role_code: true } 
+        });
+        const roleCode = userRecord?.role_code;
 
         // 3. Calculate Actual Work Hours (Fix: Query by work_schedules date, not check_in_at)
         const schedules = await this.prisma.work_schedules.findMany({
@@ -261,29 +268,45 @@ export class PayrollService {
         }
 
         // 6. Calculate Final Salary & Prepare Payroll Items
-        const hourlyRate = effectiveBaseSalaryNum; // Đã sửa theo luật trả lương theo giờ của bạn
+        let workedSalary = 0;
+        let leaveSalary = 0;
+        const payrollItemsData: { title: string; amount: number; is_addition: boolean }[] = [];
 
-        const workedSalary = hourlyRate * actualWorkedHours;
-        const leaveSalary = hourlyRate * paidLeaveHours;
+        if (roleCode === 'MANAGER' || roleCode === 'SUPER_ADMIN') {
+            // LUỒNG 1: LƯƠNG CỐ ĐỊNH THEO THÁNG
+            workedSalary = effectiveBaseSalaryNum; // Nhận nguyên lương tháng
+            leaveSalary = 0; // Đã bao gồm trong lương tháng
+
+            payrollItemsData.push({
+                title: `Lương cơ bản (Tháng ${month}/${year})`,
+                amount: parseFloat(workedSalary.toFixed(2)),
+                is_addition: true,
+            });
+        } else {
+            // LUỒNG 2: LƯƠNG THEO GIỜ CHO STAFF
+            const hourlyRate = effectiveBaseSalaryNum;
+            workedSalary = hourlyRate * actualWorkedHours;
+            leaveSalary = hourlyRate * paidLeaveHours;
+
+            payrollItemsData.push({
+                title: `Lương cơ bản (Giờ làm thực tế: ${parseFloat(actualWorkedHours.toFixed(2))}h)`,
+                amount: parseFloat(workedSalary.toFixed(2)),
+                is_addition: true,
+            });
+
+            if (paidLeaveHours > 0) {
+                payrollItemsData.push({
+                    title: `Lương phép năm (${paidLeaveDaysInMonth} ngày = ${paidLeaveHours}h)`,
+                    amount: parseFloat(leaveSalary.toFixed(2)),
+                    is_addition: true,
+                });
+            }
+        }
+
         const proratedBase = workedSalary + leaveSalary;
 
         let sumAllowances = 0;
         let sumDeductions = 0;
-        const payrollItemsData: { title: string; amount: number; is_addition: boolean }[] = [];
-
-        payrollItemsData.push({
-            title: `Lương cơ bản (Giờ làm thực tế: ${parseFloat(actualWorkedHours.toFixed(2))}h)`,
-            amount: parseFloat(workedSalary.toFixed(2)),
-            is_addition: true,
-        });
-
-        if (paidLeaveHours > 0) {
-            payrollItemsData.push({
-                title: `Lương phép năm (${paidLeaveDaysInMonth} ngày = ${paidLeaveHours}h)`,
-                amount: parseFloat(leaveSalary.toFixed(2)),
-                is_addition: true,
-            });
-        }
 
         // Add allowances and deductions (Từ bảng cấu hình lương cố định)
         for (const config of configs) {
@@ -497,6 +520,31 @@ export class PayrollService {
             },
             orderBy: [{ year: 'desc' }, { month: 'desc' }]
         });
+    }
+
+    // ADMIN/MANAGER: Lấy thống kê tổng quỹ lương theo năm
+    async getPayrollStatistics(year: number) {
+        // Gom nhóm (groupBy) theo từng tháng và tính tổng lương
+        const stats = await this.prisma.payrolls.groupBy({
+            by: ['month'],
+            where: {
+                year: year,
+                // Chỉ thống kê những phiếu lương đã chốt/thanh toán để có con số chính xác nhất
+                status_code: { in: ['APPROVED', 'PAID'] } 
+            },
+            _sum: {
+                final_salary: true,
+                total_work_hours: true
+            },
+            orderBy: { month: 'asc' }
+        });
+
+        // Format lại dữ liệu cho Frontend dễ vẽ biểu đồ
+        return stats.map(stat => ({
+            month: stat.month,
+            total_salary: stat._sum.final_salary ? parseFloat(stat._sum.final_salary.toString()) : 0,
+            total_hours: stat._sum.total_work_hours || 0
+        }));
     }
 
     async getMySalaryHistory(userId: number) {

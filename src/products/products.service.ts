@@ -494,6 +494,7 @@ export class ProductsService {
         categories: true,
         series: true,
         product_variants: {
+          where: { deleted_at: null },
           include: {
             product_preorder_configs: true,
             product_promotions: {
@@ -1006,7 +1007,8 @@ export class ProductsService {
 
       const type = currentProduct.type_code;
 
-      if ((type === 'RETAIL' || type === 'AUCTION') && variants && variants.length > 0) {
+      if ((type === 'RETAIL' || type === 'AUCTION') && variants) {
+        const activeVariantIds: number[] = [];
         for (const v of variants) {
           if (v.cost_price !== undefined && v.cost_price >= v.price && v.price > 0) {
             throw new BadRequestException('Cost price must be less than retail price');
@@ -1022,7 +1024,7 @@ export class ProductsService {
           }
 
           if (existingVariant && (existingVariant.product_id === id)) {
-            await tx.product_variants.update({
+            const updated = await tx.product_variants.update({
               where: { variant_id: existingVariant.variant_id },
               data: {
                 option_name: v.option_name,
@@ -1040,11 +1042,13 @@ export class ProductsService {
                 material: v.material,
                 included_items: v.included_items ? (v.included_items as any) : undefined,
                 stock_available: v.stock_available !== undefined ? v.stock_available : existingVariant.stock_available,
-                stock_defect: v.stock_defect !== undefined ? v.stock_defect : existingVariant.stock_defect
+                stock_defect: v.stock_defect !== undefined ? v.stock_defect : existingVariant.stock_defect,
+                deleted_at: null // Restore if it was deleted
               },
             });
+            activeVariantIds.push(updated.variant_id);
           } else {
-            await tx.product_variants.create({
+            const created = await tx.product_variants.create({
               data: {
                 product_id: id,
                 sku: v.sku,
@@ -1065,8 +1069,19 @@ export class ProductsService {
                 included_items: v.included_items ? (v.included_items as any) : undefined,
               },
             });
+            activeVariantIds.push(created.variant_id);
           }
         }
+
+        // Sync variants: Soft delete those not in the request
+        await tx.product_variants.updateMany({
+          where: {
+            product_id: id,
+            variant_id: { notIn: activeVariantIds },
+            deleted_at: null
+          },
+          data: { deleted_at: new Date() }
+        });
       }
 
       else if (type === 'BLINDBOX' && blindbox) {
@@ -1107,7 +1122,8 @@ export class ProductsService {
 
       else if (type === 'PREORDER' && preorder) {
 
-        if (variants && variants.length > 0) {
+        if (variants) {
+          const activeVariantIds: number[] = [];
           for (const v of variants) {
             const existingVariant = await tx.product_variants.findUnique({
               where: { sku: v.sku },
@@ -1120,7 +1136,7 @@ export class ProductsService {
             let variantId = existingVariant?.variant_id;
 
             if (existingVariant) {
-              await tx.product_variants.update({
+              const updated = await tx.product_variants.update({
                 where: { variant_id: existingVariant.variant_id },
                 data: {
                   option_name: v.option_name,
@@ -1135,8 +1151,10 @@ export class ProductsService {
                   scale: v.scale,
                   material: v.material,
                   included_items: v.included_items ? (v.included_items as any) : undefined,
+                  deleted_at: null // Restore if it was deleted
                 },
               });
+              variantId = updated.variant_id;
             } else {
               // CREATE NEW VARIANT
               const newVariant = await tx.product_variants.create({
@@ -1160,6 +1178,7 @@ export class ProductsService {
               });
               variantId = newVariant.variant_id;
             }
+            activeVariantIds.push(variantId);
 
             // UPSERT Preorder Config (Decoupled)
             if (variantId && v.preorder_config) {
@@ -1184,6 +1203,16 @@ export class ProductsService {
               });
             }
           }
+
+          // Sync variants: Soft delete those not in the request
+          await tx.product_variants.updateMany({
+            where: {
+              product_id: id,
+              variant_id: { notIn: activeVariantIds },
+              deleted_at: null
+            },
+            data: { deleted_at: new Date() }
+          });
         }
       }
 
