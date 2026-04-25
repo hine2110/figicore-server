@@ -124,11 +124,11 @@ export class DashboardService {
       const [onlineRev, offlineRev] = await Promise.all([
           this.prisma.orders.aggregate({
               _sum: { total_amount: true },
-              where: { created_at: { gte: date, lt: nextDate }, channel_code: { not: 'POS' }, status_code: 'DELIVERED' }
+              where: { created_at: { gte: date, lt: nextDate }, channel_code: { not: 'POS' }, status_code: { in: ['PROCESSING', 'PACKED', 'SHIPPING', 'COMPLETED'] } }
           }),
           this.prisma.orders.aggregate({
               _sum: { total_amount: true },
-              where: { created_at: { gte: date, lt: nextDate }, channel_code: 'POS', status_code: 'DELIVERED' }
+              where: { created_at: { gte: date, lt: nextDate }, channel_code: 'POS', status_code: { in: ['PROCESSING', 'PACKED', 'SHIPPING', 'COMPLETED'] } }
           })
       ]);
 
@@ -172,6 +172,7 @@ export class DashboardService {
       const [
         readyToPack,
         packedCount,
+        shippingCount,
         deliveredCount,
         inventoryTrend,
         currentAnalytics,
@@ -180,8 +181,9 @@ export class DashboardService {
         lowStockCount
       ] = await Promise.all([
         this.prisma.orders.count({ where: { status_code: 'PROCESSING', channel_code: { not: 'POS' } } }),
+        this.prisma.orders.count({ where: { status_code: 'PACKED', channel_code: { not: 'POS' } } }),
         this.prisma.orders.count({ where: { status_code: 'SHIPPING', channel_code: { not: 'POS' } } }),
-        this.prisma.orders.count({ where: { status_code: 'DELIVERED', created_at: { gte: startDate, lte: endDate }, channel_code: { not: 'POS' } } }),
+        this.prisma.orders.count({ where: { status_code: 'COMPLETED', updated_at: { gte: startDate, lte: endDate }, channel_code: { not: 'POS' } } }),
         this.getWarehouseChart(startDate, endDate),
         this.calculateAnalytics(startDate, endDate, false),
         this.calculateAnalytics(prevStartDate, prevEndDate, false),
@@ -194,6 +196,7 @@ export class DashboardService {
       return {
         readyToPack,
         packedCount,
+        shippingCount,
         deliveredCount,
         lowStockAlerts: lowStockCount,
         inventoryTrend,
@@ -214,7 +217,7 @@ export class DashboardService {
     const channelFilter = isPos ? 'POS' : { not: 'POS' };
     const whereClause: any = {
         created_at: { gte: start, lte: end },
-        status_code: 'DELIVERED',
+        status_code: { in: ['PROCESSING', 'PACKED', 'SHIPPING', 'COMPLETED'] },
         channel_code: channelFilter
     };
 
@@ -231,10 +234,24 @@ export class DashboardService {
 
     const revenueMap = { RETAIL: 0, LIVESTREAM: 0, PRE_ORDER: 0, BLINDBOX: 0, AUCTION: 0, GIVEAWAY: 0 };
     let totalRevenue = 0;
+    let shippingCollected = 0;
+    let shippingDiscount = 0;
+    let freeshipOrders = 0;
 
     orders.forEach(order => {
         const amount = Number(order.total_amount);
         totalRevenue += amount;
+
+        // Shipping stats
+        const sFee = Number(order.shipping_fee || 0);
+        const originalFee = Number(order.original_shipping_fee || 0);
+        
+        shippingCollected += sFee;
+        
+        if (order.shipping_promotion_id) {
+            freeshipOrders++;
+            shippingDiscount += Math.max(0, originalFee - sFee);
+        }
         
         // POS only sells RETAIL
         if (isPos) {
@@ -256,19 +273,27 @@ export class DashboardService {
         preStats,
         blindboxStats,
         auctionStats,
-        giveawayStats
+        giveawayStats,
+        shipments
     ] = await Promise.all([
         this.countOrderByType(start, end, 'RETAIL', isPos),
         isPos ? Promise.resolve({ count: 0 }) : this.countOrderByType(start, end, 'LIVESTREAM', isPos),
         isPos ? Promise.resolve({ count: 0 }) : this.countOrderByType(start, end, 'PRE_ORDER', isPos),
         isPos ? Promise.resolve({ count: 0 }) : this.countOrderByType(start, end, 'BLINDBOX', isPos),
         isPos ? Promise.resolve({ count: 0 }) : this.countOrderByType(start, end, 'AUCTION', isPos),
-        isPos ? Promise.resolve({ count: 0 }) : this.countOrderByType(start, end, 'GIVEAWAY', isPos)
+        isPos ? Promise.resolve({ count: 0 }) : this.countOrderByType(start, end, 'GIVEAWAY', isPos),
+        isPos ? Promise.resolve({ _sum: { shipping_fee: 0 } }) : this.prisma.shipments.aggregate({ _sum: { shipping_fee: true }, where: { created_at: { gte: start, lte: end } } })
     ]);
+
+    const shippingPaid = Number(shipments._sum.shipping_fee || 0);
 
     return {
         totalOrders: orders.length,
         totalRevenue,
+        shippingCollected,
+        shippingPaid,
+        shippingDiscount,
+        freeshipOrders,
         counts: {
             retail: retailStats.count,
             livestream: liveStats.count,
@@ -292,7 +317,7 @@ export class DashboardService {
     const channelFilter = isPos ? 'POS' : { not: 'POS' };
     const where: any = {
         created_at: { gte: start, lte: end },
-        status_code: 'DELIVERED',
+        status_code: { in: ['PROCESSING', 'PACKED', 'SHIPPING', 'COMPLETED'] },
         channel_code: channelFilter,
         order_items: {
             some: type === 'GIVEAWAY' ? { giveaway_claim_id: { not: null } } : 
@@ -339,7 +364,7 @@ export class DashboardService {
       nextD.setDate(d.getDate() + step);
 
       const [packed, inbound] = await Promise.all([
-        this.prisma.orders.count({ where: { status_code: 'DELIVERED', created_at: { gte: d, lt: nextD } } }),
+        this.prisma.orders.count({ where: { status_code: 'COMPLETED', updated_at: { gte: d, lt: nextD } } }),
         this.prisma.inventory_logs.count({ where: { change_type_code: 'INBOUND', created_at: { gte: d, lt: nextD } } })
       ]);
 

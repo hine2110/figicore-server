@@ -177,6 +177,13 @@ export class EmployeesService {
         ...where.users,
         role_code: role,
       };
+    } else {
+      where.users = {
+        ...where.users,
+        role_code: {
+          notIn: ['ADMIN', 'SUPER_ADMIN']
+        }
+      };
     }
 
     const [data, total] = await Promise.all([
