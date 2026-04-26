@@ -1050,6 +1050,23 @@ CREATE TABLE "system_settings_logs" (
     CONSTRAINT "system_settings_logs_pkey" PRIMARY KEY ("id")
 );
 
+-- CreateTable
+CREATE TABLE "market_intel" (
+    "id" SERIAL NOT NULL,
+    "brand" VARCHAR(100) NOT NULL,
+    "product_name" VARCHAR(500) NOT NULL,
+    "description" TEXT,
+    "category" VARCHAR(100),
+    "status" VARCHAR(50) NOT NULL,
+    "release_date" VARCHAR(100),
+    "source_url" TEXT NOT NULL,
+    "source_title" VARCHAR(500),
+    "confidence" VARCHAR(20) NOT NULL,
+    "scanned_at" TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "market_intel_pkey" PRIMARY KEY ("id")
+);
+
 -- CreateIndex
 CREATE INDEX "idx_access_control_lookup" ON "access_controls"("role_code", "ip_address", "is_active");
 
@@ -1160,6 +1177,12 @@ CREATE INDEX "idx_recommendations_lookup" ON "inventory_recommendations"("varian
 
 -- CreateIndex
 CREATE UNIQUE INDEX "system_settings_key_key" ON "system_settings"("key");
+
+-- CreateIndex
+CREATE INDEX "idx_market_intel_brand" ON "market_intel"("brand");
+
+-- CreateIndex
+CREATE INDEX "idx_market_intel_scanned_at" ON "market_intel"("scanned_at");
 
 -- AddForeignKey
 ALTER TABLE "addresses" ADD CONSTRAINT "addresses_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("user_id") ON DELETE NO ACTION ON UPDATE NO ACTION;
@@ -1448,3 +1471,4 @@ ALTER TABLE "pii_access_logs" ADD CONSTRAINT "pii_access_logs_target_user_id_fke
 
 -- AddForeignKey
 ALTER TABLE "inventory_recommendations" ADD CONSTRAINT "inventory_recommendations_variant_id_fkey" FOREIGN KEY ("variant_id") REFERENCES "product_variants"("variant_id") ON DELETE CASCADE ON UPDATE CASCADE;
+
