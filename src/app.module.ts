@@ -53,6 +53,7 @@ import { BirthdayCronModule } from './cron/birthday-cron.module';
 import { ShiftCronModule } from './cron/shift-cron.module';
 import { WeeklyVoucherCronModule } from './cron/weekly-voucher-cron.module';
 import { DashboardModule } from './dashboard/dashboard.module';
+import { ScannerModule } from './scanner/scanner.module';
 
 
 @Module({
@@ -111,6 +112,7 @@ import { DashboardModule } from './dashboard/dashboard.module';
     ShiftCronModule,
     WeeklyVoucherCronModule,
     DashboardModule,
+    ScannerModule,
   ],
 
   controllers: [AppController],
