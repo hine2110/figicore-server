@@ -33,18 +33,29 @@ export class ChatService {
     try {
       const systemPrompt = `
         <CONTEXT>
-        Bạn là "FigiCore Specialist" - Chuyên gia tư vấn của FigiCore.
-        FigiCore chuyên: Figures, Art toys, Blindbox, Gundam/Gunpla.
+        Bạn là "FigiCore Specialist" - Một chuyên gia tư vấn cực kỳ am hiểu và ĐAM MÊ về mô hình (Figures), Art toys, Blindbox, và Gundam/Gunpla.
+        Phong cách giao tiếp của bạn: Tự nhiên, nhiệt tình, có cảm xúc như một người thật (giống ChatGPT/Gemini nhưng chuyên biệt về mô hình). Xưng hô "mình" và "bạn". KHÔNG BAO GIỜ nói mình là AI hay bot máy móc, hãy cư xử như một người chơi hệ mô hình và là nhân viên tư vấn tận tâm của FigiCore.
         </CONTEXT>
 
+        <KNOWLEDGE_BASE>
+        KIẾN THỨC HỆ THỐNG FIGICORE:
+        1. BLINDBOX (Hộp mù): Hộp chứa mô hình ngẫu nhiên. Người mua KHÔNG THỂ BIẾT trước nhân vật bên trong. Đây là trò chơi nhân phẩm cực cuốn.
+        2. PREORDER (Đặt trước): Sản phẩm chưa phát hành hoặc đang sản xuất. Khách cần đặt cọc (Deposit) giữ chỗ. Giá 0đ hiển thị là chưa có giá chính thức hoặc chỉ là giá cọc.
+        3. AUCTION (Đấu giá): Sản phẩm đấu giá trực tiếp trên Livestream. Giá 0đ là giá khởi điểm.
+        
+        KIẾN THỨC CHUNG VỀ MÔ HÌNH (Ghi nhớ để chém gió với khách):
+        - Gundam/Gunpla: Có các cấp độ (Grades) như SD (nhỏ, dễ thương), HG (1/144, cơ bản), RG (1/144, chi tiết cao, có khung xương), MG (1/100, xịn sò, cơ bắp), PG (1/60, to và cực kỳ hoành tráng).
+        - Figure: Gồm Scale Figure (mô hình tĩnh tỷ lệ chuẩn, siêu đẹp, đắt tiền), Nendoroid (nhỏ, dễ thương, đổi được biểu cảm), Action Figure như SHF/Figma (có khớp, tạo dáng được tự do).
+        </KNOWLEDGE_BASE>
+
         <STRICT_RULES>
-        1. LẮNG NGHE & TƯƠNG TÁC: Nếu khách hàng hỏi chung chung (ví dụ "Tôi muốn tư vấn", "Chào bạn"), KHÔNG ĐƯỢC list một loạt sản phẩm. Hãy chào hỏi và đặt câu hỏi mở để tìm hiểu nhu cầu (dòng sản phẩm, kích thước, mức giá mong muốn).
-        2. CHỈ GỢI Ý SẢN PHẨM KHI CẦN THIẾT: Chỉ hiển thị sản phẩm từ thẻ <DATA> khi khách có yêu cầu cụ thể (màu sắc, giá, từ khóa) hoặc khi bạn thực sự muốn nhá hàng 1-2 mẫu tiêu biểu. KHÔNG BAO GIỜ hiển thị toàn bộ danh sách 10 sản phẩm cùng lúc gây rối mắt.
-        3. LINK DANH MỤC QUAN TRỌNG:
-           - Trang Blindbox: [Khám phá toàn bộ Blindbox](/customer/blindbox)
-           - Trang Pre-order: [Xem hàng Pre-order](/customer/preorder)
-           - Nếu khách hỏi "Blindbox là gì?", hãy giải thích ngắn gọn, sinh động và đính kèm link Trang Blindbox ở trên thay vì dẫn trực tiếp vào một sản phẩm cụ thể.
-        4. TUYỆT ĐỐI KHÔNG tự bịa ra sản phẩm, giá cả, ảnh hoặc URL.
+        1. VAI TRÒ TƯ VẤN: Trò chuyện tự nhiên, duyên dáng. Hãy đặt các câu hỏi mở để gợi mở nhu cầu của khách (VD: "Bạn thích ráp Gundam hay sưu tầm Figure tĩnh hơn?"). TUYỆT ĐỐI KHÔNG xả một đống sản phẩm ra như cỗ máy.
+        2. KHI KHÁCH HỎI GIÁ RẺ: TUYỆT ĐỐI KHÔNG giới thiệu AUCTION hoặc PREORDER. Chỉ giới thiệu RETAIL hoặc BLINDBOX.
+        3. ĐIỀU HƯỚNG BẰNG KIẾN THỨC: Nếu khách hỏi "Blindbox là gì?", "Gundam MG là gì?", hãy dùng <KNOWLEDGE_BASE> để giải thích như một chuyên gia thực thụ. Kèm theo link [Khám phá Blindbox](/customer/blindbox) hoặc [Hàng Pre-order](/customer/preorder).
+        4. PHÂN BIỆT RÕ 2 CHẾ ĐỘ TƯ VẤN:
+           - KHI KHÁCH MUA HÀNG (Hỏi giá, tìm hàng, tư vấn mua): BẠN BỊ CẤM kể tên hoặc giới thiệu các mẫu không có trong <DATA>. Chỉ được dùng <DATA> và chèn link [Xem chi tiết](/customer/product/ID). Nếu <DATA> trống, phải báo tạm hết hàng.
+           - KHI GIAO LƯU CHUYÊN MÔN (Hỏi cách sơn, custom, xin ảnh tham khảo, cốt truyện): BẠN ĐƯỢC MỞ KHÓA TOÀN BỘ KIẾN THỨC, được phép kể tên bất kỳ mẫu nào (Barbatos, Exia...) và nhiệt tình hướng dẫn kỹ thuật như một dân chơi chuyên nghiệp.
+        5. BẢO MẬT NGUỒN DỮ LIỆU (YÊU CẦU CỦA MENTOR): TUYỆT ĐỐI KHÔNG sử dụng hoặc dẫn link đến các nền tảng bên thứ 3 (như Google, Pinterest, Facebook...). Nếu khách xin ảnh tham khảo (VD: ảnh custom) mà hệ thống (<DATA>) không có, hãy lịch sự từ chối và báo rằng hệ thống nội bộ hiện chưa cập nhật hình ảnh này. Chỉ cung cấp thông tin và ảnh từ <DATA>.
         </STRICT_RULES>
 
         <DATA>
@@ -57,8 +68,7 @@ export class ChatService {
 
         <GUIDELINES>
         - Thân thiện, am hiểu mô hình.
-        - Định dạng hiển thị 1 SP cụ thể (nếu có): "- ![tên ảnh](url) **Tên sản phẩm** (Loại): Giá - [Xem chi tiết](/customer/product/ID)"
-        - Giữ nguyên link [Xem chi tiết](/...) và ID.
+        - Định dạng 1 SP cụ thể (nếu có): "- ![tên ảnh](url) **Tên sản phẩm** (Loại): Giá - [Xem chi tiết](/customer/product/ID)"
         </GUIDELINES>
       `;
 
@@ -92,11 +102,26 @@ export class ChatService {
       // Intent Mapping
       const isNew = msgLower.includes('mới');
       const isCheap = msgLower.includes('rẻ');
+      const isList = msgLower.includes('liệt kê') || msgLower.includes('danh sách') || msgLower.includes('tất cả');
 
-      // Keyword search (only product types/names, NOT intent words)
-      const keywords = ['gundam', 'figure', 'blindbox', 'mô hình', 'hot toys', 'nendoroid'];
-      const keywordFound = keywords.find(k => msgLower.includes(k));
-      if (keywordFound) searchParams.search = keywordFound;
+      // Type Mapping (Rất quan trọng để tránh AI lấy nhầm hàng Retail rồi nói dối là Preorder)
+      if (msgLower.includes('preorder') || msgLower.includes('đặt trước') || msgLower.includes('pre-order')) {
+        searchParams.type_code = 'PREORDER';
+      } else if (msgLower.includes('đấu giá') || msgLower.includes('auction')) {
+        searchParams.type_code = 'AUCTION';
+      } else if (msgLower.includes('blindbox') || msgLower.includes('hộp mù')) {
+        searchParams.type_code = 'BLINDBOX';
+      }
+
+      // Keyword search (Bắt chính xác các dòng bằng Regex ranh giới từ để tránh nhiễu)
+      const specificMatch = msgLower.match(/\b(hg|mg|rg|pg|sd|shf|figma|nendoroid)\b/);
+      if (specificMatch) {
+        searchParams.search = specificMatch[1];
+      } else {
+        const genericKeywords = ['gundam', 'gunpla', 'figure', 'mô hình', 'hot toys'];
+        const keywordFound = genericKeywords.find(k => msgLower.includes(k));
+        if (keywordFound) searchParams.search = keywordFound;
+      }
 
       if (isNew) {
         searchParams.sort = 'newest';
@@ -109,6 +134,12 @@ export class ChatService {
       let matchedProducts = matchedProductsResult?.data || matchedProductsResult || [];
 
       if (isCheap && Array.isArray(matchedProducts)) {
+        // Lọc bỏ hàng giá <= 0 và hàng Đấu giá/Đặt trước khi hỏi giá rẻ
+        matchedProducts = matchedProducts.filter((p: any) => {
+            const price = p.product_variants?.[0]?.price || p.variants?.[0]?.price || 0;
+            return price > 0 && p.type_code !== 'AUCTION' && p.type_code !== 'PREORDER';
+        });
+
         // Sort in memory for cheapest as Prisma `findAll` doesn't support complex variant price sort directly
         matchedProducts.sort((a: any, b: any) => {
           const priceA = a.product_variants?.[0]?.price || a.variants?.[0]?.price || 99999999;
@@ -117,13 +148,33 @@ export class ChatService {
         });
       }
 
-      // If no filtered results, fall back to newest recommendations
+      // 3. Smart Context Reduction (Prevent LLM Spamming)
+      const conversationalWords = ['tư vấn', 'chào', 'hello', 'hi', 'là gì', 'shop', 'hướng dẫn', 'thế nào'];
+      const hasConversationalIntent = conversationalWords.some(w => msgLower.includes(w));
+      const hasSpecificParams = colorMatch || priceKMatch || priceTrMatch || isNew || isCheap || (msgLower.includes('tìm') && msgLower.length > 15) || !!specificMatch;
+      
+      let maxProducts = isList ? 10 : 4; // Nếu khách đòi "liệt kê", mở rộng họng tìm kiếm lên 10
+      let isBroadQuery = false;
+
+      // Force conversation if they just say "tư vấn mua mô hình" without specific details
+      if (hasConversationalIntent && !hasSpecificParams) {
+        isBroadQuery = true;
+        maxProducts = 0;
+      } else if (msgLower.length < 15 && !hasSpecificParams) {
+        isBroadQuery = true;
+        maxProducts = 0;
+      }
+
       let isFallback = false;
-      let displayProducts = Array.isArray(matchedProducts) && matchedProducts.length > 0 ? matchedProducts.slice(0, 10) : [];
-      if (displayProducts.length === 0) {
+      let displayProducts = Array.isArray(matchedProducts) && matchedProducts.length > 0 ? matchedProducts.slice(0, maxProducts) : [];
+      
+      if (maxProducts > 0 && displayProducts.length === 0) {
         const fallbackResult = await this.productsService.findAll({ sort: 'newest' } as any) as any;
-        const fallback = fallbackResult?.data || fallbackResult || [];
-        displayProducts = Array.isArray(fallback) ? fallback.slice(0, 10) : [];
+        let fallback = fallbackResult?.data || fallbackResult || [];
+        if (isCheap) {
+            fallback = fallback.filter((p: any) => p.type_code !== 'AUCTION' && p.type_code !== 'PREORDER');
+        }
+        displayProducts = Array.isArray(fallback) ? fallback.slice(0, 2) : [];
         isFallback = true;
       }
 
@@ -132,15 +183,13 @@ export class ChatService {
         return new Intl.NumberFormat('vi-VN').format(Number(price)) + 'đ';
       };
 
-      const isGeneralGreeting = !keywordFound && !colorMatch && !priceKMatch && !priceTrMatch;
-
       let productContextPrefix = "";
-      if (isFallback) {
-        productContextPrefix = "--- [LƯU Ý] KHÔNG TÌM THẤY SP HOẶC KHÁCH CHỈ CHÀO HỎI. Đây là danh sách dự phòng. HÃY TƯƠNG TÁC VÀ HỎI NHU CẦU KHÁCH TRƯỚC, CHỈ GỢI Ý TỐI ĐA 1-2 MẪU NẾU CẦN: ---\n";
-      } else if (isGeneralGreeting) {
-        productContextPrefix = "--- [LƯU Ý] KHÁCH ĐANG HỎI CHUNG CHUNG. HÃY TƯƠNG TÁC VÀ HỎI RÕ NHU CẦU, CHỈ GỢI Ý TỐI ĐA 1-2 MẪU TRONG DANH SÁCH DƯỚI ĐÂY NẾU CẦN: ---\n";
+      if (isBroadQuery) {
+        productContextPrefix = "--- [HỆ THỐNG] KHÁCH ĐANG HỎI CHUNG CHUNG HOẶC CẦN TƯ VẤN. KHÔNG CÓ SẢN PHẨM NÀO ĐƯỢC CUNG CẤP. HÃY ĐẶT CÂU HỎI MỞ (Ví dụ: Bạn muốn tìm dòng nào? Tầm giá bao nhiêu?) ĐỂ TÌM HIỂU NHU CẦU. ---\n";
+      } else if (isFallback) {
+        productContextPrefix = "--- [LƯU Ý] KHÔNG TÌM THẤY SP YÊU CẦU. ĐÂY LÀ 2 MẪU DỰ PHÒNG. HÃY BÁO HẾT HÀNG MẪU KHÁCH TÌM VÀ GỢI Ý MẪU NÀY NẾU CẦN: ---\n";
       } else {
-        productContextPrefix = "--- ĐÂY LÀ CÁC SẢN PHẨM TÌM THẤY CHÍNH XÁC THEO YÊU CẦU (Bạn có thể giới thiệu vài mẫu phù hợp nhất): ---\n";
+        productContextPrefix = "--- ĐÂY LÀ CÁC SẢN PHẨM TÌM THẤY THEO YÊU CẦU (Chỉ chọn 1-2 mẫu nổi bật nhất để tư vấn, không copy paste toàn bộ): ---\n";
       }
 
       const productContext = displayProducts.length > 0
@@ -193,7 +242,7 @@ export class ChatService {
           // Format each product as a clean markdown item for the AI to replicate
           return `- ${imageMarkdown} **${p.name || p.product_name}** (${p.type_code || p.product_type}): ${formatPrice(price)} - [Xem chi tiết](/customer/product/${p.product_id})`;
         }).join('\n\n')
-        : '--- Danh sách đang được làm mới. Hãy giới thiệu FigiCore như cửa hàng chuyên mô hình sưu tầm cao cấp và mời khách ghé trang chủ để xem bộ sưu tập mới nhất. ---';
+        : '--- HIỆN TẠI KHÔNG CÓ SẢN PHẨM NÀO TRONG HỆ THỐNG. LƯU Ý TỐI QUAN TRỌNG: BẠN BỊ CẤM KỂ TÊN HAY GỢI Ý BẤT KỲ MẪU MÔ HÌNH CỤ THỂ NÀO. CHỈ ĐƯỢC TƯ VẤN KIẾN THỨC CHUNG VÀ BÁO KHÁCH LÀ HIỆN TẠI CHƯA CÓ HÀNG. ---';
 
       // 2. Fetch Order if mentioned (Basic Regex find)
       let orderContext = 'Không có thông tin đơn hàng nào được nhắc tới.';
@@ -235,32 +284,32 @@ export class ChatService {
 
       this.logger.debug(`Sending chat to Groq with ${messages.length} messages and ${displayProducts.length} local products.`);
 
-      // Use Primary Model (8B) first
+      // Use Primary Model (70B) first - Model lớn hơn thông minh hơn
       try {
         const response = await this.openai.chat.completions.create({
-          model: 'llama-3.1-8b-instant',
+          model: 'llama-3.3-70b-versatile',
           messages: messages as any,
-          temperature: 0.0,
+          temperature: 0.4,
         });
 
         const aiMessage = response.choices[0].message.content;
-        this.logger.log(`Groq logic completed successfully (8B).`);
+        this.logger.log(`Groq logic completed successfully (70B).`);
         return aiMessage;
       } catch (error) {
-        this.logger.warn(`Primary Groq (8B) failed: ${error.message}. Attempting fallback to 70B...`);
+        this.logger.warn(`Primary Groq (70B) failed: ${error.message}. Attempting fallback to 8B...`);
 
         try {
           const response = await this.openai.chat.completions.create({
-            model: 'llama-3.3-70b-versatile',
+            model: 'llama-3.1-8b-instant',
             messages: messages as any,
-            temperature: 0.0,
+            temperature: 0.4,
           });
 
           const aiMessage = response.choices[0].message.content;
-          this.logger.log(`Groq logic completed successfully (70B Fallback).`);
+          this.logger.log(`Groq logic completed successfully (8B Fallback).`);
           return aiMessage;
         } catch (fallbackError) {
-          this.logger.error(`Secondary Groq (70B) also failed: ${fallbackError.message}. Using Mock response.`);
+          this.logger.error(`Secondary Groq (8B) also failed: ${fallbackError.message}. Using Mock response.`);
           return this.getMockResponse(message);
         }
       }
@@ -275,6 +324,45 @@ export class ChatService {
 
       console.error('FULL Groq Error:', error);
       return 'Rất tiếc, đã có lỗi xảy ra khi kết nối máy chủ AI. Bạn có thể thử lại lúc khác không?';
+    }
+  }
+
+  async moderateMessage(message: string): Promise<boolean> {
+    if (!this.openai) {
+      return false; // Fallback to safe if AI is down
+    }
+
+    try {
+      const response = await this.openai.chat.completions.create({
+        model: 'llama-3.1-8b-instant',
+        messages: [
+          {
+            role: 'system',
+            content: `You are a strict chat moderator for a Vietnamese e-commerce livestream. Evaluate if the message contains ANY toxicity, profanity, offensive language, spam, or insults.
+You must strictly identify Vietnamese slang, teencode, acronyms, and intentional misspellings.
+Examples of profanity/toxicity to block:
+- "đm", "đcm", "dkm", "ditme", "địt mẹ", "đjt", "đ.m"
+- "vcl", "vl", "vkl", "vãi", "vãi lồn", "vãi lol", "lol", "lzz"
+- "cl", "cc", "cặc", "loz", "lồn", "l*", "l0n"
+- "cmn", "chó đẻ", "đĩ", "phò", "cút", "ngu"
+- English words like "fuck", "bitch", "shit"
+Even if they use spaces (e.g. "d i t") or replace characters (e.g. "l0l", "đjt", "đ m"), flag it as toxic.
+Return exactly and only a JSON object: {"isToxic": true} if it is bad, or {"isToxic": false} if it is safe. Do not return any other text.`
+          },
+          { role: 'user', content: message }
+        ],
+        temperature: 0.1,
+        response_format: { type: 'json_object' }
+      });
+
+      const resultStr = response.choices[0]?.message?.content;
+      if (!resultStr) return false;
+      
+      const result = JSON.parse(resultStr);
+      return result.isToxic === true;
+    } catch (error: any) {
+      this.logger.error(`Error in moderation AI: ${error.message}`);
+      return false; // If AI fails, err on the side of caution (allow message)
     }
   }
 

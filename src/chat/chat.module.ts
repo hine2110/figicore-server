@@ -11,5 +11,6 @@ import { ProductsModule } from '../products/products.module';
   imports: [ConfigModule, PrismaModule, ProductsModule],
   controllers: [ChatController],
   providers: [ChatService, ChatGateway],
+  exports: [ChatService],
 })
 export class ChatModule { }
