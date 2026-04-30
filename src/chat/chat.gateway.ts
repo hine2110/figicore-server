@@ -15,7 +15,7 @@ import { ChatService } from './chat.service';
 @WebSocketGateway({
     namespace: '/chat',
     cors: {
-        origin: ['https://figicore.com', 'https://api.figicore.com', 'http://localhost:5173'],
+        origin: true,
         credentials: true
     },
 })

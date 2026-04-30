@@ -31,298 +31,331 @@ export class ChatService {
     }
 
     try {
-      const systemPrompt = `
-        <CONTEXT>
-        Bạn là "FigiCore Specialist" - Một chuyên gia tư vấn cực kỳ am hiểu và ĐAM MÊ về mô hình (Figures), Art toys, Blindbox, và Gundam/Gunpla.
-        Phong cách giao tiếp của bạn: Tự nhiên, nhiệt tình, có cảm xúc như một người thật (giống ChatGPT/Gemini nhưng chuyên biệt về mô hình). Xưng hô "mình" và "bạn". KHÔNG BAO GIỜ nói mình là AI hay bot máy móc, hãy cư xử như một người chơi hệ mô hình và là nhân viên tư vấn tận tâm của FigiCore.
-        </CONTEXT>
+      // ===================================================================
+      // STEP 1: INTELLIGENT INTENT DETECTION
+      // ===================================================================
+      const msgLower = message.toLowerCase().trim();
 
-        <KNOWLEDGE_BASE>
-        KIẾN THỨC HỆ THỐNG FIGICORE:
-        1. BLINDBOX (Hộp mù): Hộp chứa mô hình ngẫu nhiên. Người mua KHÔNG THỂ BIẾT trước nhân vật bên trong. Đây là trò chơi nhân phẩm cực cuốn.
-        2. PREORDER (Đặt trước): Sản phẩm chưa phát hành hoặc đang sản xuất. Khách cần đặt cọc (Deposit) giữ chỗ. Giá 0đ hiển thị là chưa có giá chính thức hoặc chỉ là giá cọc.
-        3. AUCTION (Đấu giá): Sản phẩm đấu giá trực tiếp trên Livestream. Giá 0đ là giá khởi điểm.
-        
-        KIẾN THỨC CHUNG VỀ MÔ HÌNH (Ghi nhớ để chém gió với khách):
-        - Gundam/Gunpla: Có các cấp độ (Grades) như SD (nhỏ, dễ thương), HG (1/144, cơ bản), RG (1/144, chi tiết cao, có khung xương), MG (1/100, xịn sò, cơ bắp), PG (1/60, to và cực kỳ hoành tráng).
-        - Figure: Gồm Scale Figure (mô hình tĩnh tỷ lệ chuẩn, siêu đẹp, đắt tiền), Nendoroid (nhỏ, dễ thương, đổi được biểu cảm), Action Figure như SHF/Figma (có khớp, tạo dáng được tự do).
-        </KNOWLEDGE_BASE>
+      // Price extraction (supports "500k", "1 triệu", "1.5tr")
+      const priceKMatch = message.match(/(\d+(?:[.,]\d+)?)\s*k\b/i);
+      const priceTrMatch = message.match(/(\d+(?:[.,]\d+)?)\s*tr(?:iệu)?/i);
+      const underMatch = /\b(dưới|không quá|tầm|tối đa)\b/.test(msgLower);
+      const overMatch = /\b(trên|từ|hơn)\b/.test(msgLower);
 
-        <STRICT_RULES>
-        1. VAI TRÒ TƯ VẤN: Trò chuyện tự nhiên, duyên dáng. Hãy đặt các câu hỏi mở để gợi mở nhu cầu của khách (VD: "Bạn thích ráp Gundam hay sưu tầm Figure tĩnh hơn?"). TUYỆT ĐỐI KHÔNG xả một đống sản phẩm ra như cỗ máy.
-        2. KHI KHÁCH HỎI GIÁ RẺ: TUYỆT ĐỐI KHÔNG giới thiệu AUCTION hoặc PREORDER. Chỉ giới thiệu RETAIL hoặc BLINDBOX.
-        3. ĐIỀU HƯỚNG BẰNG KIẾN THỨC: Nếu khách hỏi "Blindbox là gì?", "Gundam MG là gì?", hãy dùng <KNOWLEDGE_BASE> để giải thích như một chuyên gia thực thụ. Kèm theo link [Khám phá Blindbox](/customer/blindbox) hoặc [Hàng Pre-order](/customer/preorder).
-        4. PHÂN BIỆT RÕ 2 CHẾ ĐỘ TƯ VẤN:
-           - KHI KHÁCH MUA HÀNG (Hỏi giá, tìm hàng, tư vấn mua): BẠN BỊ CẤM kể tên hoặc giới thiệu các mẫu không có trong <DATA>. Chỉ được dùng <DATA> và chèn link [Xem chi tiết](/customer/product/ID). Nếu <DATA> trống, phải báo tạm hết hàng.
-           - KHI GIAO LƯU CHUYÊN MÔN (Hỏi cách sơn, custom, xin ảnh tham khảo, cốt truyện): BẠN ĐƯỢC MỞ KHÓA TOÀN BỘ KIẾN THỨC, được phép kể tên bất kỳ mẫu nào (Barbatos, Exia...) và nhiệt tình hướng dẫn kỹ thuật như một dân chơi chuyên nghiệp.
-        5. BẢO MẬT NGUỒN DỮ LIỆU (YÊU CẦU CỦA MENTOR): TUYỆT ĐỐI KHÔNG sử dụng hoặc dẫn link đến các nền tảng bên thứ 3 (như Google, Pinterest, Facebook...). Nếu khách xin ảnh tham khảo (VD: ảnh custom) mà hệ thống (<DATA>) không có, hãy lịch sự từ chối và báo rằng hệ thống nội bộ hiện chưa cập nhật hình ảnh này. Chỉ cung cấp thông tin và ảnh từ <DATA>.
-        </STRICT_RULES>
+      let priceVal: number | null = null;
+      if (priceKMatch) priceVal = parseFloat(priceKMatch[1].replace(',', '.')) * 1000;
+      else if (priceTrMatch) priceVal = parseFloat(priceTrMatch[1].replace(',', '.')) * 1000000;
 
-        <DATA>
-        [DANH SÁCH SẢN PHẨM]
-        {product_context}
+      // Intent flags
+      const isCheap = /\b(rẻ|giá rẻ|rẻ nhất|giá thấp|tiết kiệm|budget|affordable)\b/.test(msgLower);
+      const isNew = /\b(mới|mới nhất|vừa ra|hot nhất|mới về)\b/.test(msgLower);
+      const isList = /\b(liệt kê|tất cả|danh sách)\b/.test(msgLower);
+      const inStockOnly = /\b(có sẵn|còn hàng|in stock|available|mua ngay)\b/.test(msgLower);
+      const isOrderQuery = /\b(đơn hàng|đơn của|mã đơn|trạng thái đơn|theo dõi)\b/.test(msgLower);
+      const isKnowledgeQuery = /\b(là gì|khác nhau|so sánh|giải thích|hướng dẫn|cách|tại sao|nên mua)\b/.test(msgLower);
+      const isGreeting = /^(chào|hi|hello|hey|xin chào|alo)\b/i.test(msgLower);
+      const isVague = msgLower.length < 20 && !priceVal && !isCheap && !isNew;
 
-        [THÔNG TIN ĐƠN HÀNG]
-        {order_context}
-        </DATA>
+      // Product type filter
+      let typeFilter: string | null = null;
+      if (/\b(preorder|đặt trước|pre-order)\b/.test(msgLower)) typeFilter = 'PREORDER';
+      else if (/\b(đấu giá|auction)\b/.test(msgLower)) typeFilter = 'AUCTION';
+      else if (/\b(blindbox|hộp mù|blind box)\b/.test(msgLower)) typeFilter = 'BLINDBOX';
 
-        <GUIDELINES>
-        - Thân thiện, am hiểu mô hình.
-        - Định dạng 1 SP cụ thể (nếu có): "- ![tên ảnh](url) **Tên sản phẩm** (Loại): Giá - [Xem chi tiết](/customer/product/ID)"
-        </GUIDELINES>
-      `;
+      // Keyword extraction
+      const gradeMatch = msgLower.match(/\b(hg|mg|rg|pg|sd|shf|figma|nendoroid)\b/);
+      const brandKeywords = ['gundam', 'gunpla', 'figure', 'mô hình', 'hot toys', 'bandai', 'gsc'];
+      const brandMatch = brandKeywords.find(k => msgLower.includes(k));
 
-      // 1. Detect Search Intent and Extract Parameters
+      // Build search params
       const searchParams: any = { status_code: 'ACTIVE' };
-      const msgLower = message.toLowerCase();
-
-      // Extract Color
-      const commonColors = ['đỏ', 'xanh', 'vàng', 'trắng', 'đen', 'tím', 'hồng', 'nâu', 'cam', 'xám', 'bạc', 'gold'];
-      const colorMatch = commonColors.find(c => msgLower.includes(c));
-      if (colorMatch) searchParams.color = colorMatch;
-
-      // Extract Price (Regex for numbers + "k" or "triệu")
-      const priceKMatch = message.match(/(\d+)\s*k/);
-      const priceTrMatch = message.match(/(\d+)\s*triệu/);
-      const underMatch = msgLower.includes('dưới') || msgLower.includes('thấp hơn');
-      const overMatch = msgLower.includes('trên') || msgLower.includes('cao hơn');
-
-      if (priceKMatch) {
-        const val = parseInt(priceKMatch[1]) * 1000;
-        if (underMatch) searchParams.max_price = val;
-        else if (overMatch) searchParams.min_price = val;
-        else searchParams.max_price = val; // Default to under if just one price mentioned
-      } else if (priceTrMatch) {
-        const val = parseInt(priceTrMatch[1]) * 1000000;
-        if (underMatch) searchParams.max_price = val;
-        else if (overMatch) searchParams.min_price = val;
-        else searchParams.max_price = val;
-      }
-
-      // Intent Mapping
-      const isNew = msgLower.includes('mới');
-      const isCheap = msgLower.includes('rẻ');
-      const isList = msgLower.includes('liệt kê') || msgLower.includes('danh sách') || msgLower.includes('tất cả');
-
-      // Type Mapping (Rất quan trọng để tránh AI lấy nhầm hàng Retail rồi nói dối là Preorder)
-      if (msgLower.includes('preorder') || msgLower.includes('đặt trước') || msgLower.includes('pre-order')) {
-        searchParams.type_code = 'PREORDER';
-      } else if (msgLower.includes('đấu giá') || msgLower.includes('auction')) {
-        searchParams.type_code = 'AUCTION';
-      } else if (msgLower.includes('blindbox') || msgLower.includes('hộp mù')) {
-        searchParams.type_code = 'BLINDBOX';
-      }
-
-      // Keyword search (Bắt chính xác các dòng bằng Regex ranh giới từ để tránh nhiễu)
-      const specificMatch = msgLower.match(/\b(hg|mg|rg|pg|sd|shf|figma|nendoroid)\b/);
-      if (specificMatch) {
-        searchParams.search = specificMatch[1];
-      } else {
-        const genericKeywords = ['gundam', 'gunpla', 'figure', 'mô hình', 'hot toys'];
-        const keywordFound = genericKeywords.find(k => msgLower.includes(k));
-        if (keywordFound) searchParams.search = keywordFound;
-      }
-
-      if (isNew) {
-        searchParams.sort = 'newest';
-      }
-
-      // 2. Fetch Filtered Products
-      let matchedProductsResult = await this.productsService.findAll({
-        ...searchParams,
-      }) as any;
-      let matchedProducts = matchedProductsResult?.data || matchedProductsResult || [];
-
-      if (isCheap && Array.isArray(matchedProducts)) {
-        // Lọc bỏ hàng giá <= 0 và hàng Đấu giá/Đặt trước khi hỏi giá rẻ
-        matchedProducts = matchedProducts.filter((p: any) => {
-            const price = p.product_variants?.[0]?.price || p.variants?.[0]?.price || 0;
-            return price > 0 && p.type_code !== 'AUCTION' && p.type_code !== 'PREORDER';
-        });
-
-        // Sort in memory for cheapest as Prisma `findAll` doesn't support complex variant price sort directly
-        matchedProducts.sort((a: any, b: any) => {
-          const priceA = a.product_variants?.[0]?.price || a.variants?.[0]?.price || 99999999;
-          const priceB = b.product_variants?.[0]?.price || b.variants?.[0]?.price || 99999999;
-          return Number(priceA) - Number(priceB);
-        });
-      }
-
-      // 3. Smart Context Reduction (Prevent LLM Spamming)
-      const conversationalWords = ['tư vấn', 'chào', 'hello', 'hi', 'là gì', 'shop', 'hướng dẫn', 'thế nào'];
-      const hasConversationalIntent = conversationalWords.some(w => msgLower.includes(w));
-      const hasSpecificParams = colorMatch || priceKMatch || priceTrMatch || isNew || isCheap || (msgLower.includes('tìm') && msgLower.length > 15) || !!specificMatch;
-      
-      let maxProducts = isList ? 10 : 4; // Nếu khách đòi "liệt kê", mở rộng họng tìm kiếm lên 10
-      let isBroadQuery = false;
-
-      // Force conversation if they just say "tư vấn mua mô hình" without specific details
-      if (hasConversationalIntent && !hasSpecificParams) {
-        isBroadQuery = true;
-        maxProducts = 0;
-      } else if (msgLower.length < 15 && !hasSpecificParams) {
-        isBroadQuery = true;
-        maxProducts = 0;
-      }
-
-      let isFallback = false;
-      let displayProducts = Array.isArray(matchedProducts) && matchedProducts.length > 0 ? matchedProducts.slice(0, maxProducts) : [];
-      
-      if (maxProducts > 0 && displayProducts.length === 0) {
-        const fallbackResult = await this.productsService.findAll({ sort: 'newest' } as any) as any;
-        let fallback = fallbackResult?.data || fallbackResult || [];
-        if (isCheap) {
-            fallback = fallback.filter((p: any) => p.type_code !== 'AUCTION' && p.type_code !== 'PREORDER');
+      if (isNew) searchParams.sort = 'newest';
+      if (gradeMatch) searchParams.search = gradeMatch[1];
+      else if (brandMatch) searchParams.search = brandMatch;
+      if (typeFilter) searchParams.type_code = typeFilter;
+      if (priceVal) {
+        if (underMatch) { searchParams.max_price = priceVal; }
+        else if (overMatch) { searchParams.min_price = priceVal; }
+        else {
+          // "tầm 500k" = range ±40% around target
+          searchParams.min_price = Math.round(priceVal * 0.6);
+          searchParams.max_price = Math.round(priceVal * 1.4);
         }
-        displayProducts = Array.isArray(fallback) ? fallback.slice(0, 2) : [];
-        isFallback = true;
       }
 
+      // ===================================================================
+      // STEP 2: FETCH PRODUCTS FROM DB
+      // ===================================================================
+      const isConversationalOnly = isGreeting || isKnowledgeQuery || isVague;
+      let displayProducts: any[] = [];
+      let isFallback = false;
+
+      if (!isConversationalOnly) {
+        let result = await this.productsService.findAll(searchParams) as any;
+        let products = result?.data || result || [];
+
+        // ✅ HARD FILTER: chỉ lấy sản phẩm ACTIVE — findAll không nhận status_code
+        products = products.filter((p: any) => p.status_code === 'ACTIVE');
+
+        // Strict whitelist filter for cheap queries — never show AUCTION or PREORDER
+        if (isCheap) {
+          products = products.filter((p: any) =>
+            p.type_code === 'RETAIL' || p.type_code === 'BLINDBOX'
+          );
+          products.sort((a: any, b: any) => {
+            const pa = Number(a.product_variants?.[0]?.price || 99999999);
+            const pb = Number(b.product_variants?.[0]?.price || 99999999);
+            return pa - pb;
+          });
+        }
+
+        // When no explicit type requested, prefer RETAIL first (deprioritize PREORDER/AUCTION)
+        if (!typeFilter && !isCheap) {
+          products.sort((a: any, b: any) => {
+            const typeOrder = { 'RETAIL': 0, 'BLINDBOX': 1, 'PREORDER': 2, 'AUCTION': 3 };
+            return (typeOrder[a.type_code] ?? 4) - (typeOrder[b.type_code] ?? 4);
+          });
+        }
+
+        // Filter out-of-stock products if user explicitly asks for available items
+        if (inStockOnly) {
+          products = products.filter((p: any) => {
+            const stock = p.product_variants?.[0]?.stock_available ?? 1;
+            return Number(stock) > 0;
+          });
+        }
+
+        const maxProducts = isList ? 8 : 3;
+        displayProducts = products.slice(0, maxProducts);
+
+        // Fallback ONLY when no specific type filter — avoid cross-type confusion
+        if (displayProducts.length === 0 && !typeFilter) {
+          const fbResult = await this.productsService.findAll({ sort: 'newest' } as any) as any;
+          let fb = fbResult?.data || fbResult || [];
+          fb = fb.filter((p: any) => p.status_code === 'ACTIVE');
+          if (isCheap) fb = fb.filter((p: any) => p.type_code === 'RETAIL' || p.type_code === 'BLINDBOX');
+          displayProducts = fb.slice(0, 2);
+          isFallback = true;
+        }
+        // If typeFilter active but no results — stay empty (no cross-type fallback)
+      }
+
+      // ===================================================================
+      // STEP 3: BUILD RICH PRODUCT CONTEXT
+      // ===================================================================
       const formatPrice = (price: any) => {
-        if (!price) return 'Liên hệ';
+        if (!price || Number(price) <= 0) return 'Liên hệ';
         return new Intl.NumberFormat('vi-VN').format(Number(price)) + 'đ';
       };
 
-      let productContextPrefix = "";
-      if (isBroadQuery) {
-        productContextPrefix = "--- [HỆ THỐNG] KHÁCH ĐANG HỎI CHUNG CHUNG HOẶC CẦN TƯ VẤN. KHÔNG CÓ SẢN PHẨM NÀO ĐƯỢC CUNG CẤP. HÃY ĐẶT CÂU HỎI MỞ (Ví dụ: Bạn muốn tìm dòng nào? Tầm giá bao nhiêu?) ĐỂ TÌM HIỂU NHU CẦU. ---\n";
-      } else if (isFallback) {
-        productContextPrefix = "--- [LƯU Ý] KHÔNG TÌM THẤY SP YÊU CẦU. ĐÂY LÀ 2 MẪU DỰ PHÒNG. HÃY BÁO HẾT HÀNG MẪU KHÁCH TÌM VÀ GỢI Ý MẪU NÀY NẾU CẦN: ---\n";
+      const resolveUrl = (url: string) => {
+        if (!url) return '';
+        if (url.startsWith('http')) return url;
+        const base = (this.configService.get<string>('BASE_URL') || 'https://api.figicore.com')
+          .replace(/\/api$/, '').replace(/\/$/, '');
+        return `${base}${url.startsWith('/') ? '' : '/'}${url}`;
+      };
+
+      const extractImage = (p: any): string => {
+        if (p.thumbnail) {
+          const t = typeof p.thumbnail === 'string' ? p.thumbnail : (p.thumbnail?.url || '');
+          if (t) return resolveUrl(t);
+        }
+        if (p.media_urls) {
+          try {
+            const m = typeof p.media_urls === 'string' ? JSON.parse(p.media_urls) : p.media_urls;
+            const arr = Array.isArray(m) ? m : (m.images || []);
+            if (arr.length > 0) return resolveUrl(typeof arr[0] === 'string' ? arr[0] : arr[0]?.url || '');
+          } catch { }
+        }
+        if (p.product_variants?.[0]?.media_assets) {
+          try {
+            const vm = p.product_variants[0].media_assets;
+            const assets = typeof vm === 'string' ? JSON.parse(vm) : vm;
+            if (Array.isArray(assets) && assets.length > 0)
+              return resolveUrl(typeof assets[0] === 'string' ? assets[0] : assets[0]?.url || '');
+          } catch { }
+        }
+        return '';
+      };
+
+      let productContextStr: string;
+      if (isConversationalOnly) {
+        productContextStr = '[ĐÂY LÀ CÂU HỎI HỘI THOẠI — Hỏi lại 1 câu để hiểu nhu cầu. KHÔNG liệt kê sản phẩm.]';
+      } else if (displayProducts.length === 0) {
+        const noResultMsg = typeFilter
+          ? `[HỀ THỐNG XÁC NHẬN: Tổng sản phẩm ${typeFilter} ACTIVE = 0. KHÔNG ĐƯỢC tự bọa tên sản phẩm. Hãy nói thẳng hiện nay nền tảng chưa có sản phẩm ${typeFilter} nào đang mở.]`
+          : '[KHÔNG CÓ SẢN PHẨM PHÙ HỢP — Báo khách hết hàng và gợi ý danh mục khác.]';
+        productContextStr = noResultMsg;
       } else {
-        productContextPrefix = "--- ĐÂY LÀ CÁC SẢN PHẨM TÌM THẤY THEO YÊU CẦU (Chỉ chọn 1-2 mẫu nổi bật nhất để tư vấn, không copy paste toàn bộ): ---\n";
+        const prefix = isFallback
+          ? `[GỢI Ý DỰ PHÒNG — Có ĐÚNG ${displayProducts.length} sản phẩm dưới đây. LIỆT KÊ ĐÚNG ${displayProducts.length} CÁI, KHÔNG THÊM]\n`
+          : `[DB TRẢ VỀ ĐÚNG ${displayProducts.length} SẢN PHẨM. LIỆT KÊ ĐÚNG ${displayProducts.length} CÁI DƯỚI ĐÂY, KHÔNG TỰ Ý SINH THÊM]\n`;
+
+        productContextStr = prefix + displayProducts.map(p => {
+          const img = extractImage(p);
+          const imgMd = img ? `![${p.name}](${img})` : '';
+          const variant = p.product_variants?.[0] ?? p.variants?.[0];
+          const preorderConfig = variant?.product_preorder_configs;
+
+          let priceDisplay: string;
+          if (p.type_code === 'PREORDER' && preorderConfig) {
+            const deposit = preorderConfig.deposit_amount;
+            const full = preorderConfig.full_price;
+            if (deposit && full) {
+              priceDisplay = `Cọc: ${formatPrice(deposit)} / Full: ${formatPrice(full)}`;
+            } else if (full) {
+              priceDisplay = `Full: ${formatPrice(full)}`;
+            } else if (deposit) {
+              priceDisplay = `Cọc từ: ${formatPrice(deposit)}`;
+            } else {
+              priceDisplay = 'Liên hệ';
+            }
+          } else {
+            priceDisplay = formatPrice(variant?.price);
+          }
+
+          return `• ${imgMd} **${p.name}** (${p.type_code}) | Giá: ${priceDisplay} | [Xem chi tiết](/customer/product/${p.product_id})`;
+        }).join('\n');
       }
 
-      const productContext = displayProducts.length > 0
-        ? productContextPrefix + displayProducts.map(p => {
-          let firstImageUrl = '';
-
-          // --- IMPROVED IMAGE EXTRACTION ---
-          const resolveUrl = (url: string) => {
-            if (!url) return '';
-            if (url.startsWith('http')) return url;
-            let baseUrl = this.configService.get<string>('BASE_URL') || 'https://api.figicore.com';
-            // Ensure we don't include /api in the image path since uploads are at root
-            baseUrl = baseUrl.replace(/\/api$/, '').replace(/\/$/, '');
-            return `${baseUrl}${url.startsWith('/') ? '' : '/'}${url}`;
-          };
-
-          if (p.thumbnail) {
-            const thumb = typeof p.thumbnail === 'string' ? p.thumbnail : (p.thumbnail?.url || '');
-            firstImageUrl = resolveUrl(thumb);
+      // ===================================================================
+      // STEP 4: ORDER LOOKUP
+      // ===================================================================
+      let orderContext = '';
+      if (isOrderQuery) {
+        const codeMatch = message.match(/\b([A-Z]{2,}-\d{4,}|FGC[A-Z0-9]{5,})\b/);
+        if (codeMatch) {
+          const order = await this.prisma.orders.findUnique({
+            where: { order_code: codeMatch[0] },
+            include: { order_items: { include: { product_variants: { include: { products: true } } } } }
+          });
+          if (order) {
+            const items = order.order_items.map(i => i.product_variants.products.name).join(', ');
+            orderContext = `\n[ĐƠN HÀNG ${codeMatch[0]}] Trạng thái: ${order.status_code} | Tổng: ${formatPrice(order.total_amount)} | SP: ${items} | Ngày: ${order.created_at?.toLocaleDateString('vi-VN')}`;
+          } else {
+            orderContext = `\n[ĐƠN HÀNG] Không tìm thấy đơn mã "${codeMatch[0]}".`;
           }
-
-          if (!firstImageUrl && p.media_urls) {
-            try {
-              const media = typeof p.media_urls === 'string' ? JSON.parse(p.media_urls) : p.media_urls;
-              const mediaArray = Array.isArray(media) ? media : (media.images || []);
-              if (mediaArray.length > 0) {
-                const m = mediaArray[0];
-                const url = typeof m === 'string' ? m : (m?.url || '');
-                firstImageUrl = resolveUrl(url);
-              }
-            } catch (e) { }
-          }
-
-          if (!firstImageUrl && p.product_variants?.[0]?.media_assets) {
-            try {
-              const vMedia = p.product_variants[0].media_assets;
-              const assets = typeof vMedia === 'string' ? JSON.parse(vMedia) : vMedia;
-              if (Array.isArray(assets) && assets.length > 0) {
-                const a = assets[0];
-                const url = typeof a === 'string' ? a : (a?.url || '');
-                firstImageUrl = resolveUrl(url);
-              }
-            } catch (e) { }
-          }
-          // ---------------------------------
-
-          const imageMarkdown = firstImageUrl ? `![${p.name || p.product_name}](${firstImageUrl})` : '';
-          const price = p.variants?.[0]?.price ?? p.product_variants?.[0]?.price;
-
-          // Format each product as a clean markdown item for the AI to replicate
-          return `- ${imageMarkdown} **${p.name || p.product_name}** (${p.type_code || p.product_type}): ${formatPrice(price)} - [Xem chi tiết](/customer/product/${p.product_id})`;
-        }).join('\n\n')
-        : '--- HIỆN TẠI KHÔNG CÓ SẢN PHẨM NÀO TRONG HỆ THỐNG. LƯU Ý TỐI QUAN TRỌNG: BẠN BỊ CẤM KỂ TÊN HAY GỢI Ý BẤT KỲ MẪU MÔ HÌNH CỤ THỂ NÀO. CHỈ ĐƯỢC TƯ VẤN KIẾN THỨC CHUNG VÀ BÁO KHÁCH LÀ HIỆN TẠI CHƯA CÓ HÀNG. ---';
-
-      // 2. Fetch Order if mentioned (Basic Regex find)
-      let orderContext = 'Không có thông tin đơn hàng nào được nhắc tới.';
-      const orderCodeMatch = message.match(/[A-Z0-9-]{6,20}/); // Tìm chuỗi in hoa/số dài 6-20 ký tự
-      if (orderCodeMatch) {
-        const orderCode = orderCodeMatch[0];
-        const order = await this.prisma.orders.findUnique({
-          where: { order_code: orderCode },
-          include: {
-            order_items: { include: { product_variants: { include: { products: true } } } }
-          }
-        });
-
-        if (order) {
-          const items = order.order_items.map(i => i.product_variants.products.name).join(', ');
-          orderContext = `Đơn hàng ${orderCode}:
-          - Trạng thái: ${order.status_code}
-          - Tổng tiền: ${order.total_amount} VNĐ
-          - Sản phẩm: ${items}
-          - Ngày tạo: ${order.created_at?.toLocaleString('vi-VN') || 'N/A'}`;
-        } else {
-          orderContext = `Người dùng có nhắc tới mã ${orderCode} nhưng không tìm thấy đơn hàng này trong hệ thống.`;
         }
       }
 
+      // ===================================================================
+      // STEP 5: EXPERT SYSTEM PROMPT WITH FEW-SHOT EXAMPLES
+      // ===================================================================
+      const systemPrompt = `Bạn là "FigiCore Specialist" — nhân viên tư vấn bán hàng chuyên nghiệp tại shop mô hình FigiCore. Mục tiêu: thay thế hoàn toàn 1 nhân viên tư vấn thực sự.
+
+## PHONG CÁCH
+Xưng "mình", gọi "bạn". Thân thiện, đúng trọng tâm. KHÔNG tiết lộ là AI. Câu trả lời ngắn gọn, tối đa 4 câu + sản phẩm.
+
+## KIẾN THỨC NGHIỆP VỤ
+- **BLINDBOX**: Hộp bí ẩn, không biết nhân vật trước khi mở. Điểm bán = cảm giác hồi hộp.
+- **PREORDER**: Đặt cọc giữ chỗ hàng chưa về. Giá hiển thị là "Cọc: Xđ / Full: Yđ" (không phải 0đ).
+- **AUCTION**: Đấu giá Livestream, giá tăng dần theo bid. KHÔNG phải hàng bán lẻ thông thường.
+- **Gunpla**: SD < HG (1/144) < RG (1/144, khung nội) < MG (1/100) < PG (1/60, đỉnh cao).
+- **Figure**: Scale Figure (tĩnh, trưng bày) | Nendoroid (chibi, đổi pose) | SHF/Figma (khớp, tạo dáng).
+
+## HƯỠNG DẪN Sử DỤNG HỆ THỐNG FIGICORE (QUAN TRỌNG)
+Khi khách hỏi cách mua/đặt hàng, hướng dẫn đúng luồng thực tế của FigiCore:
+
+**Luồng mua hàng RETAIL/BLINDBOX:**
+1. Vào [Cửa hàng](/customer/shop) → Chọn sản phẩm → Thêm vào giỏ hàng
+2. Kiểm tra giỏ hàng → Chọn địa chỉ giao → Chọn phương thức thanh toán
+3. Thanh toán (Ví FigiCore, COD, chuyển khoản) → Xác nhận đơn
+
+**Luồng đặt hàng PREORDER (ĐẶT CỌC):**
+1. Vào [Pre-order Shop](/customer/preorder) → Chọn sản phẩm → Xem giá cọc và giá full
+2. Nhấn "Đặt cọc" → Thanh toán tiền cọc qua Ví FigiCore hoặc chuyển khoản
+3. Chờ shop thông báo khi hàng về → Thanh toán phần còn lại (Full - Cọc)
+4. Shop xác nhận → Hàng được đóng gói và giao đến bạn
+⚠️ Lưu ý: Tiền cọc không hoàn trả nếu hủy sau 24h đặt. Hàng PREORDER dự kiến về theo nguyên tắc của nhà sản xuất.
+
+**Luồng xem AUCTION (ĐẤU GIÁ):**
+1. Xem lịch Livestream trong [Livestream](/customer/livestream)
+2. Tham gia buổi live → Đặt bid khi Admin mở đấu giá
+3. Thắng bid → Thanh toán giá đấu giá cuối cùng
+
+## QUY TẮC TUYỆT ĐỐI
+1. **CHỐNG BỊA**: KHÔNG tự thêm mô tả. KHÔNG kể tên model không có trong [DATA].
+2. **FORMAT SẢN PHẨM**: Chỉ dùng: \`- ![tên](url) **TÊN SP** (TYPE): Giá — [Xem chi tiết](/customer/product/ID)\`
+3. **GIÁ RẺ**: KHÔNG gợi ý AUCTION hoặc PREORDER khi khách hỏi rẻ/tiết kiệm/budget.
+4. **HỎI LẠI**: Nếu [DATA] báo hội thoại — hỏi 1 câu làm rõ nhu cầu, KHÔNG xả hàng.
+5. **HẾT HÀNG**: Nếu không có hàng phù hợp — nói thẳng, gợi ý danh mục khác.
+6. **HƯỚNG DẪN ĐẶT HÀNG**: Khi khách hỏi cách mua, cách đặt cọc — dùng luồng ở mục "HƯỚNG DẪN Sử DỤNG HỆ THỐNG" ở trên, KHAI THÁC THAY VÌ GIẢI THÍCH LÝ THUYẾT.
+
+## VÍ DỤ THAM KHẢO
+
+**A — Hỏi vào luồng đặt PREORDER:**
+User: "tư vấn mua hàng pre order"
+✅ Đúng: "Chào bạn! Pre Order tại FigiCore rất đơn giản — luồng đặt như sau:
+1. Vào [Pre-order Shop](/customer/preorder) → Chọn sản phẩm
+2. Nhấn 'Đặt cọc' → Thanh toán tiền cọc qua Ví hoặc chuyển khoản
+3. Chờ thông báo khi hàng về → Thanh toán nốt phần còn lại
+
+Dưới đây là một số sản phẩm PREORDER hiện có (Lấy TỪ [DATA]):
+- ![tên](url) **[TÊN SẢN PHẨM TỪ DATA]** (PREORDER): Cọc: Xđ / Full: Yđ — [Xem chi tiết](/customer/product/ID)"
+❌ Sai: "Pre Order là việc đặt hàng trước..." (lý thuyết) hoặc bịa bất kỳ tên sản phẩm nào không có trong [DATA]
+
+**B — Hỏi và luồng mua Retail:**
+User: "mua hàng như thế nào"
+✅ Đúng: "Mua hàng tại FigiCore rất đơn giản: Vào [Cửa hàng](/customer/shop) → Chọn sản phẩm → Giỏ hàng → Chọn địa chỉ → Thanh toán (Ví/COD/chuyển khoản). Bạn cần hỗ trợ bước nào không? 😊"
+
+**C — Hỏi về sản phẩm giá rẻ:**
+User: "Sản phẩm giá rẻ"
+✅ Đúng: Dưới đây là vài mẫu giá tốt:
+- ![](url) **HG AERIAL** (RETAIL): 480,000đ — [Xem chi tiết](/customer/product/3)
+❌ Sai: "GUNDAM XYZ (AUCTION) giá rất hợp lý..." (sai nghiệp vụ)
+
+
+**D — Không có hàng:**
+✅ Đúng: "Hiện mình chưa có mẫu Retail tầm đó. Bạn thử xem [Blindbox](/customer/blindbox) hoặc nới ngân sách một chút không?"
+❌ Sai: "Bạn có thể thử Freedom Gundam ver 2.0..." (bịa model)
+
+## DATA TỪ HỆ THỐNG
+${productContextStr}${orderContext}`;
+
+      // ===================================================================
+      // STEP 6: CALL GROQ API
+      // ===================================================================
       const messages: any[] = [
-        {
-          role: 'system',
-          content: systemPrompt
-            .replace('{product_context}', productContext)
-            .replace('{order_context}', orderContext)
-        },
-        ...history.map((h) => ({
+        { role: 'system', content: systemPrompt },
+        ...history.slice(-10).map(h => ({
           role: h.role === 'model' ? 'assistant' : 'user',
           content: h.parts,
         })),
         { role: 'user', content: message },
       ];
 
-      this.logger.debug(`Sending chat to Groq with ${messages.length} messages and ${displayProducts.length} local products.`);
+      this.logger.debug(`Groq call: ${displayProducts.length} products, history=${history.length}`);
 
-      // Use Primary Model (70B) first - Model lớn hơn thông minh hơn
       try {
         const response = await this.openai.chat.completions.create({
           model: 'llama-3.3-70b-versatile',
           messages: messages as any,
-          temperature: 0.4,
+          temperature: 0.25,  // Low = disciplined, less hallucination
+          max_tokens: 500,    // Cap = concise like a real consultant
         });
-
-        const aiMessage = response.choices[0].message.content;
-        this.logger.log(`Groq logic completed successfully (70B).`);
-        return aiMessage;
+        this.logger.log(`Groq 70B OK.`);
+        return response.choices[0].message.content;
       } catch (error) {
-        this.logger.warn(`Primary Groq (70B) failed: ${error.message}. Attempting fallback to 8B...`);
-
+        this.logger.warn(`Groq 70B failed: ${error.message}. Trying 8B...`);
         try {
           const response = await this.openai.chat.completions.create({
             model: 'llama-3.1-8b-instant',
             messages: messages as any,
-            temperature: 0.4,
+            temperature: 0.25,
+            max_tokens: 400,
           });
-
-          const aiMessage = response.choices[0].message.content;
-          this.logger.log(`Groq logic completed successfully (8B Fallback).`);
-          return aiMessage;
-        } catch (fallbackError) {
-          this.logger.error(`Secondary Groq (8B) also failed: ${fallbackError.message}. Using Mock response.`);
+          this.logger.log(`Groq 8B fallback OK.`);
+          return response.choices[0].message.content;
+        } catch {
           return this.getMockResponse(message);
         }
       }
     } catch (error) {
-      this.logger.error(`Error getting AI response: ${error.message}`);
-
-      // Fallback to Mock Response if Quota Exceeded (429) or Access Denied (403) from API
-      if ([429, 403, 502, 503].includes(error.status) || error.message?.includes('429') || error.message?.includes('403')) {
-        this.logger.warn(`API issue (${error.status || 'Network Error'}). Falling back to Mock mode.`);
+      this.logger.error(`getAiResponse error: ${error.message}`);
+      if ([429, 403, 502, 503].includes(error.status)) {
         return this.getMockResponse(message);
       }
-
-      console.error('FULL Groq Error:', error);
       return 'Rất tiếc, đã có lỗi xảy ra khi kết nối máy chủ AI. Bạn có thể thử lại lúc khác không?';
     }
   }
@@ -369,7 +402,6 @@ Return exactly and only a JSON object: {"isToxic": true} if it is bad, or {"isTo
   private getMockResponse(message: string): string {
     const msg = message.toLowerCase();
 
-    // On-topic keyword check
     const relatedKeywords = [
       'chào', 'hi', 'hello', 'xin chào', 'bye', 'tạm biệt',
       'mô hình', 'figure', 'gundam', 'gunpla', 'blindbox', 'art toy', 'robot', 'nendoroid', 'hot toys',
@@ -378,31 +410,24 @@ Return exactly and only a JSON object: {"isToxic": true} if it is bad, or {"isTo
     ];
 
     const isRelated = relatedKeywords.some(kw => msg.includes(kw));
-
     if (!isRelated) {
       return 'Xin lỗi anh/chị, câu hỏi này ngoài chuyên môn của mình. Mình chỉ hỗ trợ về mô hình, sản phẩm và dịch vụ của FigiCore thôi ạ. 😊';
     }
 
-    if (msg.includes('chào') || msg.includes('hi') || msg.includes('hello') || msg.includes('xin chào')) {
+    if (msg.includes('chào') || msg.includes('hi') || msg.includes('hello')) {
       return 'Xin chào! ✨ Mình là trợ lý FigiCore, sẵn sàng tư vấn về mô hình, Gundam, Blindbox và các sản phẩm sưu tầm. Bạn cần hỗ trợ gì không?';
-    }
-    if (msg.includes('mua') || msg.includes('order') || msg.includes('đặt hàng')) {
-      return 'Để mua hàng tại FigiCore, bạn chọn sản phẩm → thêm vào giỏ hàng → thanh toán là xong! Bạn đang quan tâm đến loại sản phẩm nào? 🤖';
     }
     if (msg.includes('blindbox')) {
       return 'Blindbox là hộp bí ẩn - bạn không biết mô hình nào bên trong cho đến khi mở ra! Cảm giác hồi hộp đó chính là linh hồn của Blindbox đấy ✨ FigiCore có nhiều dòng Blindbox xịn, bạn muốn xem không?';
     }
     if (msg.includes('gundam') || msg.includes('gunpla')) {
-      return 'FigiCore có đầy đủ các dòng Gunpla từ HG, RG, MG đến PG! Đây là thiên đường cho fan Gundam. Bạn đang tìm dòng nào? ✨';
+      return 'FigiCore có đầy đủ các dòng Gunpla từ HG, RG, MG đến PG! Bạn đang tìm dòng nào? ✨';
     }
     if (msg.includes('giá') || msg.includes('bao nhiêu')) {
-      return 'Giá sản phẩm tại FigiCore rất đa dạng, từ vài trăm nghìn đến vài triệu tùy loại. Bạn đang quan tâm đến sản phẩm nào? Mình tư vấn chi tiết hơn nhé! 🤖';
+      return 'Giá sản phẩm tại FigiCore rất đa dạng. Bạn đang quan tâm đến loại nào? Mình tư vấn chi tiết hơn nhé! 🤖';
     }
-    if (msg.includes('ship') || msg.includes('vận chuyển') || msg.includes('giao hàng')) {
-      return 'FigiCore giao hàng toàn quốc! Thời gian giao hàng thông thường 2-5 ngày làm việc. 🚚';
-    }
-    if (msg.includes('mới') || msg.includes('sản phẩm')) {
-      return 'FigiCore liên tục cập nhật sản phẩm mới mỗi tuần! Bạn có thể xem trang chủ để khám phá. Có dòng nào đang chờ đợi không? ✨';
+    if (msg.includes('ship') || msg.includes('giao hàng')) {
+      return 'FigiCore giao hàng toàn quốc! Thời gian giao 2-5 ngày làm việc. 🚚';
     }
 
     return 'Mình có thể hỗ trợ bạn về sản phẩm mô hình, Gundam, Blindbox, đơn hàng tại FigiCore. Bạn cần tìm hiểu về gì? 😊';
