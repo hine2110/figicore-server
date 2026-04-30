@@ -73,6 +73,12 @@ export class ChatService {
       if (gradeMatch) searchParams.search = gradeMatch[1];
       else if (brandMatch) searchParams.search = brandMatch;
       if (typeFilter) searchParams.type_code = typeFilter;
+
+      // CHEAP DEFAULT THRESHOLD: If user says "giá rẻ" without specifying a price,
+      // apply a sensible default cap (850k) so we don't recommend 2M products as "cheap"
+      const DEFAULT_CHEAP_CAP = 850000;
+      const hasPriceConstraint = !!priceVal;
+
       if (priceVal) {
         if (underMatch) { searchParams.max_price = priceVal; }
         else if (overMatch) { searchParams.min_price = priceVal; }
@@ -81,6 +87,9 @@ export class ChatService {
           searchParams.min_price = Math.round(priceVal * 0.6);
           searchParams.max_price = Math.round(priceVal * 1.4);
         }
+      } else if (isCheap) {
+        // No explicit price but user wants cheap → apply default cap
+        searchParams.max_price = DEFAULT_CHEAP_CAP;
       }
 
       // ===================================================================
@@ -89,12 +98,13 @@ export class ChatService {
       const isConversationalOnly = isGreeting || isKnowledgeQuery || isVague;
       let displayProducts: any[] = [];
       let isFallback = false;
+      let cheapFallbackContext = '';
 
       if (!isConversationalOnly) {
         let result = await this.productsService.findAll(searchParams) as any;
         let products = result?.data || result || [];
 
-        // ✅ HARD FILTER: chỉ lấy sản phẩm ACTIVE — findAll không nhận status_code
+        // ✅ HARD FILTER: chỉ lấy sản phẩm ACTIVE
         products = products.filter((p: any) => p.status_code === 'ACTIVE');
 
         // Strict whitelist filter for cheap queries — never show AUCTION or PREORDER
@@ -125,15 +135,40 @@ export class ChatService {
           });
         }
 
-        const maxProducts = isList ? 8 : 3;
+        // Show more options (5) when user is looking for cheap items so they can compare
+        const maxProducts = isList ? 8 : (isCheap ? 5 : 3);
         displayProducts = products.slice(0, maxProducts);
 
-        // Fallback ONLY when no specific type filter — avoid cross-type confusion
-        if (displayProducts.length === 0 && !typeFilter) {
+        // SMART CHEAP FALLBACK: If nothing found under the cheap cap,
+        // fetch cheapest available items and tell AI to be honest about the price range
+        if (displayProducts.length === 0 && isCheap && !hasPriceConstraint) {
+          const fbParams: any = { status_code: 'ACTIVE' };
+          if (gradeMatch) fbParams.search = gradeMatch[1];
+          else if (brandMatch) fbParams.search = brandMatch;
+          if (typeFilter) fbParams.type_code = typeFilter;
+
+          const fbResult = await this.productsService.findAll(fbParams) as any;
+          let fb = fbResult?.data || fbResult || [];
+          fb = fb.filter((p: any) => p.status_code === 'ACTIVE');
+          fb = fb.filter((p: any) => p.type_code === 'RETAIL' || p.type_code === 'BLINDBOX');
+          fb.sort((a: any, b: any) => {
+            const pa = Number(a.product_variants?.[0]?.price || 99999999);
+            const pb = Number(b.product_variants?.[0]?.price || 99999999);
+            return pa - pb;
+          });
+          displayProducts = fb.slice(0, 3);
+          if (displayProducts.length > 0) {
+            const cheapestPrice = Number(displayProducts[0].product_variants?.[0]?.price || 0);
+            const cheapestFormatted = new Intl.NumberFormat('vi-VN').format(cheapestPrice) + 'đ';
+            cheapFallbackContext = `\n[THÔNG BÁO CHO AI]: Không có sản phẩm nào dưới ${new Intl.NumberFormat('vi-VN').format(DEFAULT_CHEAP_CAP)}đ. Mẫu RẺ NHẤT hiện có là ${cheapestFormatted}. Hãy thành thật báo khách không có hàng dưới ngưỡng đó, và hỏi xem ngân sách của khách là bao nhiêu trước khi gợi ý các mẫu dưới đây.`;
+            isFallback = true;
+          }
+        }
+        // General fallback ONLY when no specific type filter — avoid cross-type confusion
+        else if (displayProducts.length === 0 && !typeFilter && !isCheap) {
           const fbResult = await this.productsService.findAll({ sort: 'newest' } as any) as any;
           let fb = fbResult?.data || fbResult || [];
           fb = fb.filter((p: any) => p.status_code === 'ACTIVE');
-          if (isCheap) fb = fb.filter((p: any) => p.type_code === 'RETAIL' || p.type_code === 'BLINDBOX');
           displayProducts = fb.slice(0, 2);
           isFallback = true;
         }
@@ -189,7 +224,7 @@ export class ChatService {
         productContextStr = noResultMsg;
       } else {
         const prefix = isFallback
-          ? `[GỢI Ý DỰ PHÒNG — Có ĐÚNG ${displayProducts.length} sản phẩm dưới đây. LIỆT KÊ ĐÚNG ${displayProducts.length} CÁI, KHÔNG THÊM]\n`
+          ? `[GỢI Ý DỰ PHÒNG${cheapFallbackContext} — Có ĐÚNG ${displayProducts.length} sản phẩm dưới đây. LIỆT KÊ ĐÚNG ${displayProducts.length} CÁI, KHÔNG THÊM]\n`
           : `[DB TRẢ VỀ ĐÚNG ${displayProducts.length} SẢN PHẨM. LIỆT KÊ ĐÚNG ${displayProducts.length} CÁI DƯỚI ĐÂY, KHÔNG TỰ Ý SINH THÊM]\n`;
 
         productContextStr = prefix + displayProducts.map(p => {
@@ -254,7 +289,7 @@ Xưng "mình", gọi "bạn". Thân thiện, đúng trọng tâm. KHÔNG tiết 
 - **Gunpla**: SD < HG (1/144) < RG (1/144, khung nội) < MG (1/100) < PG (1/60, đỉnh cao).
 - **Figure**: Scale Figure (tĩnh, trưng bày) | Nendoroid (chibi, đổi pose) | SHF/Figma (khớp, tạo dáng).
 
-## HƯỠNG DẪN Sử DỤNG HỆ THỐNG FIGICORE (QUAN TRỌNG)
+## HƯỚNG DẪN SỬ DỤNG HỆ THỐNG FIGICORE (QUAN TRỌNG)
 Khi khách hỏi cách mua/đặt hàng, hướng dẫn đúng luồng thực tế của FigiCore:
 
 **Luồng mua hàng RETAIL/BLINDBOX:**
@@ -267,7 +302,7 @@ Khi khách hỏi cách mua/đặt hàng, hướng dẫn đúng luồng thực t�
 2. Nhấn "Đặt cọc" → Thanh toán tiền cọc qua Ví FigiCore hoặc chuyển khoản
 3. Chờ shop thông báo khi hàng về → Thanh toán phần còn lại (Full - Cọc)
 4. Shop xác nhận → Hàng được đóng gói và giao đến bạn
-⚠️ Lưu ý: Tiền cọc không hoàn trả nếu hủy sau 24h đặt. Hàng PREORDER dự kiến về theo nguyên tắc của nhà sản xuất.
+⚠️ Lưu ý: Tiền cọc không hoàn trả nếu hủy sau 24h đặt.
 
 **Luồng xem AUCTION (ĐẤU GIÁ):**
 1. Xem lịch Livestream trong [Livestream](/customer/livestream)
@@ -275,42 +310,40 @@ Khi khách hỏi cách mua/đặt hàng, hướng dẫn đúng luồng thực t�
 3. Thắng bid → Thanh toán giá đấu giá cuối cùng
 
 ## QUY TẮC TUYỆT ĐỐI
-1. **CHỐNG BỊA**: KHÔNG tự thêm mô tả. KHÔNG kể tên model không có trong [DATA].
+1. **CHỐNG BỊA**: KHÔNG tự thêm mô tả. KHÔNG kể tên model không có trong [DATA THỰC TẾ].
 2. **FORMAT SẢN PHẨM**: Chỉ dùng: \`- ![tên](url) **TÊN SP** (TYPE): Giá — [Xem chi tiết](/customer/product/ID)\`
 3. **GIÁ RẺ**: KHÔNG gợi ý AUCTION hoặc PREORDER khi khách hỏi rẻ/tiết kiệm/budget.
-4. **HỎI LẠI**: Nếu [DATA] báo hội thoại — hỏi 1 câu làm rõ nhu cầu, KHÔNG xả hàng.
+4. **HỎI LẠI**: Nếu [DATA THỰC TẾ] báo hội thoại — hỏi 1 câu làm rõ nhu cầu, KHÔNG xả hàng.
 5. **HẾT HÀNG**: Nếu không có hàng phù hợp — nói thẳng, gợi ý danh mục khác.
-6. **HƯỚNG DẪN ĐẶT HÀNG**: Khi khách hỏi cách mua, cách đặt cọc — dùng luồng ở mục "HƯỚNG DẪN Sử DỤNG HỆ THỐNG" ở trên, KHAI THÁC THAY VÌ GIẢI THÍCH LÝ THUYẾT.
+6. **HƯỚNG DẪN ĐẶT HÀNG**: Khi khách hỏi cách mua/đặt cọc — dùng luồng ở mục "HƯỚNG DẪN SỬ DỤNG HỆ THỐNG".
 
-## VÍ DỤ THAM KHẢO
+## VÍ DỤ FORMAT (CHỈ ĐỂ THAM KHẢO CÁCH TRÌNH BÀY — KHÔNG DÙNG LÀM DỮ LIỆU)
 
-**A — Hỏi vào luồng đặt PREORDER:**
+**A — Hỏi luồng PREORDER:**
 User: "tư vấn mua hàng pre order"
-✅ Đúng: "Chào bạn! Pre Order tại FigiCore rất đơn giản — luồng đặt như sau:
+✅ Trả lời đúng:
+"Chào bạn! Pre Order tại FigiCore đơn giản lắm:
 1. Vào [Pre-order Shop](/customer/preorder) → Chọn sản phẩm
-2. Nhấn 'Đặt cọc' → Thanh toán tiền cọc qua Ví hoặc chuyển khoản
-3. Chờ thông báo khi hàng về → Thanh toán nốt phần còn lại
+2. Nhấn 'Đặt cọc' → Thanh toán tiền cọc
+3. Chờ hàng về → Thanh toán nốt phần còn lại
 
-Dưới đây là một số sản phẩm PREORDER hiện có (Lấy TỪ [DATA]):
-- ![tên](url) **[TÊN SẢN PHẨM TỪ DATA]** (PREORDER): Cọc: Xđ / Full: Yđ — [Xem chi tiết](/customer/product/ID)"
-❌ Sai: "Pre Order là việc đặt hàng trước..." (lý thuyết) hoặc bịa bất kỳ tên sản phẩm nào không có trong [DATA]
+Dưới đây là sản phẩm PREORDER hiện có [LẤY TỪ DATA THỰC TẾ]:
+- ![...](URL_THỰC_TẾ) **TÊN_THỰC_TẾ** (PREORDER): Cọc: Xđ / Full: Yđ — [Xem chi tiết](/customer/product/ID_THỰC_TẾ)"
+❌ Sai: Tự điền tên/giá/ID không có trong DATA THỰC TẾ.
 
-**B — Hỏi và luồng mua Retail:**
-User: "mua hàng như thế nào"
-✅ Đúng: "Mua hàng tại FigiCore rất đơn giản: Vào [Cửa hàng](/customer/shop) → Chọn sản phẩm → Giỏ hàng → Chọn địa chỉ → Thanh toán (Ví/COD/chuyển khoản). Bạn cần hỗ trợ bước nào không? 😊"
+**B — Hỏi sản phẩm:**
+✅ Chỉ liệt kê đúng sản phẩm có trong [DATA THỰC TẾ], copy đúng tên/ID/giá, không thêm bớt.
+❌ Sai: Bịa bất kỳ tên model, giá tiền, hoặc ID sản phẩm nào.
 
-**C — Hỏi về sản phẩm giá rẻ:**
-User: "Sản phẩm giá rẻ"
-✅ Đúng: Dưới đây là vài mẫu giá tốt:
-- ![](url) **HG AERIAL** (RETAIL): 480,000đ — [Xem chi tiết](/customer/product/3)
-❌ Sai: "GUNDAM XYZ (AUCTION) giá rất hợp lý..." (sai nghiệp vụ)
+**C — Không có hàng:**
+✅ "Hiện mình chưa có mẫu Retail tầm đó. Bạn thử xem [Blindbox](/customer/blindbox) không?"
+❌ Tự bịa tên sản phẩm khi DATA THỰC TẾ báo rỗng.
 
-
-**D — Không có hàng:**
-✅ Đúng: "Hiện mình chưa có mẫu Retail tầm đó. Bạn thử xem [Blindbox](/customer/blindbox) hoặc nới ngân sách một chút không?"
-❌ Sai: "Bạn có thể thử Freedom Gundam ver 2.0..." (bịa model)
-
-## DATA TỪ HỆ THỐNG
+## ══════════════════════════════════════════
+## DATA THỰC TẾ TỪ HỆ THỐNG — NGUỒN DỮ LIỆU DUY NHẤT HỢP LỆ
+## CHỈ DÙNG CÁC SẢN PHẨM, TÊN, GIÁ VÀ ID XUẤT HIỆN DƯỚI ĐÂY.
+## MỌI THÔNG TIN KHÔNG CÓ Ở ĐÂY = CẤM SỬ DỤNG.
+## ══════════════════════════════════════════
 ${productContextStr}${orderContext}`;
 
       // ===================================================================
