@@ -1041,8 +1041,6 @@ export class ProductsService {
                 scale: v.scale,
                 material: v.material,
                 included_items: v.included_items ? (v.included_items as any) : undefined,
-                stock_available: v.stock_available !== undefined ? v.stock_available : existingVariant.stock_available,
-                stock_defect: v.stock_defect !== undefined ? v.stock_defect : existingVariant.stock_defect,
                 deleted_at: null // Restore if it was deleted
               },
             });
