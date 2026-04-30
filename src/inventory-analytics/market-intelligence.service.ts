@@ -196,11 +196,12 @@ export class MarketIntelligenceService {
               
               EXTRACTION RULES:
               - Only extract REAL products with specific names from OFFICIAL announcements, press releases, or official social media posts.
-              - EXTREMELY IMPORTANT (NO RETAIL): REJECT and IGNORE any search results that are retail store listings, pre-order pages from shops, or e-commerce platforms (e.g., "Add to cart", "Buy now", "Price: $XX"). We ONLY want manufacturer announcements.
-              - EXTREMELY IMPORTANT (DEEP LINKS ONLY): The source_url MUST point directly to the SPECIFIC article, post, or product announcement page. NEVER return a generic homepage URL (e.g., return "bandai.com/news/123" or "facebook.com/bandai/posts/456", DO NOT return "bandai.com" or "facebook.com").
+              - EXTREMELY IMPORTANT (NO RETAIL/SELLERS): REJECT and IGNORE any search results that are retail store listings, pre-order pages from shops, or e-commerce platforms. We ONLY want manufacturer announcements.
+              - EXTREMELY IMPORTANT (SOCIAL MEDIA STRICT FILTER): If the source is a social media platform (Facebook, Instagram, X/Twitter), it MUST be the OFFICIAL page of the manufacturer/studio. STRICTLY REJECT any personal accounts, individual sellers, community groups, fan pages, or third-party retailer pages on social media.
+              - EXTREMELY IMPORTANT (DEEP LINKS ONLY): The source_url MUST point directly to the SPECIFIC article, post, or product announcement page. NEVER return a generic homepage URL.
               - Status: "UPCOMING" if not yet released, "RELEASED" if already available, "RUMORED" if unconfirmed.
               - Confidence:
-                  "HIGH" = from official brand website or official social media page (Facebook, Twitter, Instagram).
+                  "HIGH" = from official brand website or official brand's verified social media page.
                   "MEDIUM" = from specialized hobby/news sites reporting on events (toyark.com, myfigurecollection.net).
                   "LOW" = from general blogs or unverified sources.
               - Category: Choose from "Figure", "Blind Box", "Statue", "Resin", "Diecast", "Plush", "Other".
