@@ -1,4 +1,4 @@
-import { Controller, Post, Body, UseGuards, Get, Query, DefaultValuePipe, ParseIntPipe, Param, Request } from '@nestjs/common';
+import { Controller, Post, Body, UseGuards, Get, Query, DefaultValuePipe, ParseIntPipe, Param, Request, Delete } from '@nestjs/common';
 import { EmployeesService } from './employees.service';
 import { CreateEmployeeDto } from './dto/create-employee.dto';
 import { ImportEmployeeDto } from './dto/import-employee.dto';
@@ -46,4 +46,11 @@ export class EmployeesController {
 
     return this.employeesService.findOne(id, requestingUserId, requestingRole, ip);
   }
-}
+
+  @Delete(':id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('SUPER_ADMIN')
+  remove(@Param('id', ParseIntPipe) id: number) {
+    return this.employeesService.remove(id);
+  }
+}
