@@ -143,7 +143,11 @@ export class UsersService {
   }
 
   async findAll() {
-    const users = await this.prisma.users.findMany();
+    const users = await this.prisma.users.findMany({
+      where: {
+        status_code: { not: 'DELETED' }
+      }
+    });
     return users.map(user => this.sanitizeUser(this.decryptUser(user)));
   }
 
