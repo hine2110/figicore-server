@@ -176,13 +176,15 @@ export class EmployeesService {
       where.users = {
         ...where.users,
         role_code: role,
+        status_code: { not: 'DELETED' }
       };
     } else {
       where.users = {
         ...where.users,
         role_code: {
           notIn: ['ADMIN', 'SUPER_ADMIN']
-        }
+        },
+        status_code: { not: 'DELETED' }
       };
     }
 
@@ -376,24 +378,38 @@ export class EmployeesService {
           await tx.carts.deleteMany({ where: { user_id: id } });
         }
 
-        // 3. Xóa bản ghi chính ở bảng Employee và User
-        // Nếu ở bước này bị lỗi P2003, nghĩa là User đã có Orders hoặc giao dịch Tài chính (không được phép xóa cứng)
-        await tx.employees.delete({
+        // 3. Anonymize main records instead of hard deleting
+        // This preserves foreign key integrity for Orders, Financials, etc.
+        await tx.employees.update({
           where: { user_id: id },
+          data: {
+            deleted_at: new Date(),
+            bank_account_no: null,
+            bank_account_name: null,
+            bank_qr_code_url: null
+          }
         });
 
-        await tx.users.delete({
+        await tx.users.update({
           where: { user_id: id },
+          data: {
+            full_name: 'Deleted Staff',
+            email: null,
+            phone: null,
+            avatar_url: null,
+            password_hash: null,
+            status_code: 'DELETED',
+            deleted_at: new Date(),
+            is_verified: false,
+            google_id: null
+          }
         });
 
-        return { message: 'Employee and all administrative data deleted permanently' };
+        return { message: 'Employee has been anonymized and administrative data cleaned' };
       });
     } catch (error: any) {
-      if (error.code === 'P2003') {
-        throw new BadRequestException(
-          'Cannot permanently delete this employee because they have critical transaction data (Orders, Inventory Receipts, or Store Expenses). Please use the Deactivate Account feature instead.',
-        );
-      }
+      // P2003 is less likely now since we are using update instead of delete, 
+      // but we keep the try-catch for any other transaction failures.
       throw error;
     }
   }
