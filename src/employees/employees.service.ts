@@ -34,7 +34,18 @@ export class EmployeesService {
     const existingUser = await this.prisma.users.findFirst({
       where: { OR: [{ email: encryptedEmail }, { phone: encryptedPhone }] },
     });
-    if (existingUser) throw new ConflictException('User already exists');
+
+    if (existingUser) {
+      if (existingUser.status_code === 'DELETED') {
+        // Clear identifiers of the deleted user to allow the new creation
+        await this.prisma.users.update({
+          where: { user_id: existingUser.user_id },
+          data: { email: null, phone: null }
+        });
+      } else {
+        throw new ConflictException('User already exists');
+      }
+    }
 
     if (!employee_code) employee_code = await this.generateEmployeeCode();
 
@@ -79,9 +90,22 @@ export class EmployeesService {
         });
 
         if (existing) {
-          results.failed++;
-          results.errors.push({ row: index + 1, message: `Email or Phone already exists` });
-          continue;
+          // If the existing user is already DELETED, we anonymize it now to release the Email/Phone
+          if (existing.status_code === 'DELETED') {
+            await this.prisma.users.update({
+              where: { user_id: existing.user_id },
+              data: {
+                email: null,
+                phone: null,
+                deleted_at: new Date()
+              }
+            });
+            // After clearing, we can proceed to create a new user record
+          } else {
+            results.failed++;
+            results.errors.push({ row: index + 1, message: `Email or Phone already exists` });
+            continue;
+          }
         }
 
         // 2. Generate Credentials
