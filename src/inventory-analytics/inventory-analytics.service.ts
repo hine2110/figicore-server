@@ -99,12 +99,19 @@ export class InventoryAnalyticsService {
       };
     });
 
-    // --- LOGIC LỌC THÔNG MINH ---
-    // Chỉ gửi các sản phẩm THỰC SỰ có vấn đề (Có tương tác mua bán)
+    // --- BUSINESS RULE FILTER (Deterministic — AI chỉ xử lý các case đã xác định rõ ràng) ---
+    // Mục đích: Không đưa dữ liệu nhập nhằng vào AI để tránh LLM hallucinate kép
     const filteredData = mappedData.filter(item => {
-      const isLowStock = item.stock < 10 && item.sales30d > 0; // Sắp hết và CÓ bán được
-      const isOverstock = item.stock >= 30 && item.sales30d > 0 && item.sales30d <= 5; // Tồn nhiều nhưng bán ế (Có giao dịch nhưng rất ít)
-      const isBestSeller = item.sales30d > 10; // Bán cực tốt
+      // RESTOCK candidate: gần hết hàng VÀ có nhu cầu thực (stock <= 15 để có buffer)
+      const isLowStock = item.stock <= 15 && item.sales30d > 0;
+
+      // CLEARANCE candidate: tồn kho nhiều VÀ bán rất chậm (sales tuyệt đối thấp)
+      // CHỈ CLEARANCE nếu KHÔNG đồng thời là low-stock để tránh conflict
+      const isOverstock = item.stock > 20 && item.sales30d > 0 && item.sales30d <= 5 && item.stock > 15;
+
+      // Best-seller đang bán chạy (cần có trong context để AI biết trend)
+      const isBestSeller = item.sales30d > 15;
+
       const isPreorderActive = item.preCount > 0;
 
       return isLowStock || isOverstock || isBestSeller || isPreorderActive;
@@ -172,7 +179,7 @@ export class InventoryAnalyticsService {
   }
 
   /**
-   * Bước 4: Tích hợp AI (Gemini) để phân tích dữ liệu tổng hợp.
+   * Bước 4: Phân tích AI tổng hợp — phân loại RESTOCK / CLEARANCE / SKIP cho từng sản phẩm.
    */
   async analyzeWithAI(contextData: any) {
     try {
@@ -182,60 +189,103 @@ export class InventoryAnalyticsService {
           {
             role: 'system',
             content: `
-              You are a leading supply chain analyst in the collectible toy and Blindbox industry.
-              Task: Based on internal inventory data and external market trends, provide recommendations for restocking and clearance.
-              
-              ANALYSIS RULES & FINANCIAL CONSTRAINTS:
-              1. Clearance (Giảm giá xả kho): 
-                 - Conditions: ONLY suggest if current stock > 20 AND sales velocity (sl) is greater than 0 but less than 5.
-                 - NEVER suggest clearance if sales velocity (sl) is 0 (it might be a newly added product).
-                 - PRICING RULE: "suggestedDiscount" must ensure post-discount price >= [breakEvenPrice].
-              
-              2. Restock (Nhập hàng): 
-                 - Conditions: Suggest if current stock < 10 AND sales velocity (sl) > 0.
-                 - NEVER suggest restock if sales velocity (sl) is 0 (no demand).
-                 - Priority Level: URGENT if stock is 0 and sales are active.
-      
-              RETURN FORMAT (JSON):
-              {
-                "clearanceList": [
-                  { 
-                    "productId": number, 
-                    "name": "string", 
-                    "reason": "string", 
-                    "suggestedDiscount": "string", 
-                    "financialNote": "Calculation description based on Break-even" 
-                  }
-                ],
-                "restockList": [
-                  { "productId": number, "name": "string", "reason": "string", "priority": "LOW" | "MEDIUM" | "HIGH" | "URGENT" }
-                ],
-                "summary": "Expert executive summary."
-              }
+You are an autonomous Inventory Decision Engine for FIGICORE, a premium collectible toy and Blind Box retailer.
+Your ONLY job: classify each product into EXACTLY ONE outcome — RESTOCK, CLEARANCE, or SKIP. Never assign two outcomes to the same product.
+
+SECTION 1 — DATA FIELD DEFINITIONS
+Each item has: i=productId, n=name, s=stock, sl=sales30d, c=cost, b=breakEven, l=liquidateFloor
+- breakEven (b): minimum sale price to cover cost + full OPEX. Never discount below this.
+- liquidateFloor (l): absolute minimum. Backend will reject any clearance below this automatically.
+
+SECTION 2 — EXCLUSIVE DECISION TREE (apply top-down, one path per item)
+STEP 1: Is sl = 0?
+  YES -> SKIP. Reason: "No confirmed sales. May be new or stagnant listing."
+  NO  -> STEP 2
+
+STEP 2: Is s <= 15 AND sl > 0?
+  YES -> RESTOCK. STOP. Do NOT evaluate for clearance.
+  NO  -> STEP 3
+
+STEP 3: Is s > 20 AND sl >= 1 AND sl <= 5?
+  YES -> CLEARANCE. STOP.
+  NO  -> SKIP. Reason: "No significant imbalance detected."
+
+STEP 4 (RESTOCK priority level):
+  sl > 15 -> URGENT | sl >= 8 -> HIGH | sl >= 3 -> MEDIUM | sl >= 1 -> LOW
+
+STEP 5 (CLEARANCE discount calculation):
+  suggestedDiscount = ceil((1 - b/retailPrice) * 100) + 2 [+2% safety buffer above break-even]
+  Max cap: 40%. If even 5% off breaches break-even -> SKIP instead.
+  financialNote must state: breakEvenPrice, discount%, and resulting post-discount price.
+
+SECTION 3 — HARD CONFLICT RULES
+RULE A: One productId -> one list only. If conflict exists, RESTOCK wins absolutely.
+RULE B: sl > 10 = high-demand product. NEVER eligible for clearance regardless of stock.
+RULE C: "reason" must cite actual numbers from the data (e.g., "Stock at 8 with 22 sales in 30 days.").
+RULE D: Only use productIds (i) from the provided inventory data. Never invent IDs.
+RULE E: suggestedDiscount must be a "%" string like "15%". Never a plain number.
+
+SECTION 4 — FEW-SHOT EXAMPLES
+[A - RESTOCK urgent]
+Item: { i:101, s:8, sl:22, b:1024000 }
+Logic: STEP1 sl!=0. STEP2 s=8<=15 AND sl>0 -> RESTOCK. sl=22>15 -> priority=URGENT.
+Output in restockList: { productId:101, reason:"Stock critically low at 8 units with 22 sold in 30 days. Stockout imminent.", priority:"URGENT" }
+
+[B - CLEARANCE]
+Item: { i:202, s:45, sl:3, b:640000, retailPrice:800000 }
+Logic: STEP1 sl!=0. STEP2 s=45>15 NO. STEP3 s=45>20 AND sl=3 in [1-5] -> CLEARANCE.
+Discount = ceil((1-640000/800000)*100)+2 = 22%. Under 40% cap.
+Output in clearanceList: { productId:202, reason:"45 units idle with only 3 sold in 30 days. Capital locked.", suggestedDiscount:"22%", financialNote:"Break-even 640,000d. At 22% off post-discount is 624,000d — above break-even. Safe." }
+
+[C - SKIP new product]
+Item: { i:303, s:30, sl:0 }
+Logic: STEP1 sl=0 -> SKIP immediately. No output in either list.
+
+[D - CONFLICT PREVENTION]
+Item: { i:404, s:10, sl:20 }
+Logic: STEP1 sl!=0. STEP2 s=10<=15 -> RESTOCK. RULE B: sl=20>10 also blocks clearance.
+Result: appears ONLY in restockList with priority=URGENT.
+
+SECTION 5 — OUTPUT CONTRACT
+Return ONLY valid JSON with exactly these keys. No commentary. No markdown. No extra fields.
+{
+  "clearanceList": [
+    { "productId": <number>, "name": "<string>", "reason": "<cite actual numbers>", "suggestedDiscount": "<N%>", "financialNote": "<calc>" }
+  ],
+  "restockList": [
+    { "productId": <number>, "name": "<string>", "reason": "<cite actual numbers>", "priority": "LOW"|"MEDIUM"|"HIGH"|"URGENT" }
+  ],
+  "summary": "<2 sentences: total items analyzed, actions recommended, top risk>"
+}
+Final validation: scan both lists — no productId should appear in both. Remove from clearanceList if conflict.
             `
           },
           {
             role: 'user',
             content: `
-              INVENTORY DATA FORMAT LEGEND:
-              [ i=productId, n=name, s=stock, sl=sales30d, c=cost, b=breakEven, l=liquidatePrice ]
-              
-              INVENTORY DATA (Minified):
-              ${JSON.stringify(contextData.inventory)}
-              
-              MARKET TRENDS:
-              ${JSON.stringify(contextData.market)}
-              
-              OVERALL METRICS:
-              ${JSON.stringify(contextData.metrics)}
-              
-              Analysis Date: ${contextData.analysisDate}
+FIELD LEGEND: [ i=productId, n=name, s=stock, sl=sales30d, c=cost, b=breakEven, l=liquidateFloor ]
+
+INVENTORY (apply Decision Tree to EACH item independently):
+${JSON.stringify(contextData.inventory)}
+
+MARKET TRENDS (qualitative context only — do NOT override the Decision Tree rules):
+${JSON.stringify(contextData.market)}
+
+SYSTEM METRICS:
+${JSON.stringify(contextData.metrics)}
+
+Analysis Date: ${contextData.analysisDate}
+
+FINAL SELF-CHECK before outputting JSON:
+1. Any productId in BOTH clearanceList and restockList? -> Remove from clearanceList.
+2. All productIds exist in the inventory data above? -> Remove any that do not.
+3. Does each "reason" field cite actual numbers?
             `
           }
         ],
         response_format: { type: 'json_object' },
-        temperature: 0.0, // Chỉnh về 0.0 để kết quả tuyệt đối ổn định
-        seed: 12345, // Thêm seed để đảm bảo cùng data sẽ ra cùng một kết quả
+        temperature: 0.0,
+        seed: 12345,
       });
 
       const responseText = completion.choices[0]?.message?.content;
@@ -588,13 +638,15 @@ export class InventoryAnalyticsService {
         analysisDate: new Date().toISOString().split('T')[0]
       });
 
-      // 3. VALIDATE AI RESPONSE - Lọc bỏ các ID bịa đặt (hallucinated)
-      // AI có thể trả về productId không tồn tại trong DB -> gây lỗi FK constraint
+      // 3. VALIDATE AI RESPONSE - Lớp 1: Lọc bỏ các ID bịa đặt (hallucinated)
       const validVariantIds = new Set(inventoryData.map(item => item.id));
+      // Tạo lookup map để enforce business rules cứng
+      const inventoryMap = new Map(inventoryData.map(item => [item.id, item]));
 
       const originalClearance = aiAnalysis.clearanceList.length;
       const originalRestock = aiAnalysis.restockList.length;
 
+      // Lọc ID hợp lệ
       aiAnalysis.clearanceList = (aiAnalysis.clearanceList || []).filter((item: any) => {
         const isValid = validVariantIds.has(item.productId);
         if (!isValid) this.logger.warn(`[AI VALIDATION] Removed hallucinated Clearance ID: ${item.productId}`);
@@ -607,8 +659,36 @@ export class InventoryAnalyticsService {
         return isValid;
       });
 
-      this.logger.log(`[AI VALIDATION] Clearance: ${originalClearance} -> ${aiAnalysis.clearanceList.length} valid`);
-      this.logger.log(`[AI VALIDATION] Restock: ${originalRestock} -> ${aiAnalysis.restockList.length} valid`);
+      // 3b. VALIDATE AI RESPONSE - Lớp 2: HARD BUSINESS RULE ENFORCEMENT
+      // LLM có thể không tuân thủ nghiêm ngặt điều kiện nghiệp vụ → phải validate lại bằng code
+      const restockIds = new Set(aiAnalysis.restockList.map((r: any) => r.productId));
+
+      // Rule 1: RESTOCK chỉ hợp lệ nếu stock <= 15 AND có sales30d > 0
+      aiAnalysis.restockList = aiAnalysis.restockList.filter((item: any) => {
+        const inv = inventoryMap.get(item.productId);
+        if (!inv) return false;
+        const pass = inv.stock <= 15 && inv.sales30d > 0;
+        if (!pass) this.logger.warn(`[RULE ENFORCE] Rejected RESTOCK for ID ${item.productId}: stock=${inv.stock}, sales=${inv.sales30d}`);
+        return pass;
+      });
+
+      // Rule 2: CLEARANCE chỉ hợp lệ nếu stock > 20 AND 0 < sales30d <= 5
+      // Rule 3: Nếu product đã có trong restockList → TUYỆT ĐỐI không thể clearance (RESTOCK ưu tiên)
+      aiAnalysis.clearanceList = aiAnalysis.clearanceList.filter((item: any) => {
+        const inv = inventoryMap.get(item.productId);
+        if (!inv) return false;
+
+        if (restockIds.has(item.productId)) {
+          this.logger.warn(`[RULE ENFORCE] Rejected CLEARANCE for ID ${item.productId}: conflict with RESTOCK (product is low-stock + high-demand)`);
+          return false;
+        }
+
+        const pass = inv.stock > 20 && inv.sales30d > 0 && inv.sales30d <= 5;
+        if (!pass) this.logger.warn(`[RULE ENFORCE] Rejected CLEARANCE for ID ${item.productId}: stock=${inv.stock}, sales=${inv.sales30d} — does not meet clearance criteria`);
+        return pass;
+      });
+
+      this.logger.log(`[AI VALIDATION L1] Clearance: ${originalClearance} -> ${aiAnalysis.clearanceList.length} | Restock: ${originalRestock} -> ${aiAnalysis.restockList.length}`);
 
       // 4. LƯU VÀO DATABASE (Bước 5)
       await this.saveRecommendations(aiAnalysis);

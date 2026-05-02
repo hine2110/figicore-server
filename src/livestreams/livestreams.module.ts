@@ -8,6 +8,7 @@ import { LivestreamsAiController } from './livestreams-ai.controller';
 import { OrdersModule } from '../orders/orders.module';
 import { GiveawaysService } from './giveaways.service';
 import { CartModule } from '../cart/cart.module';
+import { ChatModule } from '../chat/chat.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { CartModule } from '../cart/cart.module';
     }),
     forwardRef(() => OrdersModule),
     CartModule,
+    ChatModule,
   ],
   controllers: [LivestreamsController, LivestreamsAiController],
   providers: [LivestreamsService, LivestreamLiveGateway, GiveawaysService],

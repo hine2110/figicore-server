@@ -12,6 +12,11 @@ import { LivestreamsService } from './livestreams.service';
 import { OrdersService } from '../orders/orders.service';
 import { GiveawaysService } from './giveaways.service';
 import { CartService } from '../cart/cart.service';
+import { ChatService } from '../chat/chat.service';
+
+const VIETNAMESE_PROFANITY_BLACKLIST = [
+  'đm', 'vcl', 'địt', 'lồn', 'cặc', 'chó đẻ', 'phò', 'đĩ', 'fuck', 'shit', 'bitch', 'đù', 'vãi lồn', 'cl', 'cmn', 'đcm'
+];
 
 @WebSocketGateway({
   cors: {
@@ -29,10 +34,13 @@ export class LivestreamLiveGateway implements OnGatewayConnection, OnGatewayDisc
     private readonly giveawaysService: GiveawaysService,
     @Inject(forwardRef(() => OrdersService)) private readonly ordersService: OrdersService,
     private readonly cartService: CartService,
+    private readonly chatService: ChatService,
   ) { }
 
   private roomParticipants: Map<string, Map<string, { userId?: number; isHost: boolean }>> = new Map();
   private roomChatHistory: Map<string, any[]> = new Map();
+  private userInfractions: Map<number, number> = new Map();
+  private mutedUsers: Map<number, number> = new Map();
   private giveawayStates: Map<string, {
     id: number;
     keyword: string;
@@ -94,6 +102,16 @@ export class LivestreamLiveGateway implements OnGatewayConnection, OnGatewayDisc
       });
     }
 
+    // --- MUTE RECOVERY ---
+    if (userId) {
+      const muteExpiry = this.mutedUsers.get(userId);
+      if (muteExpiry && Date.now() < muteExpiry) {
+        client.emit('user_muted', { userId, reason: 'Previous violations (Still muted)', muteExpiry });
+      } else if (muteExpiry) {
+        this.mutedUsers.delete(userId);
+      }
+    }
+
     console.log(`[Socket] Room ${roomId}: Client ${client.id} joined (IsHost: ${!!isHost}, UserID: ${userId})`);
   }
 
@@ -132,7 +150,40 @@ export class LivestreamLiveGateway implements OnGatewayConnection, OnGatewayDisc
   }
 
   @SubscribeMessage('send_chat')
-  handleSendChat(client: any, payload: { roomId: string; userId?: number; name: string; text: string; rank?: string }) {
+  async handleSendChat(client: any, payload: { roomId: string; userId?: number; name: string; text: string; rank?: string }) {
+    const userId = payload.userId;
+    
+    // Check if user is muted
+    if (userId) {
+      const muteExpiry = this.mutedUsers.get(userId);
+      if (muteExpiry && Date.now() < muteExpiry) {
+        client.emit('user_muted', { userId, muteExpiry });
+        client.emit('chat_rejected', { message: 'You are currently muted for violating community guidelines.' });
+        return;
+      } else if (muteExpiry) {
+        this.mutedUsers.delete(userId); // Mute expired
+      }
+    }
+
+    const textLower = payload.text.toLowerCase();
+    const isTier1Toxic = VIETNAMESE_PROFANITY_BLACKLIST.some(word => {
+      return textLower.includes(word); 
+    });
+
+    if (isTier1Toxic && userId) {
+      const infractions = (this.userInfractions.get(userId) || 0) + 1;
+      this.userInfractions.set(userId, infractions);
+
+      if (infractions >= 5) {
+        const expiry = Date.now() + 10 * 60 * 1000;
+        this.mutedUsers.set(userId, expiry); // 10 minutes
+        this.server.to(payload.roomId).emit('user_muted', { userId, reason: 'Spamming profanity', muteExpiry: expiry });
+      }
+
+      client.emit('chat_rejected', { message: 'Your message violates community guidelines.' });
+      return; // Do not broadcast
+    }
+
     const msg = {
       id: Date.now().toString() + Math.random().toString(36).substring(2, 7),
       user_id: payload.userId,
@@ -163,6 +214,33 @@ export class LivestreamLiveGateway implements OnGatewayConnection, OnGatewayDisc
     // ---------------------
 
     this.server.to(payload.roomId).emit('chat_message', msg);
+
+    // Tier 2: Async AI Moderation
+    if (userId) {
+      this.chatService.moderateMessage(payload.text).then(isToxic => {
+        if (isToxic) {
+          const infractions = (this.userInfractions.get(userId) || 0) + 1;
+          this.userInfractions.set(userId, infractions);
+
+          if (infractions >= 5) {
+            const expiry = Date.now() + 10 * 60 * 1000;
+            this.mutedUsers.set(userId, expiry); // 10 minutes
+            this.server.to(payload.roomId).emit('user_muted', { userId, reason: 'Repeated violations', muteExpiry: expiry });
+          }
+
+          // Delete message from all clients
+          this.server.to(payload.roomId).emit('delete_message', { messageId: msg.id });
+          
+          // Remove from local memory history
+          const hist = this.roomChatHistory.get(payload.roomId);
+          if (hist) {
+            this.roomChatHistory.set(payload.roomId, hist.filter((m: any) => m.id !== msg.id));
+          }
+        }
+      }).catch(err => {
+        console.error('Moderation error:', err);
+      });
+    }
   }
 
   @SubscribeMessage('refresh_products')
