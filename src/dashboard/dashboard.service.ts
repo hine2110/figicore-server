@@ -5,12 +5,13 @@ import { PrismaService } from '../prisma/prisma.service';
 export class DashboardService {
   private readonly logger = new Logger(DashboardService.name);
 
-  constructor(private prisma: PrismaService) {}
+  constructor(private prisma: PrismaService) { }
 
   async getSummaryStats() {
     try {
-      const [totalRevenue, totalOrders, totalUsers, totalProducts] = await Promise.all([
+      const [totalRevenue, totalRefunds, totalOrders, totalUsers, totalProducts] = await Promise.all([
         this.prisma.payment_transactions.aggregate({ _sum: { amount: true } }),
+        this.prisma.wallet_transactions.aggregate({ where: { type_code: 'REFUND' }, _sum: { amount: true } }),
         this.prisma.orders.count({ where: { status_code: { notIn: ['CANCELLED', 'RETURNED'] } } }),
         this.prisma.users.count(),
         this.prisma.products.count()
@@ -18,6 +19,7 @@ export class DashboardService {
 
       return {
         totalRevenue: Number(totalRevenue._sum.amount) || 0,
+        totalRefunds: Number(totalRefunds._sum.amount) || 0,
         totalOrders,
         totalUsers,
         totalProducts
@@ -81,24 +83,25 @@ export class DashboardService {
       const prevEnd = new Date(startDate.getTime() - 1);
 
       const [online, offline, prevOnline, prevOffline, activeStaff, lowStockAlerts, revenueTrend] = await Promise.all([
-          this.calculateAnalytics(startDate, endDate, false), // Online
-          this.calculateAnalytics(startDate, endDate, true),  // Offline (POS)
-          this.calculateAnalytics(prevStart, prevEnd, false),
-          this.calculateAnalytics(prevStart, prevEnd, true),
-          this.prisma.timesheets.count({ where: { check_out_at: null, created_at: { gte: today } } }),
-          this.prisma.product_variants.count({ where: { stock_available: { lte: 10 } } }),
-          this.getRevenueChart(startDate, endDate)
+        this.calculateAnalytics(startDate, endDate, false), // Online
+        this.calculateAnalytics(startDate, endDate, true),  // Offline (POS)
+        this.calculateAnalytics(prevStart, prevEnd, false),
+        this.calculateAnalytics(prevStart, prevEnd, true),
+        this.prisma.timesheets.count({ where: { check_out_at: null, created_at: { gte: today } } }),
+        this.prisma.product_variants.count({ where: { stock_available: { lte: 10 } } }),
+        this.getRevenueChart(startDate, endDate)
       ]);
 
       return {
-          online,
-          offline,
-          totalRevenue: online.totalRevenue + offline.totalRevenue,
-          totalOrders: online.totalOrders + offline.totalOrders,
-          prevTotalRevenue: prevOnline.totalRevenue + prevOffline.totalRevenue,
-          activeStaff,
-          lowStockAlerts,
-          revenueTrend
+        online,
+        offline,
+        totalRevenue: online.totalRevenue + offline.totalRevenue,
+        totalRefunds: online.totalRefunds + offline.totalRefunds,
+        totalOrders: online.totalOrders + offline.totalOrders,
+        prevTotalRevenue: prevOnline.totalRevenue + prevOffline.totalRevenue,
+        activeStaff,
+        lowStockAlerts,
+        revenueTrend
       };
     } catch (error) {
       this.logger.error('Failed to get manager stats', error);
@@ -122,14 +125,14 @@ export class DashboardService {
       nextDate.setDate(date.getDate() + step);
 
       const [onlineRev, offlineRev] = await Promise.all([
-          this.prisma.orders.aggregate({
-              _sum: { total_amount: true },
-              where: { created_at: { gte: date, lt: nextDate }, channel_code: { not: 'POS' }, status_code: { in: ['PROCESSING', 'PACKED', 'SHIPPING', 'COMPLETED'] } }
-          }),
-          this.prisma.orders.aggregate({
-              _sum: { total_amount: true },
-              where: { created_at: { gte: date, lt: nextDate }, channel_code: 'POS', status_code: { in: ['PROCESSING', 'PACKED', 'SHIPPING', 'COMPLETED'] } }
-          })
+        this.prisma.orders.aggregate({
+          _sum: { total_amount: true },
+          where: { created_at: { gte: date, lt: nextDate }, channel_code: { not: 'POS' }, status_code: { in: ['PROCESSING', 'PACKED', 'SHIPPING', 'COMPLETED'] } }
+        }),
+        this.prisma.orders.aggregate({
+          _sum: { total_amount: true },
+          where: { created_at: { gte: date, lt: nextDate }, channel_code: 'POS', status_code: { in: ['PROCESSING', 'PACKED', 'SHIPPING', 'COMPLETED'] } }
+        })
       ]);
 
       data.push({
@@ -201,10 +204,10 @@ export class DashboardService {
         lowStockAlerts: lowStockCount,
         inventoryTrend,
         analytics: {
-            current: currentAnalytics,
-            previous: previousAnalytics,
-            growth,
-            activePreorderContracts
+          current: currentAnalytics,
+          previous: previousAnalytics,
+          growth,
+          activePreorderContracts
         }
       };
     } catch (error) {
@@ -216,73 +219,99 @@ export class DashboardService {
   private async calculateAnalytics(start: Date, end: Date, isPos: boolean) {
     const channelFilter = isPos ? 'POS' : { not: 'POS' };
     const whereClause: any = {
-        created_at: { gte: start, lte: end },
-        status_code: { in: ['PROCESSING', 'PACKED', 'SHIPPING', 'COMPLETED'] },
-        channel_code: channelFilter
+      created_at: { gte: start, lte: end },
+      status_code: { in: ['PROCESSING', 'PACKED', 'SHIPPING', 'COMPLETED', 'RETURNING', 'RETURNED'] },
+      channel_code: channelFilter
     };
 
     const orders = await this.prisma.orders.findMany({
-        where: whereClause,
-        include: { 
-            order_items: { 
-                include: { 
-                    product_variants: { include: { products: true } } 
-                } 
-            } 
+      where: whereClause,
+      include: {
+        order_items: {
+          include: {
+            product_variants: { include: { products: true } }
+          }
         }
+      }
     });
+
+    // Calculate Refunds for these orders
+    let refundsByOrder = new Map<number, number>();
+    if (!isPos && orders.length > 0) {
+        const returnReqs = await this.prisma.return_requests.findMany({
+            where: { order_id: { in: orders.map(o => o.order_id) }, status_code: 'COMPLETED' },
+            select: { return_id: true, order_id: true }
+        });
+        if (returnReqs.length > 0) {
+            const refCodes = returnReqs.map(r => `RETURN-${r.return_id}`);
+            const walletTrx = await this.prisma.wallet_transactions.findMany({
+                where: { type_code: 'REFUND', reference_code: { in: refCodes } },
+                select: { amount: true, reference_code: true }
+            });
+            for (const req of returnReqs) {
+                const trx = walletTrx.find(t => t.reference_code === `RETURN-${req.return_id}`);
+                if (trx) {
+                    refundsByOrder.set(req.order_id, Number(trx.amount));
+                }
+            }
+        }
+    }
 
     const revenueMap = { RETAIL: 0, LIVESTREAM: 0, PRE_ORDER: 0, BLINDBOX: 0, AUCTION: 0, GIVEAWAY: 0 };
     let totalRevenue = 0;
+    let totalRefunds = 0;
     let shippingCollected = 0;
     let shippingDiscount = 0;
     let freeshipOrders = 0;
 
     orders.forEach(order => {
-        const amount = Number(order.total_amount);
-        totalRevenue += amount;
+      const amount = Number(order.total_amount);
+      const refundAmount = refundsByOrder.get(order.order_id) || 0;
+      
+      totalRevenue += amount;
+      totalRefunds += refundAmount;
 
-        // Shipping stats
-        const sFee = Number(order.shipping_fee || 0);
-        const originalFee = Number(order.original_shipping_fee || 0);
-        
-        shippingCollected += sFee;
-        
-        if (order.shipping_promotion_id) {
-            freeshipOrders++;
-            shippingDiscount += Math.max(0, originalFee - sFee);
-        }
-        
-        // POS only sells RETAIL
-        if (isPos) {
-            revenueMap['RETAIL'] += amount;
-            return;
-        }
+      // Shipping stats
+      const sFee = Number(order.shipping_fee || 0);
+      const originalFee = Number(order.original_shipping_fee || 0);
 
-        const type = order.order_items[0]?.product_variants?.products?.type_code || 'RETAIL';
-        if (revenueMap.hasOwnProperty(type)) {
-            revenueMap[type] += amount;
-        } else {
-            revenueMap['RETAIL'] += amount;
-        }
+      shippingCollected += sFee;
+
+      if (order.shipping_promotion_id) {
+        freeshipOrders++;
+        shippingDiscount += Math.max(0, originalFee - sFee);
+      }
+
+      // POS only sells RETAIL
+      if (isPos) {
+        revenueMap['RETAIL'] += amount;
+        return;
+      }
+
+      const type = order.order_items[0]?.product_variants?.products?.type_code || 'RETAIL';
+      if (revenueMap.hasOwnProperty(type)) {
+        revenueMap[type] += amount;
+      } else {
+        revenueMap['RETAIL'] += amount;
+      }
     });
 
     const [
-        retailStats,
-        liveStats,
-        preStats,
-        blindboxStats,
-        auctionStats,
-        giveawayStats,
-        shipments
+      retailStats,
+      liveStats,
+      preStats,
+      blindboxStats,
+      auctionStats,
+      giveawayStats,
+      shipments
     ] = await Promise.all([
-        this.countOrderByType(start, end, 'RETAIL', isPos),
-        isPos ? Promise.resolve({ count: 0 }) : this.countOrderByType(start, end, 'LIVESTREAM', isPos),
-        isPos ? Promise.resolve({ count: 0 }) : this.countOrderByType(start, end, 'PRE_ORDER', isPos),
-        isPos ? Promise.resolve({ count: 0 }) : this.countOrderByType(start, end, 'BLINDBOX', isPos),
-        isPos ? Promise.resolve({ count: 0 }) : this.countOrderByType(start, end, 'AUCTION', isPos),
-        isPos ? Promise.resolve({ count: 0 }) : this.countOrderByType(start, end, 'GIVEAWAY', isPos),
-        isPos ? Promise.resolve({ _sum: { shipping_fee: 0 } }) : this.prisma.shipments.aggregate({ _sum: { shipping_fee: true }, where: { created_at: { gte: start, lte: end } } })
+      this.countOrderByType(start, end, 'RETAIL', isPos),
+      isPos ? Promise.resolve({ count: 0 }) : this.countOrderByType(start, end, 'LIVESTREAM', isPos),
+      isPos ? Promise.resolve({ count: 0 }) : this.countOrderByType(start, end, 'PRE_ORDER', isPos),
+      isPos ? Promise.resolve({ count: 0 }) : this.countOrderByType(start, end, 'BLINDBOX', isPos),
+      isPos ? Promise.resolve({ count: 0 }) : this.countOrderByType(start, end, 'AUCTION', isPos),
+      isPos ? Promise.resolve({ count: 0 }) : this.countOrderByType(start, end, 'GIVEAWAY', isPos),
+      isPos ? Promise.resolve({ _sum: { shipping_fee: 0 } }) : this.prisma.shipments.aggregate({ _sum: { shipping_fee: true }, where: { created_at: { gte: start, lte: end } } })
     ]);
 
     const shippingPaid = Number(shipments._sum.shipping_fee || 0);
@@ -290,6 +319,7 @@ export class DashboardService {
     return {
         totalOrders: orders.length,
         totalRevenue,
+        totalRefunds,
         shippingCollected,
         shippingPaid,
         shippingDiscount,
@@ -316,21 +346,21 @@ export class DashboardService {
   private async countOrderByType(start: Date, end: Date, type: string, isPos: boolean) {
     const channelFilter = isPos ? 'POS' : { not: 'POS' };
     const where: any = {
-        created_at: { gte: start, lte: end },
-        status_code: { in: ['PROCESSING', 'PACKED', 'SHIPPING', 'COMPLETED'] },
-        channel_code: channelFilter,
-        order_items: {
-            some: type === 'GIVEAWAY' ? { giveaway_claim_id: { not: null } } : 
-                  type === 'AUCTION' ? { metadata: { path: ['is_auction'], equals: true } } :
-                  { product_variants: { products: { type_code: type } } }
-        }
+      created_at: { gte: start, lte: end },
+      status_code: { in: ['PROCESSING', 'PACKED', 'SHIPPING', 'COMPLETED', 'RETURNING', 'RETURNED'] },
+      channel_code: channelFilter,
+      order_items: {
+        some: type === 'GIVEAWAY' ? { giveaway_claim_id: { not: null } } :
+          type === 'AUCTION' ? { metadata: { path: ['is_auction'], equals: true } } :
+            { product_variants: { products: { type_code: type } } }
+      }
     };
-    
+
     if (type === 'PRE_ORDER' && !isPos) {
-        const count = await this.prisma.preorder_contracts.count({
-            where: { created_at: { gte: start, lte: end } }
-        });
-        return { count, revenue: 0 };
+      const count = await this.prisma.preorder_contracts.count({
+        where: { created_at: { gte: start, lte: end } }
+      });
+      return { count, revenue: 0 };
     }
 
     const count = await this.prisma.orders.count({ where });
@@ -338,16 +368,16 @@ export class DashboardService {
   }
 
   private calculateGrowth(curr: any, prev: any) {
-      const calc = (c: number, p: number) => {
-          if (!p) return c > 0 ? 100 : 0;
-          return Math.round(((c - p) / p) * 100);
-      };
+    const calc = (c: number, p: number) => {
+      if (!p) return c > 0 ? 100 : 0;
+      return Math.round(((c - p) / p) * 100);
+    };
 
-      return {
-          totalOrders: calc(curr.totalOrders, prev.totalOrders),
-          onlineRevenue: calc(curr.totalRevenue, prev.totalRevenue),
-          packedOrders: 0 
-      };
+    return {
+      totalOrders: calc(curr.totalOrders, prev.totalOrders),
+      onlineRevenue: calc(curr.totalRevenue, prev.totalRevenue),
+      packedOrders: 0
+    };
   }
 
   async getWarehouseChart(start: Date, end: Date) {

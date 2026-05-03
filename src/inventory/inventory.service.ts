@@ -59,6 +59,11 @@ export class InventoryService {
           // Do NOT add to Retail Stock (stock_available)
 
           if (variant.product_preorder_configs) {
+            const bookingEnd = variant.product_preorder_configs.booking_end_date;
+            if (bookingEnd && new Date(bookingEnd) > new Date()) {
+              throw new BadRequestException(`Sản phẩm Pre-order ${variant.sku} vẫn đang trong thời gian nhận cọc. Không thể tiến hành nhập kho lúc này để tránh lỗi logic.`);
+            }
+
             await tx.product_preorder_configs.update({
               where: { config_id: variant.product_preorder_configs.config_id },
               data: {
@@ -189,6 +194,11 @@ export class InventoryService {
         if (isPreorder) {
            // PREORDER LOGIC: Add to Virtual Holding Stock
            if (variant.product_preorder_configs) {
+               const bookingEnd = variant.product_preorder_configs.booking_end_date;
+               if (bookingEnd && new Date(bookingEnd) > new Date()) {
+                   throw new BadRequestException(`Sản phẩm Pre-order ${variant.sku} vẫn đang trong thời gian nhận cọc. Không thể tiến hành nhập kho lúc này để tránh lỗi logic.`);
+               }
+
                await tx.product_preorder_configs.update({
                    where: { config_id: variant.product_preorder_configs.config_id },
                    data: { stock_held: { increment: item.quantity_good } }

@@ -1462,4 +1462,66 @@ export class ProductsService {
       message: 'Gia hạn thành công. Hạn đặt cọc mới: ' + newEndDate.toLocaleDateString('vi-VN'),
     };
   }
-}
+
+  // --- PREORDER: FORCE END BOOKING FOR DEMO/TESTING ---
+  async forceEndPreorder(variantId: number): Promise<any> {
+    const config = await this.prisma.product_preorder_configs.findUnique({
+      where: { variant_id: variantId },
+    });
+
+    if (!config) {
+      throw new BadRequestException('Không tìm thấy cấu hình Pre-order cho variant này.');
+    }
+
+    // Set end date to current time to close the pool immediately
+    const newEndDate = new Date();
+    // Setting release date to current time to avoid future logic conflicts if needed
+    const newReleaseDate = new Date();
+
+    const updated = await this.prisma.product_preorder_configs.update({
+      where: { variant_id: variantId },
+      data: {
+        booking_end_date: newEndDate,
+        release_date: newReleaseDate,
+        updated_at: new Date(),
+      },
+    });
+
+    this.logger.warn(
+      `[PREORDER FORCE END] variant_id=${variantId} | Booking closed at=${newEndDate.toISOString()} | Release date moved to=${newReleaseDate.toISOString()}`
+    );
+
+    return {
+      variant_id: variantId,
+      booking_end_date: newEndDate,
+      release_date: newReleaseDate,
+      message: 'Đã ép kết thúc đợt đặt cọc và dời ngày release về hiện tại phục vụ quá trình test.',
+    };
+  }
+
+  // --- PREORDER: LIST ACTIVE PREORDERS FOR DEMO/TESTING ---
+  async getActivePreordersForDev(): Promise<any> {
+    const activePreorders = await this.prisma.product_preorder_configs.findMany({
+      where: {
+        booking_end_date: { gt: new Date() } // Still active
+      },
+      include: {
+        product_variants: {
+          include: {
+            products: true
+          }
+        }
+      }
+    });
+
+    return activePreorders.map(config => ({
+      variant_id: config.variant_id,
+      product_id: config.product_variants?.product_id,
+      product_name: config.product_variants?.products?.name,
+      variant_name: config.product_variants?.option_name,
+      sku: config.product_variants?.sku,
+      booking_end_date: config.booking_end_date,
+      release_date: config.release_date
+    }));
+  }
+}

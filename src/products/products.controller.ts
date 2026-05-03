@@ -82,6 +82,18 @@ export class ProductsController {
     return this.productsService.extendPreorderBooking(+variantId);
   }
 
+  // ⚠️ PREORDER: Liệt kê các pre-order đang đếm ngược (Dành cho DEV/TESTING/DEMO lấy Variant ID)
+  @Get('preorder/active-list')
+  getActivePreorders() {
+    return this.productsService.getActivePreordersForDev();
+  }
+
+  // ⚠️ PREORDER: Ép kết thúc thời gian đặt cọc (Dành cho DEV/TESTING/DEMO)
+  @Patch('preorder/:variantId/force-end')
+  forceEndPreorder(@Param('variantId') variantId: string) {
+    return this.productsService.forceEndPreorder(+variantId);
+  }
+
 
   @Get(':id')
   findOne(@Param('id') id: string) {
