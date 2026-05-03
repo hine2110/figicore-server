@@ -1,4 +1,4 @@
-import { Injectable, ConflictException } from '@nestjs/common';
+import { Injectable, ConflictException, BadRequestException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateEmployeeDto } from './dto/create-employee.dto';
 import { ImportEmployeeDto } from './dto/import-employee.dto';
@@ -34,7 +34,18 @@ export class EmployeesService {
     const existingUser = await this.prisma.users.findFirst({
       where: { OR: [{ email: encryptedEmail }, { phone: encryptedPhone }] },
     });
-    if (existingUser) throw new ConflictException('User already exists');
+
+    if (existingUser) {
+      if (existingUser.status_code === 'DELETED') {
+        // Clear identifiers of the deleted user to allow the new creation
+        await this.prisma.users.update({
+          where: { user_id: existingUser.user_id },
+          data: { email: null, phone: null }
+        });
+      } else {
+        throw new ConflictException('User already exists');
+      }
+    }
 
     if (!employee_code) employee_code = await this.generateEmployeeCode();
 
@@ -79,9 +90,22 @@ export class EmployeesService {
         });
 
         if (existing) {
-          results.failed++;
-          results.errors.push({ row: index + 1, message: `Email or Phone already exists` });
-          continue;
+          // If the existing user is already DELETED, we anonymize it now to release the Email/Phone
+          if (existing.status_code === 'DELETED') {
+            await this.prisma.users.update({
+              where: { user_id: existing.user_id },
+              data: {
+                email: null,
+                phone: null,
+                deleted_at: new Date()
+              }
+            });
+            // After clearing, we can proceed to create a new user record
+          } else {
+            results.failed++;
+            results.errors.push({ row: index + 1, message: `Email or Phone already exists` });
+            continue;
+          }
         }
 
         // 2. Generate Credentials
@@ -176,13 +200,15 @@ export class EmployeesService {
       where.users = {
         ...where.users,
         role_code: role,
+        status_code: { not: 'DELETED' }
       };
     } else {
       where.users = {
         ...where.users,
         role_code: {
           notIn: ['ADMIN', 'SUPER_ADMIN']
-        }
+        },
+        status_code: { not: 'DELETED' }
       };
     }
 
@@ -301,6 +327,114 @@ export class EmployeesService {
       });
     } catch (e) {
       console.error('[PII Audit] Failed to write audit log:', e.message);
+    }
+  }
+
+  async remove(id: number) {
+    const employee = await this.prisma.employees.findUnique({
+      where: { user_id: id },
+    });
+
+    if (!employee) {
+      throw new NotFoundException('Employee not found');
+    }
+
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        // 1. Dọn dẹp dữ liệu Hành chính/Lịch trình
+        
+        // Lấy danh sách ID lịch làm việc để xóa bảng công (timesheets) liên quan
+        const schedules = await tx.work_schedules.findMany({
+          where: { user_id: id },
+          select: { schedule_id: true }
+        });
+        const scheduleIds = schedules.map(s => s.schedule_id);
+
+        if (scheduleIds.length > 0) {
+          // Xóa các bảng liên quan đến chấm công và điều chỉnh
+          // Prisma deleteMany không hỗ trợ filter lồng nhau (nested), nên ta xóa trực tiếp theo user_id
+          await tx.timesheet_corrections.deleteMany({
+            where: { OR: [{ user_id: id }, { reviewer_id: id }] }
+          });
+          
+          await tx.timesheets.deleteMany({
+            where: { schedule_id: { in: scheduleIds } }
+          });
+        }
+
+        // Xóa lịch làm việc
+        await tx.work_schedules.deleteMany({ where: { user_id: id } });
+
+        // Xóa đơn nghỉ phép
+        await tx.leave_requests.deleteMany({ where: { user_id: id } });
+
+        // Xóa các lịch sử thay đổi lương (Administrative)
+        await tx.salary_change_histories.deleteMany({
+          where: { OR: [{ user_id: id }, { changed_by_id: id }] }
+        });
+
+        // 2. Dọn dẹp dữ liệu Hệ thống của User
+        await tx.notifications.deleteMany({ where: { user_id: id } });
+        await tx.user_login_logs.deleteMany({ where: { user_id: id } });
+        await tx.pii_access_logs.deleteMany({ 
+          where: { OR: [{ accessed_by: id }, { target_user_id: id }] } 
+        });
+        await tx.profile_update_requests.deleteMany({ where: { user_id: id } });
+        await tx.user_vouchers.deleteMany({ where: { user_id: id } });
+        await tx.addresses.deleteMany({ where: { user_id: id } });
+        
+        // Xóa ví nếu có
+        await tx.wallets.deleteMany({ where: { user_id: id } });
+
+        // Xóa dữ liệu khuôn mặt (Face Descriptor) để có thể đăng ký lại
+        await tx.system_lookups.deleteMany({
+          where: {
+            type: 'FACE_DESCRIPTOR',
+            code: id.toString()
+          }
+        });
+
+        // Xóa giỏ hàng (nếu có)
+        const userCarts = await tx.carts.findMany({ where: { user_id: id } });
+        const cartIds = userCarts.map(c => c.cart_id);
+        if (cartIds.length > 0) {
+          await tx.cart_items.deleteMany({ where: { cart_id: { in: cartIds } } });
+          await tx.carts.deleteMany({ where: { user_id: id } });
+        }
+
+        // 3. Anonymize main records instead of hard deleting
+        // This preserves foreign key integrity for Orders, Financials, etc.
+        await tx.employees.update({
+          where: { user_id: id },
+          data: {
+            deleted_at: new Date(),
+            bank_account_no: null,
+            bank_account_name: null,
+            bank_qr_code_url: null
+          }
+        });
+
+        await tx.users.update({
+          where: { user_id: id },
+          data: {
+            full_name: 'Deleted Staff',
+            email: null,
+            phone: null,
+            avatar_url: null,
+            password_hash: null,
+            status_code: 'DELETED',
+            deleted_at: new Date(),
+            is_verified: false,
+            google_id: null
+          }
+        });
+
+        return { message: 'Employee has been anonymized and administrative data cleaned' };
+      });
+    } catch (error: any) {
+      // P2003 is less likely now since we are using update instead of delete, 
+      // but we keep the try-catch for any other transaction failures.
+      throw error;
     }
   }
 }
