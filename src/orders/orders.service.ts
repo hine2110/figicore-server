@@ -1514,7 +1514,7 @@ export class OrdersService {
 
     const orders = await this.prisma.orders.findMany({
       where,
-      orderBy: { created_at: 'desc' }, // Latest First for Admin
+      orderBy: { created_at: status === 'PROCESSING' ? 'asc' : 'desc' }, // FIFO for Packing Queue, LIFO for Others
       include: {
         users: {
           select: {

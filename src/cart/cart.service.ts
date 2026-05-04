@@ -95,10 +95,14 @@ export class CartService {
 
     // BRANCHED VALIDATION: Pre-order vs Retail vs Blindbox
     if (variant.products.type_code === 'PREORDER' || variant.product_preorder_configs) {
-      // Pre-order Validation: Check Slots
+      // Pre-order Validation: Check Slots and Expiry
       const def = variant.product_preorder_configs;
       if (!def) {
         throw new BadRequestException('Pre-order configuration missing');
+      }
+
+      if (def.booking_end_date && new Date() > new Date(def.booking_end_date)) {
+        throw new BadRequestException(`Thời gian đặt cọc cho sản phẩm "${variant.sku}" đã kết thúc.`);
       }
 
       const currentSold = def.sold_slots || 0;
@@ -245,6 +249,11 @@ export class CartService {
          // Re-validate totals for Preorder/Blindbox/Livestream and normal stock
          if (variant.products.type_code === 'PREORDER' || variant.product_preorder_configs) {
            const def = variant.product_preorder_configs;
+
+           if (def?.booking_end_date && new Date() > new Date(def.booking_end_date)) {
+             throw new BadRequestException(`Thời gian đặt cọc cho sản phẩm "${variant.sku}" đã kết thúc.`);
+           }
+
            if (def?.max_qty_per_user && newQuantity > def.max_qty_per_user) {
              throw new BadRequestException(`Limit exceeded. You include this add, total would be ${newQuantity}. Max: ${def.max_qty_per_user}`);
            }
