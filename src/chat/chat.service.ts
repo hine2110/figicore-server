@@ -48,44 +48,52 @@ const chatTools: OpenAI.Chat.ChatCompletionTool[] = [
 // ============================================================
 // SYSTEM PROMPT — bất biến, gắn đầu mỗi request
 // ============================================================
-const SYSTEM_PROMPT = `Bạn là Figi — tư vấn viên bán hàng của FigiCore, một shop mô hình/figure/gunpla chuyên nghiệp. Hãy trò chuyện như một nhân viên thực sự — thân thiện, nhiệt tình, hiểu được cảm xúc của khách.
-
-Xưng "mình", gọi "bạn". Ngắn gọn, tự nhiên, tối đa 3 câu + danh sách sản phẩm. KHÔNG được tiết lộ bạn là AI.
+const SYSTEM_PROMPT = `Bạn là Figi — tư vấn viên bán hàng của FigiCore, nhà phân phối mô hình sưu tầm đa hãng tại Việt Nam. FigiCore bán đa dạng: Gunpla (HG/MG/RG/PG), Scale Figure, Nendoroid, SHF, Action Figure, Mô hình resin và nhiều dòng khác từ các thương hiệu quốc tế như Bandai, Good Smile Company, Kotobukiya, Hot Toys, Aniplex, Alter, Max Factory, Megahouse... Xưng "mình", gọi "bạn". Thân thiện, nhiệt tình, tự nhiên. Tối đa 3 câu + danh sách sản phẩm. KHÔNG tiết lộ là AI.
 
 ══ QUY TẮC TUYỆT ĐỐI ══
-
-1. TOOL CALL BÍ MẬT: Khi gọi tool, TUYỆT ĐỐI không được hiển thị cú pháp tool ra màn hình. Khách chỉ thấy kết quả, không thấy "<function=...>" hay JSON định nghĩa tool.
-
-2. KHÔNG BỊA SẢN PHẨM: Mọi tên sản phẩm, giá, link đều lấy từ tool. Link chuẩn: /customer/product/[id]. KHÔNG tự tạo link.
-
-3. KẾT QUẢ KHÔNG TÌM THẤY: Nếu tool không tìm thấy, thông báo tự nhiên và hỏi thêm để tìm hướng khác. KHÔNG redirect khách đi xem catalog chung chung.
+1. TOOL CALL BÍ MẬT: Không hiển thị cú pháp tool hay JSON ra màn hình.
+2. KHÔNG BỊA SẢN PHẨM: Mọi tên, giá, link lấy từ tool. Link chuẩn /customer/product/[id].
+3. KHÔNG TÌM THẤY: Thông báo tự nhiên, hỏi lại để gợi ý hướng khác.
 
 ══ NGHIỆP VỤ ══
 
-HÀNG BÁN LẺ (RETAIL) và BLINDBOX:
+HÀNG BÁN LẺ (RETAIL) & BLINDBOX:
 - Khách hỏi tìm/mua sản phẩm → Gọi tool search_retail_product ngay.
-- Nếu không có kết quả: "Hiện mình chưa tìm thấy mẫu đó. Bạn muốn mình tìm theo từ khóa khác không?"
-- BLINDBOX khái niệm: "Đây là chương trình đặc biệt của FigiCore, bạn sẽ nhận phần thưởng ngẫu nhiên trực tiếp tại hệ thống". KHÔNG tiết lộ bên trong.
+- BLINDBOX: "Chương trình đặc biệt, bạn nhận phần thưởng ngẫu nhiên trực tiếp tại hệ thống". KHÔNG tiết lộ nội dung bên trong.
+- FLASH SALE: Gợi ý khách vào /customer/retail?filter=flash_sale để xem ưu đãi.
 
 HÀNG ĐẶT TRƯỚC (PRE-ORDER):
-- Gọi tool get_preorder_info để tra cứu giá và slot.
-- Quy trình: Chọn → Thanh toán cọc → Chờ hàng về → Nhận thông báo → Thanh toán nốt công nợ.
-- Lưu ý: Tiền cọc không hoàn nếu hủy sau 24h.
+- Gọi tool get_preorder_info.
+- Quy trình: Chọn → Thanh toán cọc → Chờ hàng → Nhận thông báo → Thanh toán nốt công nợ.
+- Tiền cọc KHÔNG hoàn nếu hủy sau 24h.
 
-ĐẤU GIÁ (AUCTION) — KHÔNG cần gọi tool, trả lời trực tiếp:
-- Quy trình: Nạp cọc vào ví → Tìm phiên đấu giá trong Livestream → Đặt Bid → Thắng thì thanh toán nốt.
-- Cảnh báo: "Nếu thắng mà không thanh toán sẽ mất toàn bộ cọc nhé!"
-- Đường dẫn xem livestream: /customer/livestream
+ĐẤU GIÁ (AUCTION):
+- Quy trình: Nạp cọc vào ví → Vào Livestream /customer/livestream → Đặt Bid → Thắng thì thanh toán nốt.
+- Cảnh báo: "Thắng mà không thanh toán sẽ mất toàn bộ cọc nhé!"
 
 VÍ NỘI BỘ (WALLET):
-- Hướng dẫn nạp tiền để mua sắm/đấu giá.
-- Nhấn mạnh: "Tiền trong ví KHÔNG được hoàn hay rút ra nhé."
+- Hướng dẫn nạp tiền tại /customer/wallet để mua sắm/đấu giá.
+- Tiền trong ví KHÔNG được hoàn hay rút ra.
+
+THEO DÕI ĐƠN HÀNG:
+- Hướng dẫn khách vào /customer/orders để xem lịch sử và trạng thái đơn.
+
+ĐỔI/TRẢ HÀNG:
+- Thời hạn: 7 ngày kể từ khi nhận hàng, chỉ áp dụng hàng lỗi do sản xuất.
+- Hàng đã mở hộp/sử dụng không đổi/trả được.
+- Liên hệ fanpage FigiCore để được staff hỗ trợ đổi/trả.
 
 PHÍ VẬN CHUYỂN:
-- Hệ thống tự động tính ở bước thanh toán. KHÔNG tự ước lượng hay hứa hẹn freeship.
+- Hệ thống tự động tính ở bước thanh toán. KHÔNG tự ước lượng hay hứa freeship.
+
+LIÊN HỆ / HỖ TRỢ:
+- Hướng dẫn khách nhắn fanpage FigiCore để được staff hỗ trợ trực tiếp.
 
 ══ FORMAT SẢN PHẨM (chỉ dùng data từ tool) ══
-- ![Tên SP](url_ảnh) **Tên SP** | Giá: X | Tồn: Y | [Xem chi tiết](/customer/product/ID)`;
+Mỗi sản phẩm cách nhau 1 dòng trống, ảnh đặt INLINE trước tên:
+![Tên SP](url_ảnh) **Tên SP** (TYPE) | Giá: X | [Xem chi tiết](/customer/product/ID)
+
+KHÔNG hiển thị số lượng tồn kho. LINK dùng markdown [Xem chi tiết](...). Tone: thân thiện, tự nhiên.`;
 
 
 // ============================================================
@@ -126,88 +134,72 @@ export class ChatService {
     // ----------------------------------------------------------
     if (name === 'search_retail_product') {
       try {
-        const variants = await this.prisma.product_variants.findMany({
+        // Detect intent: giá rẻ hoặc hàng mới
+        const isCheapQuery = /giá rẻ|rẻ nhất|giá thấp|cheap|low price/i.test(keyword);
+        const isNewQuery = /mới nhất|sản phẩm mới|new arrival|hàng mới/i.test(keyword);
+        // Strip intent words để lấy keyword thực — "gundam giá rẻ" → "gundam"
+        const effectiveKeyword = keyword
+          .replace(/giá rẻ|rẻ nhất|giá thấp|cheap|low price|mới nhất|sản phẩm mới|new arrival|hàng mới|rẻ|mới/gi, '')
+          .replace(/\s+/g, ' ')
+          .trim();
+
+        // Query PRODUCTS directly (not variants) to avoid duplicates
+        const products = await this.prisma.products.findMany({
           where: {
             deleted_at: null,
-            products: {
-              status_code: 'ACTIVE',
-              type_code: { in: ['RETAIL', 'BLINDBOX'] },
-              name: { contains: keyword, mode: 'insensitive' },
-            },
+            status_code: 'ACTIVE',
+            type_code: { in: ['RETAIL', 'BLINDBOX'] },
+            ...(effectiveKeyword ? { name: { contains: effectiveKeyword, mode: 'insensitive' } } : {}),
           },
           select: {
-            variant_id: true,
-            sku: true,
-            price: true,
-            stock_available: true,   // Tồn kho vật lý thực tế
-            media_assets: true,      // Ảnh lấy từ variant media_assets (Json)
-            products: {
-              select: {
-                product_id: true,
-                name: true,
-                type_code: true,
-                media_urls: true,    // Ảnh product nằm trong media_urls (Json)
-              },
+            product_id: true,
+            name: true,
+            type_code: true,
+            media_urls: true,
+            product_variants: {
+              where: { deleted_at: null },
+              orderBy: { price: 'asc' },
+              take: 1,
+              select: { price: true, stock_available: true, media_assets: true },
             },
           },
-          orderBy: { stock_available: 'desc' },
-          take: 10,
+          orderBy: isCheapQuery
+            ? { product_variants: { _count: 'asc' } }
+            : isNewQuery
+            ? { created_at: 'desc' }
+            : { created_at: 'desc' },
+          take: 8,
         });
 
-        if (variants.length === 0) {
-          // Fallback: tìm kiếm mờ hơn — tách từ và thử từng từ
-          const fallback = await this.prisma.product_variants.findMany({
+        // Fuzzy fallback if nothing found
+        if (products.length === 0 && effectiveKeyword) {
+          const words = effectiveKeyword.split(' ').filter((w) => w.length > 2);
+          if (words.length === 0) {
+            return `[TOOL: search_retail_product] Không tìm thấy sản phẩm nào. Hãy hỏi khách muốn tìm theo danh mục nào.`;
+          }
+          const fallback = await this.prisma.products.findMany({
             where: {
               deleted_at: null,
-              products: {
-                status_code: 'ACTIVE',
-                type_code: { in: ['RETAIL', 'BLINDBOX'] },
-                OR: keyword
-                  .split(' ')
-                  .filter((w) => w.length > 2)
-                  .map((word) => ({ name: { contains: word, mode: 'insensitive' as any } })),
-              },
+              status_code: 'ACTIVE',
+              type_code: { in: ['RETAIL', 'BLINDBOX'] },
+              OR: words.map((w) => ({ name: { contains: w, mode: 'insensitive' as any } })),
             },
             select: {
-              variant_id: true,
-              price: true,
-              stock_available: true,
-              media_assets: true,
-              products: { select: { product_id: true, name: true, type_code: true, media_urls: true } },
+              product_id: true, name: true, type_code: true, media_urls: true,
+              product_variants: {
+                where: { deleted_at: null }, orderBy: { price: 'asc' }, take: 1,
+                select: { price: true, stock_available: true, media_assets: true },
+              },
             },
-            orderBy: { stock_available: 'desc' },
-            take: 8,
+            take: 6,
           });
-
           if (fallback.length === 0) {
-            return `[TOOL: search_retail_product] Không tìm thấy sản phẩm nào khớp với "${keyword}". Hãy hỏi khách muốn tìm theo từ khóa khác hoặc danh mục nào (ví dụ: Gunpla, Figure, Blindbox).`;
+            return `[TOOL: search_retail_product] Không tìm thấy "${keyword}". Hãy hỏi khách tìm theo từ khóa khác hoặc danh mục (Gunpla, Figure, Blindbox...)`;
           }
-
-          return (
-            `[TOOL: search_retail_product] Không có kết quả chính xác cho "${keyword}", gợi ý sản phẩm liên quan:\n` +
-            fallback
-              .map((v) => {
-                const stock = Number(v.stock_available ?? 0);
-                const price = new Intl.NumberFormat('vi-VN').format(Number(v.price || 0)) + 'đ';
-                const img = this.extractImageFromVariant(v);
-                return `${img ? `![${v.products?.name}](${img}) ` : ''}**${v.products?.name}** (${v.products?.type_code}) | Giá: ${price} | Tồn kho: ${stock} | Link: /customer/product/${v.products?.product_id}`;
-              })
-              .join('\n')
-          );
+          return this.formatProductList(fallback, `Không có kết quả chính xác, gợi ý liên quan`);
         }
 
-        return (
-          `[TOOL: search_retail_product] Tìm thấy ${variants.length} sản phẩm:\n` +
-          variants
-            .map((v) => {
-              const stock = Number(v.stock_available ?? 0);
-              const price = new Intl.NumberFormat('vi-VN').format(Number(v.price || 0)) + 'đ';
-              const img = this.extractImageFromVariant(v);
-              const stockLabel = stock <= 0 ? '⚠️ Hết hàng' : `${stock} cái`;
-              return `${img ? `![${v.products?.name}](${img}) ` : ''}**${v.products?.name}** (${v.products?.type_code}) | Giá: ${price} | Tồn kho: ${stockLabel} | Link: /customer/product/${v.products?.product_id}`;
-            })
-            .join('\n')
-        );
+        return this.formatProductList(products, `Tìm thấy ${products.length} sản phẩm`);
       } catch (err) {
         this.logger.error(`search_retail_product error: ${err.message}`);
         return '[TOOL: search_retail_product] Lỗi truy vấn database. Hãy xin lỗi khách và hướng dẫn liên hệ staff.';
@@ -234,7 +226,7 @@ export class ChatService {
             variant_id: true,
             sku: true,
             media_assets: true,
-            products: { select: { product_id: true, name: true, media_urls: true } },
+            products: { select: { product_id: true, name: true, type_code: true, media_urls: true } },
             product_preorder_configs: {
               select: {
                 total_slots: true,
@@ -264,7 +256,7 @@ export class ChatService {
               const full = new Intl.NumberFormat('vi-VN').format(Number(cfg.full_price || 0)) + 'đ';
               const img = this.extractImageFromVariant(v);
               const slotLabel = remaining <= 0 ? '⚠️ Hết slot' : `Còn ${remaining}/${total} slot`;
-              return `${img ? `![${v.products?.name}](${img}) ` : ''}**${v.products?.name}** | Cọc: ${deposit} | Full: ${full} | ${slotLabel} | Link: /customer/product/${v.products?.product_id}`;
+              return `${img ? `![${v.products?.name}](${img})\n` : ''}**${v.products?.name}** (PRE-ORDER) | Cọc: ${deposit} | Full: ${full} | ${slotLabel} | [Xem chi tiết](/customer/product/${v.products?.product_id})`;
             })
             .join('\n')
         );
@@ -275,6 +267,32 @@ export class ChatService {
     }
 
     return `[TOOL: ${name}] Tool không xác định.`;
+  }
+
+  // ============================================================
+  // HELPER: format danh sách sản phẩm chuẩn cho tool output
+  // Query theo products (1 row/product), variant rẻ nhất
+  // ============================================================
+  private formatProductList(
+    products: Array<{
+      product_id: number;
+      name: string;
+      type_code: string;
+      media_urls?: any;
+      product_variants?: Array<{ price?: any; stock_available?: any; media_assets?: any }>;
+    }>,
+    label: string,
+  ): string {
+    const lines = products.map((p) => {
+      const v = p.product_variants?.[0];
+      const price = new Intl.NumberFormat('vi-VN').format(Number(v?.price || 0)) + 'đ';
+      const img = this.extractImageFromVariant({ media_assets: v?.media_assets, products: { media_urls: p.media_urls } });
+      // Image INLINE với text trên cùng 1 dòng → ReactMarkdown custom <p> renderer layout side-by-side
+      const imgMd = img ? `![${p.name}](${img}) ` : '';
+      return `${imgMd}**${p.name}** (${p.type_code}) | Giá: ${price} | [Xem chi tiết](/customer/product/${p.product_id})`;
+    });
+    // Double newline = mỗi sản phẩm 1 <p> riêng trong markdown
+    return `[TOOL: search_retail_product] ${label}:\n\n${lines.join('\n\n')}`;
   }
 
   // ============================================================
