@@ -43,32 +43,99 @@ const chatTools: OpenAI.Chat.ChatCompletionTool[] = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'search_by_brand',
+      description: 'Tìm sản phẩm theo thương hiệu. Dùng khi khách hỏi "Bandai có gì", "hàng Good Smile", "Hot Toys", "Kotobukiya"...',
+      parameters: { type: 'object', properties: { brand: { type: 'string', description: 'Tên thương hiệu (vd: Bandai, Good Smile Company, Hot Toys, Kotobukiya, Aniplex, Banpresto)' } }, required: ['brand'] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'search_by_price_range',
+      description: 'Tìm sản phẩm trong khoảng giá. Dùng khi khách nói "dưới 500k", "từ 1 đến 2 triệu", "trên 3 triệu"...',
+      parameters: { type: 'object', properties: { min_price: { type: 'number', description: 'Giá tối thiểu VNĐ (0 nếu không giới hạn dưới)' }, max_price: { type: 'number', description: 'Giá tối đa VNĐ (999999999 nếu không giới hạn trên)' }, keyword: { type: 'string', description: 'Tên/loại sản phẩm tùy chọn' } }, required: ['min_price', 'max_price'] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'search_by_category',
+      description: 'Tìm sản phẩm theo danh mục hoặc grade. Dùng khi khách hỏi "HG nào", "MG nào", "Nendoroid", "Scale Figure", "Action Figure", "SHF"...',
+      parameters: { type: 'object', properties: { category: { type: 'string', description: 'Danh mục hoặc grade: HG, MG, RG, PG, SD, Nendoroid, Scale Figure, Action Figure, SHF, Anime Figures' } }, required: ['category'] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_product_details',
+      description: 'Lấy thông tin đầy đủ của một sản phẩm (mô tả, các phiên bản, giá). Dùng khi khách muốn biết thêm về sản phẩm cụ thể.',
+      parameters: { type: 'object', properties: { product_id: { type: 'number', description: 'ID sản phẩm cần xem chi tiết' } }, required: ['product_id'] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_all_brands',
+      description: 'Liệt kê tất cả thương hiệu đang có hàng tại FigiCore. Dùng khi khách hỏi "shop bán hãng nào", "có thương hiệu gì".',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
 ];
 
 // ============================================================
 // SYSTEM PROMPT — bất biến, gắn đầu mỗi request
 // ============================================================
-const SYSTEM_PROMPT = `Bạn là Figi — tư vấn viên bán hàng của FigiCore, nhà phân phối mô hình sưu tầm đa hãng tại Việt Nam. FigiCore bán đa dạng: Gunpla (HG/MG/RG/PG), Scale Figure, Nendoroid, SHF, Action Figure, Mô hình resin và nhiều dòng khác từ các thương hiệu quốc tế như Bandai, Good Smile Company, Kotobukiya, Hot Toys, Aniplex, Alter, Max Factory, Megahouse... Xưng "mình", gọi "bạn". Thân thiện, nhiệt tình, tự nhiên. Tối đa 3 câu + danh sách sản phẩm. KHÔNG tiết lộ là AI.
+const SYSTEM_PROMPT = `Bạn là Figi — tư vấn viên của FigiCore, nhà phân phối mô hình sưu tầm đa hãng tại Việt Nam. Xưng "mình", gọi "bạn". Thân thiện, tự nhiên, tối đa 3 câu + danh sách SP. KHÔNG tiết lộ là AI.
 
-══ QUY TẮC TUYỆT ĐỐI ══
-1. TOOL CALL BÍ MẬT: Không hiển thị cú pháp tool hay JSON ra màn hình.
-2. KHÔNG BỊA SẢN PHẨM: Mọi tên, giá, link lấy từ tool. Link chuẩn /customer/product/[id].
-3. KHÔNG TÌM THẤY: Thông báo tự nhiên, hỏi lại để gợi ý hướng khác.
+══ QUY TẮC ══
+1. Không hiển thị cú pháp tool hay JSON ra màn hình.
+2. Mọi tên SP, giá, link lấy từ tool. Link chuẩn /customer/product/[id].
+3. Không tìm thấy → thông báo tự nhiên, hỏi lại hướng khác.
+4. Câu hỏi quy trình (đặt hàng, ship, đổi trả, ví, đấu giá) → trả lời trực tiếp, KHÔNG gọi tool.
+
+══ CHỌN TOOL ĐÚNG ══
+- Khách hỏi sản phẩm/tìm/mua → search_retail_product(keyword ngắn gọn)
+- Hỏi theo hãng (Bandai, GSC, Hot Toys...) → search_by_brand
+- Hỏi theo khoảng giá (dưới 500k, 1-2tr...) → search_by_price_range
+- Hỏi theo grade/loại (HG, MG, Nendoroid, SHF...) → search_by_category
+- Hỏi chi tiết 1 SP cụ thể → get_product_details(product_id)
+- Hỏi shop bán hãng nào → get_all_brands
+- Hỏi preorder → get_preorder_info
+
+══ KIẾN THỨC MÔ HÌNH (trả lời trực tiếp không cần tool) ══
+
+GUNPLA GRADES (Bandai):
+- SD: Chibi nhỏ gọn, siêu dễ lắp, dành người mới. ~200-500k
+- HG 1/144: Phổ biến nhất, dễ làm, nhiều mẫu mới. ~400k-2tr
+- RG 1/144: Chi tiết như MG nhưng nhỏ hơn, thách thức hơn HG. ~700k-1.5tr
+- MG 1/100: Nội thất phong phú, khuyến nghị trung cấp. ~1-3tr
+- MGEX: MG đặc biệt có LED/chrome. ~4-8tr
+- PG 1/60: Đỉnh cao Gunpla, nhiều chi tiết nhất. ~5-10tr+
+- Gợi ý người mới: HG hoặc SD. Trung cấp: RG/MG. Cao cấp: PG/MGEX.
+
+PHÂN LOẠI FIGURE:
+- Scale Figure (1/4-1/12): Tượng tĩnh cao cấp từ GSC, Alter, Aniplex. ~3-15tr
+- Nendoroid (GSC): Chibi cute, thay phụ kiện được. ~1-2.5tr
+- SHF/S.H.Figuarts (Bandai): Action figure khớp linh hoạt nhiều tư thế. ~1.2-2.5tr
+- Hot Toys 1/6: Cực kỳ chi tiết, giá cao cấp. ~7-15tr+
+- Banpresto: Figure từ máy game UFO, giá bình dân. ~400-900k
+
+THƯƠNG HIỆU TIÊU BIỂU:
+- Bandai Namco: Gunpla + SHF (anime/manga nổi tiếng)
+- Good Smile Company (GSC): Nendoroid + Scale Figure cao cấp
+- Kotobukiya: ARTFX J figure chi tiết cao
+- Hot Toys: 1/6 scale siêu thực tế (Marvel, DC, Star Wars)
+- Aniplex: Figure giới hạn từ các anime nổi tiếng
+- Banpresto: Figure giá rẻ thân thiện túi tiền
+- Megahouse: Chuyên One Piece và các IP lớn
 
 ══ NGHIỆP VỤ ══
-
-HÀNG BÁN LẺ (RETAIL) & BLINDBOX:
-- Khách hỏi tìm/mua sản phẩm → Gọi tool search_retail_product ngay.
-- BLINDBOX: "Chương trình đặc biệt, bạn nhận phần thưởng ngẫu nhiên trực tiếp tại hệ thống". KHÔNG tiết lộ nội dung bên trong.
-- FLASH SALE: Gợi ý khách vào /customer/retail?filter=flash_sale để xem ưu đãi.
-
-HÀNG ĐẶT TRƯỚC (PRE-ORDER):
-- Gọi tool get_preorder_info.
-- Quy trình: Chọn → Thanh toán cọc → Chờ hàng → Nhận thông báo → Thanh toán nốt công nợ.
-- Tiền cọc KHÔNG hoàn nếu hủy sau 24h.
-
-ĐẤU GIÁ (AUCTION):
-- Quy trình: Nạp cọc vào ví → Vào Livestream /customer/livestream → Đặt Bid → Thắng thì thanh toán nốt.
+RETAIL/BLINDBOX: Gọi tool search_retail_product.
+BLINDBOX: "Nhận ph�
+�p cọc vào ví → Vào Livestream /customer/livestream → Đặt Bid → Thắng thì thanh toán nốt.
 - Cảnh báo: "Thắng mà không thanh toán sẽ mất toàn bộ cọc nhé!"
 
 VÍ NỘI BỘ (WALLET):
@@ -131,19 +198,53 @@ export class ChatService {
     // ----------------------------------------------------------
     // Tool: search_retail_product
     // Tìm RETAIL + BLINDBOX theo keyword, trả về tồn kho thực tế
-    // ----------------------------------------------------------
     if (name === 'search_retail_product') {
       try {
-        // Detect intent: giá rẻ hoặc hàng mới
+        // Detect intent
         const isCheapQuery = /giá rẻ|rẻ nhất|giá thấp|cheap|low price/i.test(keyword);
         const isNewQuery = /mới nhất|sản phẩm mới|new arrival|hàng mới/i.test(keyword);
-        // Strip intent words để lấy keyword thực — "gundam giá rẻ" → "gundam"
-        const effectiveKeyword = keyword
-          .replace(/giá rẻ|rẻ nhất|giá thấp|cheap|low price|mới nhất|sản phẩm mới|new arrival|hàng mới|rẻ|mới/gi, '')
-          .replace(/\s+/g, ' ')
-          .trim();
 
-        // Query PRODUCTS directly (not variants) to avoid duplicates
+        // Strip filler words (intent + generic Vietnamese) để lấy keyword sản phẩm thực
+        // "tôi muốn tư vấn sản phẩm giá rẻ" → "" | "gundam giá rẻ" → "gundam"
+        const strippedKw = keyword
+          .replace(/giá rẻ|rẻ nhất|giá thấp|cheap|low price|mới nhất|sản phẩm mới|new arrival|hàng mới/gi, '')
+          .replace(/\btôi\b|\bmuốn\b|\bthích\b|\bcần\b|\btìm\b|\bxem\b|\btư vấn\b|\btu vấn\b|\bsản phẩm\b|\bhàng\b|\bmẫu\b|\bloại\b|\bcó gì\b|\bnhất\b|\bnào\b|\bhiện có\b|\bđang có\b|\bcủa hàng\b|\bshop\b|\bfigicore\b|\brẻ\b|\bmới\b/gi, '')
+          .replace(/\s+/g, ' ').trim();
+        const effectiveKeyword = strippedKw.length >= 3 ? strippedKw : '';
+
+        // ── CASE 1: "giá rẻ" không kèm loại cụ thể
+        // Query variants sorted by price → dedup by product → top 8 rẻ nhất
+        if (isCheapQuery && !effectiveKeyword) {
+          const cheapVariants = await this.prisma.product_variants.findMany({
+            where: {
+              deleted_at: null,
+              products: { deleted_at: null, status_code: 'ACTIVE', type_code: { in: ['RETAIL', 'BLINDBOX'] } },
+            },
+            select: {
+              price: true, stock_available: true, media_assets: true,
+              products: { select: { product_id: true, name: true, type_code: true, media_urls: true } },
+            },
+            orderBy: { price: 'asc' },
+            take: 40, // lấy nhiều để dedup
+          });
+          const seen = new Set<number>();
+          const deduped: any[] = [];
+          for (const v of cheapVariants) {
+            const pid = v.products?.product_id;
+            if (pid && !seen.has(pid) && deduped.length < 8) {
+              seen.add(pid);
+              deduped.push({
+                product_id: pid, name: v.products?.name, type_code: v.products?.type_code,
+                media_urls: v.products?.media_urls,
+                product_variants: [{ price: v.price, stock_available: v.stock_available, media_assets: v.media_assets }],
+              });
+            }
+          }
+          if (deduped.length === 0) return `[TOOL: search_retail_product] Không tìm thấy sản phẩm nào. Hãy hỏi khách muốn tìm theo danh mục nào.`;
+          return this.formatProductList(deduped, 'Top sản phẩm giá tốt nhất hiện có');
+        }
+
+        // ── CASE 2: Tìm theo keyword (có thể kèm isCheapQuery/isNewQuery)
         const products = await this.prisma.products.findMany({
           where: {
             deleted_at: null,
@@ -152,59 +253,45 @@ export class ChatService {
             ...(effectiveKeyword ? { name: { contains: effectiveKeyword, mode: 'insensitive' } } : {}),
           },
           select: {
-            product_id: true,
-            name: true,
-            type_code: true,
-            media_urls: true,
+            product_id: true, name: true, type_code: true, media_urls: true,
             product_variants: {
-              where: { deleted_at: null },
-              orderBy: { price: 'asc' },
-              take: 1,
+              where: { deleted_at: null }, orderBy: { price: 'asc' }, take: 1,
               select: { price: true, stock_available: true, media_assets: true },
             },
           },
-          orderBy: isCheapQuery
-            ? { product_variants: { _count: 'asc' } }
-            : isNewQuery
-            ? { created_at: 'desc' }
-            : { created_at: 'desc' },
+          orderBy: { created_at: 'desc' },
           take: 8,
         });
 
-        // Fuzzy fallback if nothing found
+        // Fuzzy fallback nếu không tìm thấy
         if (products.length === 0 && effectiveKeyword) {
           const words = effectiveKeyword.split(' ').filter((w) => w.length > 2);
-          if (words.length === 0) {
-            return `[TOOL: search_retail_product] Không tìm thấy sản phẩm nào. Hãy hỏi khách muốn tìm theo danh mục nào.`;
-          }
+          if (words.length === 0) return `[TOOL: search_retail_product] Không tìm thấy. Hãy hỏi khách muốn tìm theo danh mục nào.`;
           const fallback = await this.prisma.products.findMany({
             where: {
-              deleted_at: null,
-              status_code: 'ACTIVE',
-              type_code: { in: ['RETAIL', 'BLINDBOX'] },
+              deleted_at: null, status_code: 'ACTIVE', type_code: { in: ['RETAIL', 'BLINDBOX'] },
               OR: words.map((w) => ({ name: { contains: w, mode: 'insensitive' as any } })),
             },
             select: {
               product_id: true, name: true, type_code: true, media_urls: true,
-              product_variants: {
-                where: { deleted_at: null }, orderBy: { price: 'asc' }, take: 1,
-                select: { price: true, stock_available: true, media_assets: true },
-              },
+              product_variants: { where: { deleted_at: null }, orderBy: { price: 'asc' }, take: 1, select: { price: true, stock_available: true, media_assets: true } },
             },
             take: 6,
           });
-          if (fallback.length === 0) {
-            return `[TOOL: search_retail_product] Không tìm thấy "${keyword}". Hãy hỏi khách tìm theo từ khóa khác hoặc danh mục (Gunpla, Figure, Blindbox...)`;
-          }
+          if (fallback.length === 0) return `[TOOL: search_retail_product] Không tìm thấy "${keyword}". Hãy hỏi khách tìm theo từ khóa khác hoặc danh mục (Gunpla, Figure, Blindbox...)`;
           return this.formatProductList(fallback, `Không có kết quả chính xác, gợi ý liên quan`);
         }
 
-        return this.formatProductList(products, `Tìm thấy ${products.length} sản phẩm`);
+        const label = isCheapQuery ? `Sản phẩm ${effectiveKeyword || ''} giá tốt nhất`.trim()
+          : isNewQuery ? `Sản phẩm mới nhất`
+          : `Tìm thấy ${products.length} sản phẩm`;
+        return this.formatProductList(products, label);
       } catch (err) {
         this.logger.error(`search_retail_product error: ${err.message}`);
         return '[TOOL: search_retail_product] Lỗi truy vấn database. Hãy xin lỗi khách và hướng dẫn liên hệ staff.';
       }
     }
+
 
     // ----------------------------------------------------------
     // Tool: get_preorder_info
