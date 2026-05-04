@@ -957,7 +957,12 @@ export class OrdersService {
             this.mailService.sendOrderConfirmation(decryptedUser, order).catch(e => this.logger.error("Mail Error", e));
           }
         }
-        this.eventsGateway.notifyNewOrder(order);
+        
+        // ✅ FIX: Only notify warehouse for PROCESSING orders. Pre-order DEPOSITED wait for final payment.
+        if (order.status_code === 'PROCESSING') {
+          this.eventsGateway.notifyNewOrder(order);
+          await this._broadcastLivestreamOrder(order);
+        }
       }
     } catch (error) {
       this.logger.error("Failed to send group notifications", error);
@@ -1010,54 +1015,9 @@ export class OrdersService {
     });
 
     // Notify in background
-    this._sendGroupNotifications(paymentRefCode, userId).catch(() => { });
-
-    // --- FIX: SEND NOTIFICATIONS AFTER TRANSACTION ---
-    try {
-      // Re-fetch orders with relations to send emails & socket
-      const updatedOrders = await this.prisma.orders.findMany({
-        where: { payment_ref_code: paymentRefCode, user_id: userId },
-        include: {
-          users: true,
-          order_items: { include: { product_variants: { include: { products: true } } } }
-        }
-      });
-
-      // --- NEW: SYNC AUCTION STATUS ---
-      for (const order of updatedOrders) {
-        if (order.order_code && order.order_code.startsWith('AUC-')) {
-          try {
-            const auctionId = parseInt(order.order_code.split('-')[1], 10);
-            await this.prisma.auctions.update({
-              where: { auction_id: auctionId },
-              data: { status_code: 'COMPLETED' }
-            });
-            this.logger.log(`Synced Auction #${auctionId} to COMPLETED after payment`);
-          } catch (err) {
-            this.logger.error(`Failed to sync auction status for order ${order.order_code}:`, err);
-          }
-        }
-      }
-
-      for (const order of updatedOrders) {
-        if (order.users && order.users.email) {
-          // Send Email (Decrypt user first)
-          const decryptedUser = this.decryptUser(order.users);
-          this.mailService.sendOrderConfirmation(decryptedUser, order).catch(e => console.error("Mail Error", e));
-        }
-        // ✅ FIX: Only notify warehouse for PROCESSING orders (retail paid).
-        // DEPOSITED preorders must NOT appear in packing queue — they wait for inventory import → FIFO → final payment.
-        if (order.status_code === 'PROCESSING') {
-          this.eventsGateway.notifyNewOrder(order);
-          // Emit Socket (livestream room) — ONLY on successful payment
-          await this._broadcastLivestreamOrder(order);
-        }
-      }
-      this.logger.log(`Notifications sent for group ${paymentRefCode}`);
-
-    } catch (error) {
-      console.error("Failed to send notifications for group payment", error);
-    }
+    this._sendGroupNotifications(paymentRefCode, userId).catch((err) => { 
+      this.logger.error("Failed to send notifications for group mock payment", err);
+    });
 
     return result;
   }
@@ -1146,43 +1106,10 @@ export class OrdersService {
       });
 
       // Notify in background
-      this._sendGroupNotifications(paymentRefCode, userId).catch(() => { });
-
-      // --- NEW: SYNC AUCTION STATUS ---
-      const updatedOrdersForAuction = await this.prisma.orders.findMany({
-        where: { payment_ref_code: paymentRefCode, user_id: userId },
-        include: { 
-          users: true,
-          order_items: { include: { product_variants: { include: { products: true } } } } 
-        }
+      this._sendGroupNotifications(paymentRefCode, userId).catch((err) => {
+        this.logger.error("Failed to send notifications for group wallet payment", err);
       });
 
-      for (const order of updatedOrdersForAuction) {
-        if (order.order_code && order.order_code.startsWith('AUC-')) {
-          try {
-            const auctionId = parseInt(order.order_code.split('-')[1], 10);
-            await this.prisma.auctions.update({
-              where: { auction_id: auctionId },
-              data: { status_code: 'COMPLETED' }
-            });
-            this.logger.log(`Synced Auction #${auctionId} to COMPLETED after wallet payment`);
-          } catch (err) {
-            this.logger.error(`Failed to sync auction status for order ${order.order_code}:`, err);
-          }
-        }
-      }
-
-      for (const order of updatedOrdersForAuction) {
-        if (order.users) {
-          const decryptedUser = this.decryptUser(order.users);
-          this.mailService.sendOrderConfirmation(decryptedUser, order).catch(e => console.error("Mail Error", e));
-        }
-        // ✅ FIX: Preorder DEPOSITED orders must NOT trigger warehouse packing queue
-        if (order.status_code === 'PROCESSING') {
-          this.eventsGateway.notifyNewOrder(order);
-          await this._broadcastLivestreamOrder(order);
-        }
-      }
       this.logger.log(`Wallet Payment successful for group ${paymentRefCode}`);
       return result;
 

@@ -61,7 +61,7 @@ export class InventoryService {
           if (variant.product_preorder_configs) {
             const bookingEnd = variant.product_preorder_configs.booking_end_date;
             if (bookingEnd && new Date(bookingEnd) > new Date()) {
-              throw new BadRequestException(`Sản phẩm Pre-order ${variant.sku} vẫn đang trong thời gian nhận cọc. Không thể tiến hành nhập kho lúc này để tránh lỗi logic.`);
+              throw new BadRequestException(`Pre-order product ${variant.sku} is still in the deposit window. Inventory cannot be imported at this time to prevent logic conflicts.`);
             }
 
             await tx.product_preorder_configs.update({
@@ -196,7 +196,7 @@ export class InventoryService {
            if (variant.product_preorder_configs) {
                const bookingEnd = variant.product_preorder_configs.booking_end_date;
                if (bookingEnd && new Date(bookingEnd) > new Date()) {
-                   throw new BadRequestException(`Sản phẩm Pre-order ${variant.sku} vẫn đang trong thời gian nhận cọc. Không thể tiến hành nhập kho lúc này để tránh lỗi logic.`);
+                   throw new BadRequestException(`Pre-order product ${variant.sku} is still in the deposit window. Inventory cannot be imported at this time to prevent logic conflicts.`);
                }
 
                await tx.product_preorder_configs.update({

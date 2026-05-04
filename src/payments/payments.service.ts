@@ -323,9 +323,11 @@ export class PaymentsService {
                             if (fullOrder && fullOrder.users) {
                                 const decUser = this.decryptUser(fullOrder.users);
                                 this.mailService.sendOrderConfirmation(decUser, fullOrder).catch(e => this.logger.error("Mail Error", e));
-                                this.eventsGateway.notifyNewOrder(fullOrder); // Notify Warehouse/Admin
-                                // Notify Livestream admin panel — ONLY on confirmed payment
-                                await this._broadcastLivestreamOrder(fullOrder);
+                                if (newStatus === 'PROCESSING') {
+                                    this.eventsGateway.notifyNewOrder(fullOrder); // Notify Warehouse/Admin
+                                    // Notify Livestream admin panel — ONLY on confirmed payment
+                                    await this._broadcastLivestreamOrder(fullOrder);
+                                }
                             }
                         }
                     }
