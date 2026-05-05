@@ -12,6 +12,11 @@ import { PrismaService } from '../prisma/prisma.service';
 import { UseGuards, Logger, Inject, forwardRef } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { AuctionsService } from './auctions.service';
+import { ChatService } from '../chat/chat.service';
+
+const VIETNAMESE_PROFANITY_BLACKLIST = [
+    'đm', 'vcl', 'địt', 'lồn', 'cặc', 'chó đẻ', 'phò', 'đĩ', 'fuck', 'shit', 'bitch', 'đù', 'vãi lồn', 'cl', 'cmn', 'đcm'
+];
 
 @WebSocketGateway({
     cors: {
@@ -30,9 +35,14 @@ export class AuctionsGateway implements OnGatewayConnection, OnGatewayDisconnect
     private bidLocks: Map<number, boolean> = new Map(); // Lock room during bid processing
     private userLastBidTime: Map<string, number> = new Map(); // Store user's last bid time {auctionId_userId}
 
+    // Chat moderation
+    private userInfractions: Map<number, number> = new Map();
+    private mutedUsers: Map<number, number> = new Map();
+
     constructor(
         private prisma: PrismaService,
-        @Inject(forwardRef(() => AuctionsService)) private auctionsService: AuctionsService
+        @Inject(forwardRef(() => AuctionsService)) private auctionsService: AuctionsService,
+        private chatService: ChatService
     ) { }
 
     async handleConnection(client: Socket) {
@@ -329,6 +339,39 @@ export class AuctionsGateway implements OnGatewayConnection, OnGatewayDisconnect
     ) {
         if (!payload.text?.trim() || !payload.auctionId) return;
 
+        const userId = payload.userId;
+
+        // Check if user is muted
+        if (userId) {
+            const muteExpiry = this.mutedUsers.get(userId);
+            if (muteExpiry && Date.now() < muteExpiry) {
+                client.emit('user_muted', { userId, muteExpiry });
+                client.emit('chat_rejected', { message: 'You are currently muted for violating community guidelines.' });
+                return;
+            } else if (muteExpiry) {
+                this.mutedUsers.delete(userId); // Mute expired
+            }
+        }
+
+        const textLower = payload.text.toLowerCase();
+        const isTier1Toxic = VIETNAMESE_PROFANITY_BLACKLIST.some(word => {
+            return textLower.includes(word);
+        });
+
+        if (isTier1Toxic && userId) {
+            const infractions = (this.userInfractions.get(userId) || 0) + 1;
+            this.userInfractions.set(userId, infractions);
+
+            if (infractions >= 5) {
+                const expiry = Date.now() + 10 * 60 * 1000;
+                this.mutedUsers.set(userId, expiry); // 10 minutes
+                this.server.to(`auction_${payload.auctionId}`).emit('user_muted', { userId, reason: 'Spamming profanity', muteExpiry: expiry });
+            }
+
+            client.emit('chat_rejected', { message: 'Your message violates community guidelines.' });
+            return;
+        }
+
         // [Total Lockdown Check]
         const auction = await this.auctionsService.findOne(payload.auctionId);
         if (!auction || ['COMPLETED', 'FAILED_NO_BUYER', 'CANCELLED'].includes(auction.status_code)) {
@@ -353,6 +396,36 @@ export class AuctionsGateway implements OnGatewayConnection, OnGatewayDisconnect
             text: savedMsg.message,
             timestamp: savedMsg.created_at
         });
+
+        // Tier 2: Async AI Moderation
+        if (userId) {
+            this.chatService.moderateMessage(payload.text).then(async isToxic => {
+                if (isToxic) {
+                    const infractions = (this.userInfractions.get(userId) || 0) + 1;
+                    this.userInfractions.set(userId, infractions);
+
+                    if (infractions >= 5) {
+                        const expiry = Date.now() + 10 * 60 * 1000;
+                        this.mutedUsers.set(userId, expiry); // 10 minutes
+                        this.server.to(roomName).emit('user_muted', { userId, reason: 'Repeated violations', muteExpiry: expiry });
+                    }
+
+                    // Tell clients to delete message
+                    this.server.to(roomName).emit('delete_message', { messageId: savedMsg.message_id });
+                    
+                    // Actually delete from DB to prevent showing up in chat history
+                    try {
+                        await this.prisma.auction_chat_messages.delete({
+                            where: { message_id: savedMsg.message_id }
+                        });
+                    } catch (e) {
+                        // Ignore if already deleted
+                    }
+                }
+            }).catch(err => {
+                console.error('Moderation error:', err);
+            });
+        }
     }
 
     @SubscribeMessage('close_auction_room')
