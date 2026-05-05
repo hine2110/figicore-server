@@ -288,7 +288,20 @@ export class DashboardService {
         return;
       }
 
-      const type = order.order_items[0]?.product_variants?.products?.type_code || 'RETAIL';
+      let type = 'RETAIL';
+      if (order.order_items.some((item: any) => item.giveaway_claim_id)) {
+        type = 'GIVEAWAY';
+      } else if (order.order_code?.startsWith('AUC-') || order.channel_code === 'AUCTION') {
+        type = 'AUCTION';
+      } else if (order.order_items.some((item: any) => item.livestream_id)) {
+        type = 'LIVESTREAM';
+      } else {
+        const prodType = order.order_items[0]?.product_variants?.products?.type_code;
+        if (prodType === 'PREORDER') type = 'PRE_ORDER';
+        else if (prodType === 'BLINDBOX') type = 'BLINDBOX';
+        else type = 'RETAIL';
+      }
+
       if (revenueMap.hasOwnProperty(type)) {
         revenueMap[type] += amount;
       } else {
@@ -348,13 +361,18 @@ export class DashboardService {
     const where: any = {
       created_at: { gte: start, lte: end },
       status_code: { in: ['PROCESSING', 'PACKED', 'SHIPPING', 'COMPLETED', 'RETURNING', 'RETURNED'] },
-      channel_code: channelFilter,
-      order_items: {
-        some: type === 'GIVEAWAY' ? { giveaway_claim_id: { not: null } } :
-          type === 'AUCTION' ? { metadata: { path: ['is_auction'], equals: true } } :
-            { product_variants: { products: { type_code: type } } }
-      }
+      channel_code: channelFilter
     };
+
+    if (type === 'GIVEAWAY') {
+      where.order_items = { some: { giveaway_claim_id: { not: null } } };
+    } else if (type === 'AUCTION') {
+      where.order_code = { startsWith: 'AUC-' };
+    } else if (type === 'LIVESTREAM') {
+      where.order_items = { some: { livestream_id: { not: null } } };
+    } else {
+      where.order_items = { some: { product_variants: { products: { type_code: type } } } };
+    }
 
     if (type === 'PRE_ORDER' && !isPos) {
       const count = await this.prisma.preorder_contracts.count({
